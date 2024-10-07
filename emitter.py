@@ -1,3 +1,4 @@
+import utils
 from typing import Literal
 
 
@@ -18,6 +19,16 @@ class Emitter:
         """Adds an exit syscall"""
         self._start.append(f"mov {self.r('ax')}, 60")
         self._start.append(f"mov {self.r('di')}, {return_code}")
+        self._start.append("syscall")
+
+    def syscall_write(self, fd: int, buf: bytes) -> None:
+        """Adds a write syscall and data entry"""
+        id = utils.rand_id()
+        self._data.append(f"{id} db " + ",".join([str(byte) for byte in buf]))
+        self._start.append(f"mov {self.r('ax')}, 1")
+        self._start.append(f"mov {self.r('di')}, {fd}")
+        self._start.append(f"mov {self.r('si')}, {id}")
+        self._start.append(f"mov {self.r('dx')}, {len(buf)}")
         self._start.append("syscall")
 
     @property
