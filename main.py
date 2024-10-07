@@ -1,8 +1,16 @@
-from emitter import Emitter
+from asm import Asm
 from builder import build
 
-emitter = Emitter()
-emitter.syscall_write(1, "hi mom\n".encode("ascii"))
-emitter.syscall_exit(0)
+source = Asm()
+source.section_data.append("msg db 'hi mom', 0x0A")
+source.section_data.append("len equ $ - msg")
+source.label_start.append("mov rax, 1")
+source.label_start.append("mov rdi, 1")
+source.label_start.append("mov rsi, msg")
+source.label_start.append("mov rdx, len")
+source.label_start.append("syscall")
+source.label_start.append("mov rax, 60")
+source.label_start.append("xor rdi, rdi")
+source.label_start.append("syscall")
 
-build(emitter.asm, strip=True, output_path="himom")
+build(source.raw, strip=True, output_path="himom")
