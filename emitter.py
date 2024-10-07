@@ -15,6 +15,7 @@ class Emitter:
         return ("r" if self.bits == 64 else "e") + name
 
     def syscall_exit(self, return_code: int) -> None:
+        """Adds an exit syscall"""
         self._start.append(f"mov {self.r('ax')}, 60")
         self._start.append(f"mov {self.r('di')}, {return_code}")
         self._start.append("syscall")

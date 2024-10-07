@@ -26,6 +26,7 @@ def build(
     strip: bool = False,
     output_path: str = "a.out",
 ) -> None:
+    """Assembles, links, and optionally strips a binary, from assembly source"""
     try:
         id = "".join(random.choices(string.ascii_letters, k=16))
 
