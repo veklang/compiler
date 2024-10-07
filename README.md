@@ -11,4 +11,3 @@ Also, this is not sequential. I can make any part at random times. Don't ask why
 - [ ] General language syntax
 - [ ] Lexer
 - [ ] Parser
-- [x] Emitter
