@@ -22,7 +22,6 @@ class StripError(Exception):
 
 def build(
     source: str,
-    bits: Literal[32, 64] = 64,
     strip: bool = False,
     output_path: str = "a.out",
 ) -> None:
@@ -34,19 +33,16 @@ def build(
             f.write(source)
 
         nasm_output = subprocess.run(
-            ["nasm", f"-felf{bits}", f"/tmp/{id}.s", "-o", f"/tmp/{id}.o"],
+            ["nasm", "-felf64", f"/tmp/{id}.s", "-o", f"/tmp/{id}.o"],
             stderr=sys.stderr,
         )
 
         if nasm_output.returncode != 0:
             raise AssemblerError()
 
-        ld_args = ["ld", f"/tmp/{id}.o", "-o", output_path]
-        if bits == 32:
-            ld_args.append("-m")
-            ld_args.append("elf_i386")
-
-        ld_output = subprocess.run(ld_args, stderr=sys.stderr)
+        ld_output = subprocess.run(
+            ["ld", f"/tmp/{id}.o", "-o", output_path], stderr=sys.stderr
+        )
 
         if ld_output.returncode != 0:
             raise LinkerError()
