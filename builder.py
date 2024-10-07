@@ -1,5 +1,4 @@
-import random
-import string
+import utils
 import subprocess
 import os
 from typing import Literal
@@ -28,7 +27,7 @@ def build(
 ) -> None:
     """Assembles, links, and optionally strips a binary, from assembly source"""
     try:
-        id = "".join(random.choices(string.ascii_letters, k=16))
+        id = utils.rand_id(16)
 
         with open(f"/tmp/{id}.s", "w") as f:
             f.write(source)
