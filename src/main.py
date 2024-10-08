@@ -2,6 +2,7 @@ from asm import Asm
 from builder import build
 
 source = Asm()
+
 source.section_data.append("msg db 'hi mom', 0x0A")
 source.section_data.append("len equ $ - msg")
 source.label_start.append("mov rax, 1")
