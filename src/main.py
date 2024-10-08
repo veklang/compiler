@@ -9,6 +9,7 @@ asm = compile(
         Instruction(Type.EXIT, [0]),
         Instruction(Type.SUB, [9, 4]),
     ],
+    opt_constant_folding=True,
     opt_useless_expressions=True,
     opt_dead_code=True,
 )

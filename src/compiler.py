@@ -8,6 +8,7 @@ __all__ = ("compile",)
 def compile(
     instructions: list[Instruction],
     *,
+    opt_constant_folding: bool = False,
     opt_useless_expressions: bool = False,
     opt_dead_code: bool = False,
 ) -> Asm:
@@ -31,8 +32,16 @@ def compile(
                         f"Instruction {ins_name} ({i}): Unknown argument types: {type(ins.args[0])}, {type(ins.args[1])}"
                     )
 
+                if opt_constant_folding:
+                    asm.label_start.append(
+                        f"mov rax, {(ins.args[0] + ins.args[1]) if ins.type == Type.ADD else (ins.args[0] - ins.args[1])}"
+                    )
+                    continue
+
+                asm.label_start.append(f"mov rax, {ins.args[0]}")
+                asm.label_start.append(f"mov rbx, {ins.args[1]}")
                 asm.label_start.append(
-                    f"mov rax, {(ins.args[0] + ins.args[1]) if ins.type == Type.ADD else (ins.args[0] - ins.args[1])}"
+                    "add rax, rbx" if ins.type == Type.ADD else "sub rbx, rax"
                 )
 
             case Type.EXIT:
