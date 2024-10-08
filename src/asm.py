@@ -1,3 +1,6 @@
+__all__ = ("Asm",)
+
+
 class Asm:
     def __init__(self) -> None:
         """Simple assembly code manager"""

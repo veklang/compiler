@@ -2,7 +2,8 @@ import utils
 import subprocess
 import os
 import sys
-from typing import Literal
+
+__all__ = ("AssemblerError", "LinkerError", "StripError", "build")
 
 
 class AssemblerError(Exception):
