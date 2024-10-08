@@ -1,13 +1,16 @@
-from instructions import InstructionType, Instruction
+from instructions import InstructionType as Type, Instruction
 from compiler import compile
 from builder import build
 
 asm = compile(
     [
-        Instruction(InstructionType.ADD, [9, 4]),
-        Instruction(InstructionType.SUB, [9, 4]),
-        Instruction(InstructionType.EXIT, [0]),
-    ]
+        Instruction(Type.ADD, [9, 4]),
+        Instruction(Type.SUB, [9, 4]),
+        Instruction(Type.EXIT, [0]),
+        Instruction(Type.SUB, [9, 4]),
+    ],
+    opt_useless_expressions=True,
+    opt_dead_code=True,
 )
 
 print(asm.raw)
