@@ -14,7 +14,6 @@ def enum(*, reset: bool = False) -> int:
 
     if reset:
         enum_counter = 0
-        return 0
 
     enum_counter += 1
     return enum_counter - 1
