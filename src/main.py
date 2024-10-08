@@ -1,13 +1,12 @@
 from instructions import InstructionType, Instruction
-from asm_generator import generate_asm
+from compiler import compile
 from builder import build
 
-asm = generate_asm(
+asm = compile(
     [
         Instruction(InstructionType.ADD, [9, 4]),
         Instruction(InstructionType.SUB, [9, 4]),
         Instruction(InstructionType.EXIT, [0]),
-        Instruction(InstructionType.ADD, [6, 9]),
     ]
 )
 
