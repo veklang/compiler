@@ -23,6 +23,7 @@ class StripError(Exception):
 
 def build(
     source: str,
+    *,
     strip: bool = False,
     output_path: str = "a.out",
 ) -> None:

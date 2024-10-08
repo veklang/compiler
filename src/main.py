@@ -1,5 +1,6 @@
 from instructions import InstructionType, Instruction
 from asm_generator import generate_asm
+from builder import build
 
 asm = generate_asm(
     [
@@ -11,3 +12,4 @@ asm = generate_asm(
 )
 
 print(asm.raw)
+build(asm.raw, strip=True, output_path="a.out")
