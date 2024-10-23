@@ -13,6 +13,7 @@ def compile(
     opt_dead_code: bool = False,
 ) -> Asm:
     asm = Asm()
+    exit_satisfied = False
 
     for i, ins in enumerate(instructions):
         match ins.type:
@@ -45,6 +46,7 @@ def compile(
                 )
 
             case Type.EXIT:
+                exit_satisfied = True
                 asm.label_start.append("mov rax, 60")
                 asm.label_start.append(
                     f"mov rdi, {ins.args[0]}" if ins.args[0] != 0 else "xor rdi, rdi"
@@ -53,5 +55,10 @@ def compile(
 
                 if opt_dead_code:
                     break
+
+    if not exit_satisfied:
+        asm.label_start.append("mov rax, 60")
+        asm.label_start.append("xor rdi, rdi")
+        asm.label_start.append("syscall")
 
     return asm
