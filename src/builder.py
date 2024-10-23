@@ -28,9 +28,9 @@ def build(
     output_path: str = "a.out",
 ) -> None:
     """Assembles, links, and optionally strips a binary, from assembly source"""
-    try:
-        id = utils.rand_id(16)
+    id = utils.rand_id(16)
 
+    try:
         with open(f"/tmp/{id}.s", "w") as f:
             f.write(source)
 
