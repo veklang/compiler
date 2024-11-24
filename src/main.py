@@ -1,5 +1,5 @@
 from instructions import InstructionType as Type, Instruction
-from compiler import emit
+from emitter import emit
 from builder import assemble
 
 asm = emit(
@@ -9,9 +9,6 @@ asm = emit(
         Instruction(Type.EXIT, [0]),
         Instruction(Type.SUB, [9, 4]),
     ],
-    opt_constant_folding=True,
-    opt_useless_expressions=True,
-    opt_dead_code=True,
 )
 
 print(asm.raw)
