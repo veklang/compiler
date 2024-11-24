@@ -1,6 +1,6 @@
 from instructions import InstructionType as Type, Instruction
 from compiler import compile
-from builder import build
+from assembler import assemble
 
 asm = compile(
     [
@@ -15,4 +15,4 @@ asm = compile(
 )
 
 print(asm.raw)
-build(asm.raw, strip=True, output_path="a.out")
+assemble(asm.raw, strip=True, output_path="a.out")

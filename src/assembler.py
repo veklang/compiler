@@ -2,26 +2,12 @@ import utils
 import subprocess
 import os
 import sys
+from errors import *
 
-__all__ = ("AssemblerError", "LinkerError", "StripError", "build")
-
-
-class AssemblerError(Exception):
-    def __init__(self, *args: object) -> None:
-        super().__init__(*args)
+__all__ = ("assemble",)
 
 
-class LinkerError(Exception):
-    def __init__(self, *args: object) -> None:
-        super().__init__(*args)
-
-
-class StripError(Exception):
-    def __init__(self, *args: object) -> None:
-        super().__init__(*args)
-
-
-def build(
+def assemble(
     source: str,
     *,
     strip: bool = False,
