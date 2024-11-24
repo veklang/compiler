@@ -1,8 +1,8 @@
 from instructions import InstructionType as Type, Instruction
-from compiler import compile
-from assembler import assemble
+from compiler import emit
+from builder import assemble
 
-asm = compile(
+asm = emit(
     [
         Instruction(Type.ADD, [9, 4]),
         Instruction(Type.SUB, [9, 4]),

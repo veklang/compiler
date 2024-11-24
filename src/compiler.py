@@ -2,10 +2,10 @@ from asm import Asm
 from errors import CompilationError
 from instructions import InstructionType as Type, Instruction
 
-__all__ = ("compile",)
+__all__ = ("emit",)
 
 
-def compile(
+def emit(
     instructions: list[Instruction],
     *,
     opt_constant_folding: bool = False,
