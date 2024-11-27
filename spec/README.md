@@ -50,6 +50,24 @@ inline, fn
 export, import, default
 ```
 
+## Type system
+
+The type system is static but also somewhat lenient.
+
 ## Error handling
 
 I will not implement a try/catch system because it's really messy, functions should just return errors as values (eg using a tuple).
+
+## Memory management
+
+All variables are dropped (deallocated) once out of scope, so kinda like garbage collection.  
+Memory leaks and dangling pointers are also checked during compilation time.  
+Heap allocation is discouraged unless there is physically no way to achieve your objective on the stack.  
+
+## Standard library
+
+I will implement this later.
+
+## Concurrency model
+
+Built-in threading (stdlib) and async. I will also implement this later.
