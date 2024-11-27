@@ -3,11 +3,12 @@ Veklang (short: Vek) is a small hobbyist compiled language
 
 # Roadmap
 
-## Initial (Python)
+## Initial (TypeScript)
 
-Why am I using Python? Because I don't wanna spend much time here, I want to bootstrap ASAP.  
+Why am I using TypeScript? Because I don't wanna spend much time here, I want to bootstrap ASAP.  
 Also, this is not sequential. I can make any part at random times. Don't ask why.
 
-- [ ] General language syntax
+- [x] General language syntax
 - [ ] Lexer
 - [ ] Parser
+- [ ] Emitter
