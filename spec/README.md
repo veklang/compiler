@@ -71,3 +71,7 @@ I will implement this later.
 ## Concurrency model
 
 Built-in threading (stdlib) and async. I will also implement this later.
+
+## Interoperability
+
+This won't happen for a long time.
