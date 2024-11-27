@@ -49,3 +49,7 @@ inline, fn
 // modules (same system as js)
 export, import, default
 ```
+
+## Error handling
+
+I will not implement a try/catch system because it's really messy, functions should just return errors as values (eg using a tuple).
