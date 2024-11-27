@@ -41,5 +41,5 @@ fn func_caller(func: callable<[], void>) {
 func_caller(nothing)
 
 // you can also make anonymous functions
-func_caler(fn() {})
+func_caller(fn() {})
 ```
