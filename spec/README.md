@@ -14,7 +14,7 @@ Comments are done just like in C, with `//` and `/* */`.
 // core
 in
 return T
-exit uint8
+exit u8
 if, else, match
 for, while, break, continue
 
