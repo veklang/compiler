@@ -1,6 +1,6 @@
 <div align=center>
 
-[<kbd> <img src="https://github.com/user-attachments/assets/39abb9b0-9469-487d-9b45-6534de50d84b" alt="Veklang logo" height=64> </kbd>](https://github.com/duccdev/veklang)
+[![Veklang banner](https://github.com/user-attachments/assets/1d010a33-164d-4732-82de-26a9510de3cd)](https://github.com/duccdev/veklang)
 
 [![build](https://github.com/duccdev/veklang/actions/workflows/build.yml/badge.svg)](https://github.com/duccdev/veklang/actions/workflows/build.yml)
 [![LICENSE](https://img.shields.io/github/license/duccdev/veklang)](LICENSE)
