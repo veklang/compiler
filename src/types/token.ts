@@ -67,13 +67,16 @@ export type Punctuation =
   | "Punctuation:Comma"
   | "Punctuation:Dot"
   | "Punctuation:Colon"
-  | "Punctuation:Semicolon";
+  | "Punctuation:Semicolon"
+  | "Punctuation:QuestionMark";
 
 export type Operator =
   | "Operator:Minus"
   | "Operator:Plus"
   | "Operator:Slash"
   | "Operator:Asterisk"
+  | "Operator:Modulo"
+  | "Operator:Exponentiation"
   | "Operator:Bang"
   | "Operator:BangEqual"
   | "Operator:Equal"
@@ -81,7 +84,26 @@ export type Operator =
   | "Operator:Greater"
   | "Operator:GreaterEqual"
   | "Operator:Less"
-  | "Operator:LessEqual";
+  | "Operator:LessEqual"
+  | "Operator:And"
+  | "Operator:AndAnd"
+  | "Operator:Or"
+  | "Operator:OrOr"
+  | "Operator:Xor"
+  | "Operator:LeftShift"
+  | "Operator:RightShift"
+  | "Operator:PlusEqual"
+  | "Operator:MinusEqual"
+  | "Operator:AsteriskEqual"
+  | "Operator:SlashEqual"
+  | "Operator:ModuloEqual"
+  | "Operator:AndEqual"
+  | "Operator:OrEqual"
+  | "Operator:XorEqual"
+  | "Operator:LeftShiftEqual"
+  | "Operator:RightShiftEqual"
+  | "Operator:PlusPlus"
+  | "Operator:MinusMinus";
 
 export type Literal =
   | "Literal:Identifier"
