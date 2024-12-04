@@ -90,10 +90,13 @@ export type Literal =
   | "Literal:False"
   | "Literal:Null";
 
+export type Special = "Special:EOL" | "Special:EOF";
+
 export type TokenType =
   | Punctuation
   | Operator
   | Literal
+  | Special
   | "Keyword"
   | "Identifier";
 

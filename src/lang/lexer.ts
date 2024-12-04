@@ -29,6 +29,7 @@ export class Lexer {
       this.scanToken();
     }
 
+    this.addToken("Special:EOF", "\0");
     return this.tokens;
   }
 
@@ -122,6 +123,7 @@ export class Lexer {
       if (ch === "\n") {
         this.line++;
         this.column = 0;
+        this.addToken("Special:EOL", "\n");
       } else {
         this.column++;
       }
