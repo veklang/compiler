@@ -58,46 +58,43 @@ export const keywords = [
   "use",
 ] as const;
 
-export const literals = [
-  "Identifier",
-  "String",
-  "Integer",
-  "Float",
-  "True",
-  "False",
-  "Null",
-] as const;
+export type Punctuation =
+  | "Punctuation:LeftParen"
+  | "Punctuation:RightParen"
+  | "Punctuation:LeftBrace"
+  | "Punctuation:RightBrace"
+  | "Punctuation:Comma"
+  | "Punctuation:Dot"
+  | "Punctuation:Semicolon";
 
-export const punctuation = [
-  "LeftParen",
-  "RightParen",
-  "LeftBrace",
-  "RightBrace",
-  "Comma",
-  "Dot",
-  "Semicolon",
-] as const;
+export type Operator =
+  | "Operator:Minus"
+  | "Operator:Plus"
+  | "Operator:Slash"
+  | "Operator:Asterisk"
+  | "Operator:Bang"
+  | "Operator:BangEqual"
+  | "Operator:Equal"
+  | "Operator:EqualEqual"
+  | "Operator:Greater"
+  | "Operator:GreaterEqual"
+  | "Operator:Less"
+  | "Operator:LessEqual";
 
-export const operators = [
-  "Minus",
-  "Plus",
-  "Slash",
-  "Asterisk",
-  "Bang",
-  "BangEqual",
-  "Equal",
-  "EqualEqual",
-  "Greater",
-  "GreaterEqual",
-  "Less",
-  "LessEqual",
-] as const;
+export type Literal =
+  | "Literal:Identifier"
+  | "Literal:String"
+  | "Literal:Integer"
+  | "Literal:Float"
+  | "Literal:True"
+  | "Literal:False"
+  | "Literal:Null";
 
 export type TokenType =
-  | "Punctuation"
-  | "Operator"
+  | Punctuation
+  | Operator
+  | Literal
   | "Keyword"
-  | "Literal"
   | "Identifier";
 
 export interface Token {
