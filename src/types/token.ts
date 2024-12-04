@@ -57,7 +57,7 @@ export const keywords = [
   "export",
   "import",
   "default",
-] as const;
+];
 
 export type Punctuation =
   | "Punctuation:LeftParen"
