@@ -31,40 +31,51 @@ export class Lexer {
       case "\t":
       case "\n":
         break;
+
       case "(":
         this.addToken("Punctuation:LeftParen", "(");
         break;
+
       case ")":
         this.addToken("Punctuation:RightParen", ")");
         break;
+
       case "{":
         this.addToken("Punctuation:LeftBrace", "{");
         break;
+
       case "}":
         this.addToken("Punctuation:RightBrace", "}");
         break;
+
       case ",":
         this.addToken("Punctuation:Comma", ",");
         break;
+
       case ".":
         this.addToken("Punctuation:Dot", ".");
         break;
+
       case ":":
         this.addToken("Punctuation:Colon", ":");
         break;
+
       case ";":
         this.addToken("Punctuation:Semicolon", ";");
         break;
+
       case "-":
         if (this.match("-")) this.addToken("Operator:MinusMinus", "--");
         else if (this.match("=")) this.addToken("Operator:MinusEqual", "-=");
         else this.addToken("Operator:Minus", "-");
         break;
+
       case "+":
         if (this.match("+")) this.addToken("Operator:PlusPlus", "++");
         else if (this.match("=")) this.addToken("Operator:PlusEqual", "+=");
         else this.addToken("Operator:Plus", "+");
         break;
+
       case "/":
         if (this.match("/"))
           while (!this.isAtEnd() && this.peekChar() !== "\n") this.nextChar();
@@ -84,23 +95,28 @@ export class Lexer {
         } else if (this.match("=")) this.addToken("Operator:SlashEqual", "/=");
         else this.addToken("Operator:Slash", "/");
         break;
+
       case "%":
         if (this.match("=")) this.addToken("Operator:ModuloEqual", "%=");
         else this.addToken("Operator:Modulo", "%");
         break;
+
       case "*":
         if (this.match("*")) this.addToken("Operator:Exponentiation", "**");
         else if (this.match("=")) this.addToken("Operator:AsteriskEqual", "*=");
         else this.addToken("Operator:Asterisk", "*");
         break;
+
       case "!":
         if (this.match("=")) this.addToken("Operator:BangEqual", "!=");
         else this.addToken("Operator:Bang", "!");
         break;
+
       case "=":
         if (this.match("=")) this.addToken("Operator:EqualEqual", "==");
         else this.addToken("Operator:Equal", "=");
         break;
+
       case "<":
         if (this.match("<"))
           if (this.match("=")) this.addToken("Operator:LeftShiftEqual", "<<=");
@@ -108,6 +124,7 @@ export class Lexer {
         else if (this.match("=")) this.addToken("Operator:LessEqual", "<=");
         else this.addToken("Operator:Less", "<");
         break;
+
       case ">":
         if (this.match(">"))
           if (this.match("=")) this.addToken("Operator:RightShiftEqual", ">>=");
@@ -115,23 +132,28 @@ export class Lexer {
         else if (this.match("=")) this.addToken("Operator:GreaterEqual", ">=");
         else this.addToken("Operator:Greater", ">");
         break;
+
       case '"':
         this.scanString();
         break;
+
       case "&":
         if (this.match("&")) this.addToken("Operator:AndAnd", "&&");
         else if (this.match("=")) this.addToken("Operator:AndEqual", "&=");
         else this.addToken("Operator:And", "&");
         break;
+
       case "|":
         if (this.match("|")) this.addToken("Operator:OrOr", "||");
         else if (this.match("=")) this.addToken("Operator:OrEqual", "|=");
         else this.addToken("Operator:Or", "|");
         break;
+
       case "^":
         if (this.match("=")) this.addToken("Operator:XorEqual", "^=");
         else this.addToken("Operator:Xor", "^");
         break;
+
       default:
         if (this.isDigit(c)) this.scanNumber();
         else if (this.isAlpha(c)) this.scanIdentifier();
