@@ -54,8 +54,9 @@ export const keywords = [
   "sizeof",
   "inline",
   "fn",
-  "mod",
-  "use",
+  "export",
+  "import",
+  "default",
 ] as const;
 
 export type Punctuation =
