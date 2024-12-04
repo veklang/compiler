@@ -9,7 +9,7 @@ export class Lexer {
   private line = 1;
 
   constructor(source: string) {
-    this.source = source;
+    this.source = source.trim();
   }
 
   public lex() {
