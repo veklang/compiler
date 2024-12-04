@@ -66,6 +66,7 @@ export type Punctuation =
   | "Punctuation:RightBrace"
   | "Punctuation:Comma"
   | "Punctuation:Dot"
+  | "Punctuation:Colon"
   | "Punctuation:Semicolon";
 
 export type Operator =

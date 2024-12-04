@@ -49,6 +49,9 @@ export class Lexer {
       case ".":
         this.addToken("Punctuation:Dot", ".");
         break;
+      case ":":
+        this.addToken("Punctuation:Colon", ":");
+        break;
       case ";":
         this.addToken("Punctuation:Semicolon", ";");
         break;
