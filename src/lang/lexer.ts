@@ -1,15 +1,4 @@
-import type { Token, TokenType } from "@/types/token";
-
-export type LexerErrorType = "SyntaxError";
-
-export class LexerError extends Error {
-  type: LexerErrorType;
-
-  public constructor(type: LexerErrorType, message: string) {
-    super(`${type}: ${message}`);
-    this.type = type;
-  }
-}
+import { keywords, type Token, type TokenType } from "@/types/token";
 
 export class Lexer {
   private source: string;
@@ -34,9 +23,9 @@ export class Lexer {
   }
 
   private scanToken() {
-    const ch = this.nextChar();
+    const c = this.nextChar();
 
-    switch (ch) {
+    switch (c) {
       case " ":
       case "\r":
       case "\t":
@@ -100,6 +89,16 @@ export class Lexer {
         if (this.match("=")) this.addToken("Operator:GreaterEqual", ">=");
         else this.addToken("Operator:Greater", ">");
         break;
+      case '"':
+        this.scanString();
+        break;
+      default:
+        if (this.isDigit(c)) this.scanNumber();
+        else if (this.isAlpha(c)) this.scanIdentifier();
+        else
+          throw new SyntaxError(
+            `Unexpected character '${c}' at line ${this.line} column ${this.column}`,
+          );
     }
   }
 
@@ -152,14 +151,23 @@ export class Lexer {
     return this.source[this.current + extra];
   }
 
-  private nextString() {
-    while (!this.isAtEnd() && this.peekChar() !== '"') {
+  private scanNumber() {
+    while (this.isDigit(this.peekChar())) this.nextChar();
+    if (this.peekChar() === "." && this.isDigit(this.peekChar(1))) {
       this.nextChar();
+      while (this.isDigit(this.peekChar())) this.nextChar();
     }
 
+    const lexeme = this.source.substring(this.start, this.current);
+    if (lexeme.includes(".")) this.addToken("Literal:Float", lexeme);
+    else this.addToken("Literal:Integer", lexeme);
+  }
+
+  private scanString() {
+    while (!this.isAtEnd() && this.peekChar() !== '"') this.nextChar();
+
     if (this.isAtEnd()) {
-      throw new LexerError(
-        "SyntaxError",
+      throw new SyntaxError(
         `Unterminated string at line ${this.line} column ${this.column}`,
       );
     }
@@ -169,5 +177,24 @@ export class Lexer {
       "Literal:String",
       this.source.substring(this.start + 1, this.current - 1),
     );
+  }
+
+  private scanIdentifier() {
+    while (this.isAlphaNumeric(this.peekChar())) this.nextChar();
+    const text = this.source.substring(this.start, this.current);
+    if (keywords.includes(text)) this.addToken("Keyword", text);
+    else this.addToken("Identifier", text);
+  }
+
+  private isDigit(c: string): boolean {
+    return c >= "0" && c <= "9";
+  }
+
+  private isAlpha(c: string): boolean {
+    return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "_";
+  }
+
+  private isAlphaNumeric(c: string): boolean {
+    return this.isAlpha(c) || this.isDigit(c);
   }
 }
