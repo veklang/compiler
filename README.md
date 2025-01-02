@@ -34,7 +34,7 @@ Also, this is not sequential. I can make any part at random times. This language
 ### Planned implementations
 
 &nbsp; ✅ **Define general language syntax**\
-&nbsp; ⬛ **Implement lexer**\
+&nbsp; ✅ **Implement lexer**\
 &nbsp; ⬛ **Build parser**\
 &nbsp; ⬛ **Create emitter**
 
