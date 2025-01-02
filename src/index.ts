@@ -6,5 +6,5 @@ console.log(
 }
 
 add(69, 420)
-exit 0`).lex(),
+exit(0)`).lex(),
 );
