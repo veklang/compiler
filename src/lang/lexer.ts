@@ -185,9 +185,7 @@ export class Lexer {
         this.line++;
         this.column = 0;
         this.addToken("Special:EOL", "\n");
-      } else {
-        this.column++;
-      }
+      } else this.column++;
 
       return ch;
     };
@@ -228,11 +226,10 @@ export class Lexer {
   private scanString() {
     while (!this.isAtEnd() && this.peekChar() !== '"') this.nextChar();
 
-    if (this.isAtEnd()) {
+    if (this.isAtEnd())
       throw new SyntaxError(
         `Unterminated string at line ${this.line} column ${this.column}`,
       );
-    }
 
     this.nextChar();
     this.addToken(
