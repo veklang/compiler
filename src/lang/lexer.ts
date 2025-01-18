@@ -172,8 +172,8 @@ export class Lexer {
     return this.current >= this.source.length;
   }
 
-  private nextChar(extra = 0) {
-    if (this.current + extra >= this.source.length) {
+  private nextChar(offset = 0) {
+    if (this.current + offset >= this.source.length) {
       this.current = this.source.length;
       return "\0";
     }
@@ -190,9 +190,9 @@ export class Lexer {
       return ch;
     };
 
-    if (extra > 0) {
+    if (offset > 0) {
       let ch = "";
-      for (let i = 0; i < extra; i++) ch = inner();
+      for (let i = 0; i < offset; i++) ch = inner();
       return ch;
     }
 
@@ -206,9 +206,9 @@ export class Lexer {
     return true;
   }
 
-  private peekChar(extra = 0) {
-    if (this.current + extra >= this.source.length) return "\0";
-    return this.source[this.current + extra];
+  private peekChar(offset = 0) {
+    if (this.current + offset >= this.source.length) return "\0";
+    return this.source[this.current + offset];
   }
 
   private scanNumber() {
