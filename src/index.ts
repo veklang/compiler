@@ -1,13 +1,21 @@
+import { inspect } from "node:util";
 import { Lexer } from "@/lang/lexer";
-import { Parser } from "./lang/parser";
+import { Parser } from "@/lang/parser";
+
+const source = "6.9 + 420";
+const tokens = new Lexer(source).lex();
+const ast = new Parser(tokens).parse();
 
 console.log(
-  new Lexer(`fn add(x: int, y: int) {
-  return x + y
-}
-
-add(69, 420)
-exit(0)`).lex(),
+  inspect(tokens, {
+    depth: 50,
+    colors: true,
+  }),
 );
 
-console.log(new Parser(new Lexer("6.9 + 420").lex()).parse()[0]);
+console.log(
+  inspect(ast, {
+    depth: 50,
+    colors: true,
+  }),
+);
