@@ -29,54 +29,64 @@ export class Lexer {
       case " ":
       case "\r":
       case "\t":
-      case "\n":
+      case "\n": {
         break;
+      }
 
-      case "(":
+      case "(": {
         this.addToken("Punctuation:LeftParen", "(");
         break;
+      }
 
-      case ")":
+      case ")": {
         this.addToken("Punctuation:RightParen", ")");
         break;
+      }
 
-      case "{":
+      case "{": {
         this.addToken("Punctuation:LeftBrace", "{");
         break;
+      }
 
-      case "}":
+      case "}": {
         this.addToken("Punctuation:RightBrace", "}");
         break;
-
-      case ",":
+      }
+      case ",": {
         this.addToken("Punctuation:Comma", ",");
         break;
+      }
 
-      case ".":
+      case ".": {
         this.addToken("Punctuation:Dot", ".");
         break;
+      }
 
-      case ":":
+      case ":": {
         this.addToken("Punctuation:Colon", ":");
         break;
+      }
 
-      case ";":
+      case ";": {
         this.addToken("Punctuation:Semicolon", ";");
         break;
+      }
 
-      case "-":
+      case "-": {
         if (this.match("-")) this.addToken("Operator:MinusMinus", "--");
         else if (this.match("=")) this.addToken("Operator:MinusEqual", "-=");
         else this.addToken("Operator:Minus", "-");
         break;
+      }
 
-      case "+":
+      case "+": {
         if (this.match("+")) this.addToken("Operator:PlusPlus", "++");
         else if (this.match("=")) this.addToken("Operator:PlusEqual", "+=");
         else this.addToken("Operator:Plus", "+");
         break;
+      }
 
-      case "/":
+      case "/": {
         if (this.match("/"))
           while (!this.isAtEnd() && this.peekChar() !== "\n") this.nextChar();
         else if (this.match("*")) {
@@ -95,72 +105,84 @@ export class Lexer {
         } else if (this.match("=")) this.addToken("Operator:SlashEqual", "/=");
         else this.addToken("Operator:Slash", "/");
         break;
+      }
 
-      case "%":
+      case "%": {
         if (this.match("=")) this.addToken("Operator:ModuloEqual", "%=");
         else this.addToken("Operator:Modulo", "%");
         break;
+      }
 
-      case "*":
+      case "*": {
         if (this.match("*")) this.addToken("Operator:Exponentiation", "**");
         else if (this.match("=")) this.addToken("Operator:AsteriskEqual", "*=");
         else this.addToken("Operator:Asterisk", "*");
         break;
+      }
 
-      case "!":
+      case "!": {
         if (this.match("=")) this.addToken("Operator:BangEqual", "!=");
         else this.addToken("Operator:Bang", "!");
         break;
+      }
 
-      case "=":
+      case "=": {
         if (this.match("=")) this.addToken("Operator:EqualEqual", "==");
         else this.addToken("Operator:Equal", "=");
         break;
+      }
 
-      case "<":
+      case "<": {
         if (this.match("<"))
           if (this.match("=")) this.addToken("Operator:LeftShiftEqual", "<<=");
           else this.addToken("Operator:LeftShift", "<<");
         else if (this.match("=")) this.addToken("Operator:LessEqual", "<=");
         else this.addToken("Operator:Less", "<");
         break;
+      }
 
-      case ">":
+      case ">": {
         if (this.match(">"))
           if (this.match("=")) this.addToken("Operator:RightShiftEqual", ">>=");
           else this.addToken("Operator:RightShift", ">>");
         else if (this.match("=")) this.addToken("Operator:GreaterEqual", ">=");
         else this.addToken("Operator:Greater", ">");
         break;
+      }
 
-      case '"':
+      case '"': {
         this.scanString();
         break;
+      }
 
-      case "&":
+      case "&": {
         if (this.match("&")) this.addToken("Operator:AndAnd", "&&");
         else if (this.match("=")) this.addToken("Operator:AndEqual", "&=");
         else this.addToken("Operator:And", "&");
         break;
+      }
 
-      case "|":
+      case "|": {
         if (this.match("|")) this.addToken("Operator:OrOr", "||");
         else if (this.match("=")) this.addToken("Operator:OrEqual", "|=");
         else this.addToken("Operator:Or", "|");
         break;
+      }
 
-      case "^":
+      case "^": {
         if (this.match("=")) this.addToken("Operator:XorEqual", "^=");
         else this.addToken("Operator:Xor", "^");
         break;
+      }
 
-      default:
+      default: {
         if (this.isDigit(c)) this.scanNumber();
         else if (this.isAlpha(c)) this.scanIdentifier();
         else
           throw new SyntaxError(
             `Unexpected character '${c}' at line ${this.line} column ${this.column}`,
           );
+      }
     }
   }
 
