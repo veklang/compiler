@@ -49,21 +49,23 @@ export type Operator =
   | "PlusPlus"
   | "MinusMinus";
 
-export interface Node {
+export interface BaseNode {
   type: NodeType;
   children?: Node[];
   tokens?: Token[];
 }
 
-export interface Literal extends Node {
+export interface Literal extends BaseNode {
   type: "Literal";
   literalType: LiteralType;
   value: string | number | boolean | null;
 }
 
-export interface Expression extends Node {
+export interface Expression extends BaseNode {
   type: "Expression";
   expressionType: ExpressionType;
   operator?: Operator;
   operands: Node[];
 }
+
+export type Node = BaseNode | Literal | Expression;
