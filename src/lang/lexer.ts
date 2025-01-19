@@ -18,7 +18,7 @@ export class Lexer {
       this.scanToken();
     }
 
-    this.addToken("Special:EOF", "\0");
+    this.addToken("Special:EOF", "");
     return this.tokens;
   }
 
