@@ -1,5 +1,9 @@
-import type { Node, Operator as AstOperator, LiteralType } from "@/types/ast";
-import type { Token, Operator as TokenOperator, Literal } from "@/types/token";
+import type { Node, ExpressionType, LiteralType } from "@/types/ast";
+import type {
+  Operator as TokenOperator,
+  Literal as TokenLiteral,
+} from "@/types/token";
+import type { Token } from "@/types/token";
 
 export class Parser {
   private tokens: Token[] = [];
@@ -46,7 +50,7 @@ export class Parser {
           if (
             !rightOperand ||
             !["Literal:Integer", "Literal:Float"].includes(
-              rightOperand.type as Literal,
+              rightOperand.type as TokenLiteral,
             )
           )
             throw new SyntaxError(
@@ -55,8 +59,8 @@ export class Parser {
 
           this.nodes.push({
             type: "Expression",
-            expressionType: "Binary",
-            operator: operator.type.replace("Operator:", "") as AstOperator,
+            expressionType: "Binary" as ExpressionType,
+            operator: operator.type.replace("Operator:", "") as any,
             operands: [
               {
                 type: "Literal",

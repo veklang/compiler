@@ -73,80 +73,84 @@ export class Lexer {
       }
 
       case "-": {
-        if (this.match("-")) this.addToken("Operator:MinusMinus", "--");
-        else if (this.match("=")) this.addToken("Operator:MinusEqual", "-=");
-        else this.addToken("Operator:Minus", "-");
+        this.scanOperator("-", "Operator:Minus", [
+          { match: "-", token: "Operator:MinusMinus" },
+          { match: "=", token: "Operator:MinusEqual" },
+        ]);
         break;
       }
 
       case "+": {
-        if (this.match("+")) this.addToken("Operator:PlusPlus", "++");
-        else if (this.match("=")) this.addToken("Operator:PlusEqual", "+=");
-        else this.addToken("Operator:Plus", "+");
+        this.scanOperator("+", "Operator:Plus", [
+          { match: "+", token: "Operator:PlusPlus" },
+          { match: "=", token: "Operator:PlusEqual" },
+        ]);
         break;
       }
 
       case "/": {
-        if (this.match("/"))
+        if (this.match("/")) {
+          // Single-line comment
           while (!this.isAtEnd() && this.peekChar() !== "\n") this.nextChar();
-        else if (this.match("*")) {
-          while (
-            !this.isAtEnd() &&
-            !(this.peekChar() === "*" && this.peekChar(1) === "/")
-          )
-            this.nextChar();
-          if (!this.isAtEnd()) {
-            this.nextChar();
-            this.nextChar();
-          } else
-            throw new SyntaxError(
-              `Unterminated multi-line comment at line ${this.line} column ${this.column}`,
-            );
-        } else if (this.match("=")) this.addToken("Operator:SlashEqual", "/=");
-        else this.addToken("Operator:Slash", "/");
+        } else if (this.match("*")) {
+          // Multi-line comment
+          this.scanMultiLineComment();
+        } else if (this.match("=")) {
+          this.addToken("Operator:SlashEqual", "/=");
+        } else {
+          this.addToken("Operator:Slash", "/");
+        }
         break;
       }
 
       case "%": {
-        if (this.match("=")) this.addToken("Operator:ModuloEqual", "%=");
-        else this.addToken("Operator:Modulo", "%");
+        this.scanOperator("%", "Operator:Modulo", [
+          { match: "=", token: "Operator:ModuloEqual" },
+        ]);
         break;
       }
 
       case "*": {
-        if (this.match("*")) this.addToken("Operator:Exponentiation", "**");
-        else if (this.match("=")) this.addToken("Operator:AsteriskEqual", "*=");
-        else this.addToken("Operator:Asterisk", "*");
+        this.scanOperator("*", "Operator:Asterisk", [
+          { match: "*", token: "Operator:Exponentiation" },
+          { match: "=", token: "Operator:AsteriskEqual" },
+        ]);
         break;
       }
 
       case "!": {
-        if (this.match("=")) this.addToken("Operator:BangEqual", "!=");
-        else this.addToken("Operator:Bang", "!");
+        this.scanOperator("!", "Operator:Bang", [
+          { match: "=", token: "Operator:BangEqual" },
+        ]);
         break;
       }
 
       case "=": {
-        if (this.match("=")) this.addToken("Operator:EqualEqual", "==");
-        else this.addToken("Operator:Equal", "=");
+        this.scanOperator("=", "Operator:Equal", [
+          { match: "=", token: "Operator:EqualEqual" },
+        ]);
         break;
       }
 
       case "<": {
-        if (this.match("<"))
-          if (this.match("=")) this.addToken("Operator:LeftShiftEqual", "<<=");
-          else this.addToken("Operator:LeftShift", "<<");
-        else if (this.match("=")) this.addToken("Operator:LessEqual", "<=");
-        else this.addToken("Operator:Less", "<");
+        this.scanShiftOperator(
+          "<",
+          "Operator:Less",
+          "Operator:LeftShift",
+          "Operator:LessEqual",
+          "Operator:LeftShiftEqual",
+        );
         break;
       }
 
       case ">": {
-        if (this.match(">"))
-          if (this.match("=")) this.addToken("Operator:RightShiftEqual", ">>=");
-          else this.addToken("Operator:RightShift", ">>");
-        else if (this.match("=")) this.addToken("Operator:GreaterEqual", ">=");
-        else this.addToken("Operator:Greater", ">");
+        this.scanShiftOperator(
+          ">",
+          "Operator:Greater",
+          "Operator:RightShift",
+          "Operator:GreaterEqual",
+          "Operator:RightShiftEqual",
+        );
         break;
       }
 
@@ -156,22 +160,25 @@ export class Lexer {
       }
 
       case "&": {
-        if (this.match("&")) this.addToken("Operator:AndAnd", "&&");
-        else if (this.match("=")) this.addToken("Operator:AndEqual", "&=");
-        else this.addToken("Operator:And", "&");
+        this.scanOperator("&", "Operator:And", [
+          { match: "&", token: "Operator:AndAnd" },
+          { match: "=", token: "Operator:AndEqual" },
+        ]);
         break;
       }
 
       case "|": {
-        if (this.match("|")) this.addToken("Operator:OrOr", "||");
-        else if (this.match("=")) this.addToken("Operator:OrEqual", "|=");
-        else this.addToken("Operator:Or", "|");
+        this.scanOperator("|", "Operator:Or", [
+          { match: "|", token: "Operator:OrOr" },
+          { match: "=", token: "Operator:OrEqual" },
+        ]);
         break;
       }
 
       case "^": {
-        if (this.match("=")) this.addToken("Operator:XorEqual", "^=");
-        else this.addToken("Operator:Xor", "^");
+        this.scanOperator("^", "Operator:Xor", [
+          { match: "=", token: "Operator:XorEqual" },
+        ]);
         break;
       }
 
@@ -263,7 +270,7 @@ export class Lexer {
   private scanIdentifier() {
     while (this.isAlphaNumeric(this.peekChar())) this.nextChar();
     const text = this.source.substring(this.start, this.current);
-    if (keywords.includes(text)) this.addToken("Keyword", text);
+    if (keywords.includes(text as never)) this.addToken("Keyword", text);
     else this.addToken("Identifier", text);
   }
 
@@ -277,5 +284,72 @@ export class Lexer {
 
   private isAlphaNumeric(c: string): boolean {
     return this.isAlpha(c) || this.isDigit(c);
+  }
+
+  /**
+   * Scans an operator with optional single or double character variations.
+   * @param char The primary character
+   * @param singleToken Token type if only the single character is matched
+   * @param patterns Array of { match, token } for multi-character operators
+   */
+  private scanOperator(
+    char: string,
+    singleToken: TokenType,
+    patterns: { match: string; token: TokenType }[],
+  ) {
+    for (const pattern of patterns) {
+      if (this.match(pattern.match)) {
+        this.addToken(pattern.token, char + pattern.match);
+        return;
+      }
+    }
+    this.addToken(singleToken, char);
+  }
+
+  /**
+   * Scans shift operators and comparison operators that use the same character twice.
+   * @param char The operator character ('<' or '>')
+   * @param singleToken Token for single character (e.g., '<')
+   * @param doubleToken Token for double character (e.g., '<<')
+   * @param equalToken Token for single + '=' (e.g., '<=')
+   * @param doubleEqualToken Token for double + '=' (e.g., '<<=')
+   */
+  private scanShiftOperator(
+    char: string,
+    singleToken: TokenType,
+    doubleToken: TokenType,
+    equalToken: TokenType,
+    doubleEqualToken: TokenType,
+  ) {
+    if (this.match(char)) {
+      if (this.match("=")) {
+        this.addToken(doubleEqualToken, char + char + "=");
+      } else {
+        this.addToken(doubleToken, char + char);
+      }
+    } else if (this.match("=")) {
+      this.addToken(equalToken, char + "=");
+    } else {
+      this.addToken(singleToken, char);
+    }
+  }
+
+  // Scans a multi-line comment /* ... */
+  private scanMultiLineComment() {
+    while (
+      !this.isAtEnd() &&
+      !(this.peekChar() === "*" && this.peekChar(1) === "/")
+    ) {
+      this.nextChar();
+    }
+
+    if (this.isAtEnd()) {
+      throw new SyntaxError(
+        `Unterminated multi-line comment at line ${this.line} column ${this.column}`,
+      );
+    }
+
+    this.nextChar();
+    this.nextChar();
   }
 }

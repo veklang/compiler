@@ -1,53 +1,11 @@
 import type { Token } from "./token";
+import type { Operator, LiteralType } from "@/types/shared";
 
 export type NodeType = "Literal" | "Expression";
 
-export type LiteralType =
-  | "Identifier"
-  | "String"
-  | "Integer"
-  | "Float"
-  | "True"
-  | "False"
-  | "Null";
+export type { LiteralType } from "@/types/shared";
 
 export type ExpressionType = "Binary" | "Unary" | "Assignment";
-
-// yes, this was straight up copied from `@/types/token.ts`, i'm sorry
-export type Operator =
-  | "Minus"
-  | "Plus"
-  | "Slash"
-  | "Asterisk"
-  | "Modulo"
-  | "Exponentiation"
-  | "Bang"
-  | "BangEqual"
-  | "Equal"
-  | "EqualEqual"
-  | "Greater"
-  | "GreaterEqual"
-  | "Less"
-  | "LessEqual"
-  | "And"
-  | "AndAnd"
-  | "Or"
-  | "OrOr"
-  | "Xor"
-  | "LeftShift"
-  | "RightShift"
-  | "PlusEqual"
-  | "MinusEqual"
-  | "AsteriskEqual"
-  | "SlashEqual"
-  | "ModuloEqual"
-  | "AndEqual"
-  | "OrEqual"
-  | "XorEqual"
-  | "LeftShiftEqual"
-  | "RightShiftEqual"
-  | "PlusPlus"
-  | "MinusMinus";
 
 export interface BaseNode {
   type: NodeType;
