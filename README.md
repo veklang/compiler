@@ -23,20 +23,21 @@
 
 ## Roadmap
 
-### Initial Phase: Bootstrapping with TypeScript
+### Spec/doc
 
-#### Why TypeScript?
-Because I don't want to spend much time here, I want to bootstrap ASAP.
-Also, this is not sequential. I can make any part at random times. This language is just a personal hobby project.
+&nbsp; 🟨 **General language specifications**\
+&nbsp; ⬛ **Proper documentation**\
+&nbsp; ⬛ **Proper handbook**
 
----
+### Intermediate
 
-### Planned implementations
+&nbsp; 🟨 **`vek-asm` specifications**\
+&nbsp; ⬛ **Runtime/interpreter**
 
-&nbsp; ✅ **General language syntax**\
-&nbsp; ✅ **Lexer**\
+## Compiler
+
+&nbsp; ⬛ **Lexer**\
 &nbsp; ⬛ **Parser**\
-&nbsp; ⬛ **Runtime**\
 &nbsp; ⬛ **Emitter**
 
 ---
