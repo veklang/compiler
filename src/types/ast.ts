@@ -1,5 +1,5 @@
+import type { LiteralType, Operator } from "@/types/shared";
 import type { Token } from "./token";
-import type { Operator, LiteralType } from "@/types/shared";
 
 export type NodeType = "Literal" | "Expression";
 

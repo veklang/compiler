@@ -1,9 +1,9 @@
-import type { Node, ExpressionType, LiteralType } from "@/types/ast";
+import type { ExpressionType, LiteralType, Node } from "@/types/ast";
 import type {
-  Operator as TokenOperator,
+  Token,
   Literal as TokenLiteral,
+  Operator as TokenOperator,
 } from "@/types/token";
-import type { Token } from "@/types/token";
 
 export class Parser {
   private tokens: Token[] = [];

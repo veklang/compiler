@@ -323,12 +323,12 @@ export class Lexer {
   ) {
     if (this.match(char)) {
       if (this.match("=")) {
-        this.addToken(doubleEqualToken, char + char + "=");
+        this.addToken(doubleEqualToken, `${char}${char}=`);
       } else {
         this.addToken(doubleToken, char + char);
       }
     } else if (this.match("=")) {
-      this.addToken(equalToken, char + "=");
+      this.addToken(equalToken, `${char}=`);
     } else {
       this.addToken(singleToken, char);
     }

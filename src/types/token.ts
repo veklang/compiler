@@ -1,7 +1,7 @@
 import type {
-  PunctuationType,
   Operator as BaseOperator,
   LiteralType,
+  PunctuationType,
 } from "@/types/shared";
 
 export { keywords } from "@/types/shared";
