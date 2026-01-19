@@ -24,8 +24,8 @@
 
 ### Legend
 
-&nbsp; ⬛ **No work done at all**
-&nbsp; 🟨 **Working on it**
+&nbsp; ⬛ **No work done at all**\
+&nbsp; 🟨 **Working on it**\
 &nbsp; ✅ **Completed**
 
 ### Spec/doc
