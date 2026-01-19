@@ -2,7 +2,6 @@
 
 [![Veklang banner](https://github.com/user-attachments/assets/1d010a33-164d-4732-82de-26a9510de3cd)](https://github.com/duccdev/veklang)
 
-[![build](https://github.com/duccdev/veklang/actions/workflows/build.yml/badge.svg)](https://github.com/duccdev/veklang/actions/workflows/build.yml)
 [![LICENSE](https://img.shields.io/github/license/duccdev/veklang)](LICENSE)
 [![Top Language](https://img.shields.io/github/languages/top/duccdev/veklang)](https://github.com/duccdev/veklang)
 [![Issues](https://img.shields.io/github/issues/duccdev/veklang)](https://github.com/duccdev/veklang/issues)
@@ -17,22 +16,28 @@
 
 ## What is Veklang?
 
-**Veklang** (commonly referred to as *Vek*) is a compact, compiled programming language developed as a personal hobby project.
+**Veklang** (or just *Vek*) is a compiled programming language developed as a personal hobby project.
 
 ---
 
 ## Roadmap
 
+### Legend
+
+&nbsp; ⬛ **No work done at all**
+&nbsp; 🟨 **Working on it**
+&nbsp; ✅ **Completed**
+
 ### Spec/doc
 
-&nbsp; 🟨 **General language specifications**\
+&nbsp; 🟨 **Language specifications**\
 &nbsp; ⬛ **Proper documentation**\
 &nbsp; ⬛ **Proper handbook**
 
-### Intermediate
+### Runtime
 
-&nbsp; 🟨 **`vek-asm` specifications**\
-&nbsp; ⬛ **Runtime/interpreter**
+&nbsp; 🟨 **Runtime specifications**\
+&nbsp; ⬛ **The actual runtime**
 
 ## Compiler
 
