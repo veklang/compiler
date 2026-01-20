@@ -8,7 +8,7 @@
 [![Pull requests](https://img.shields.io/github/issues-pr/duccdev/veklang)](https://github.com/duccdev/veklang/pulls)
 
 **[<kbd> <br> Wiki <br> </kbd>](https://github.com/duccdev/veklang/wiki)** 
-**[<kbd> <br> Specification <br> </kbd>](https://github.com/duccdev/veklang/wiki/Specification)**
+**[<kbd> <br> Specifications <br> </kbd>](https://github.com/duccdev/veklang/wiki/Specifications)**
 
 </div>
 
