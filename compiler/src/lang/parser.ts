@@ -68,6 +68,7 @@ export class Parser {
   private tokens: Token[];
   private diagnostics: Diagnostic[] = [];
   private current = 0;
+  private structLiteralEnabled = true;
 
   constructor(tokens: Token[]) {
     this.tokens = tokens;
@@ -493,7 +494,8 @@ export class Parser {
   private parseIfStatement(): IfStatement {
     const start = this.expectKeyword("if");
     const condition =
-      this.parseExpression() ?? this.placeholderExpression(this.currentSpan());
+      this.withStructLiteral(false, () => this.parseExpression()) ??
+      this.placeholderExpression(this.currentSpan());
     const thenBranch = this.parseBlockStatement();
     let elseBranch: BlockStatement | IfStatement | undefined;
 
@@ -514,7 +516,8 @@ export class Parser {
   private parseWhileStatement(): WhileStatement {
     const start = this.expectKeyword("while");
     const condition =
-      this.parseExpression() ?? this.placeholderExpression(this.currentSpan());
+      this.withStructLiteral(false, () => this.parseExpression()) ??
+      this.placeholderExpression(this.currentSpan());
     const body = this.parseBlockStatement();
 
     return {
@@ -531,7 +534,8 @@ export class Parser {
       this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     this.expectKeyword("in");
     const iterable =
-      this.parseExpression() ?? this.placeholderExpression(this.currentSpan());
+      this.withStructLiteral(false, () => this.parseExpression()) ??
+      this.placeholderExpression(this.currentSpan());
     const body = this.parseBlockStatement();
 
     return {
@@ -546,7 +550,8 @@ export class Parser {
   private parseMatchStatement(): MatchStatement {
     const start = this.expectKeyword("match");
     const expression =
-      this.parseExpression() ?? this.placeholderExpression(this.currentSpan());
+      this.withStructLiteral(false, () => this.parseExpression()) ??
+      this.placeholderExpression(this.currentSpan());
     this.expectPunctuator("{");
 
     const arms: MatchArm[] = [];
@@ -834,6 +839,7 @@ export class Parser {
       }
 
       if (
+        this.structLiteralEnabled &&
         this.checkPunctuator("{") &&
         expression.kind === "IdentifierExpression"
       ) {
@@ -995,7 +1001,7 @@ export class Parser {
 
     if (!this.checkPunctuator(")")) {
       do {
-        const element = this.parseExpression();
+        const element = this.withStructLiteral(true, () => this.parseExpression());
         if (element) elements.push(element);
       } while (this.matchPunctuator(","));
     }
@@ -1499,6 +1505,16 @@ export class Parser {
       lexeme: "",
       span: this.emptySpan(),
     };
+  }
+
+  private withStructLiteral<T>(enabled: boolean, fn: () => T): T {
+    const previous = this.structLiteralEnabled;
+    this.structLiteralEnabled = enabled;
+    try {
+      return fn();
+    } finally {
+      this.structLiteralEnabled = previous;
+    }
   }
 
   private checkpoint() {

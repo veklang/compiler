@@ -143,4 +143,89 @@ match 50 { 1 => {}, x => {}, _ => {} }
     const result = parse("let x = 1");
     expectDiagnostics(result.parseDiagnostics, ["PAR020"]);
   });
+
+  test("full program sample (functions + io)", () => {
+    const program = parseOk(`
+import io from "std:io";
+
+const constant_value = 50;
+
+fn add(x: int, y: int) {
+  return x + y;
+}
+
+fn main() {
+  let float_addition = 6.9 + 4.2;
+  io.println("sum: " + add(6, 9));
+}
+`);
+    assert.equal(program.body.length, 4);
+  });
+
+  test("match and loops sample", () => {
+    const program = parseOk(`
+import io from "std:io";
+
+fn main() {
+  match 50 {
+    1 => io.println("one"),
+    50 => io.println("fifty"),
+    _ => io.println("other"),
+  }
+
+  for i in range(0, 5) {
+    io.println(i);
+  }
+
+  for val in [6, 9, 4, 2, 0] {
+    io.println(val);
+  }
+}
+`);
+    assert.equal(program.body.length, 2);
+  });
+
+  test("result-based errors sample", () => {
+    const program = parseOk(`
+import io from "std:io";
+
+enum Result<T, E> {
+  Ok(T),
+  Err(E),
+}
+
+fn might_fail(flag: bool): Result<int, string> {
+  if flag {
+    return Ok(42);
+  } else {
+    return Err("bad flag");
+  }
+}
+
+fn main() {
+  match might_fail(false) {
+    Ok => io.println("value"),
+    Err => io.eprintln("error"),
+  }
+}
+`);
+    assert.equal(program.body.length, 4);
+  });
+
+  test("oop sample program", () => {
+    const program = parseOk(`
+class Stuff {
+  value: int;
+
+  pub fn constructor(v: int) {
+    return;
+  }
+
+  pub fn get_value(): int {
+    return this.value;
+  }
+}
+`);
+    assert.equal(program.body.length, 1);
+  });
 });

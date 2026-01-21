@@ -1,5 +1,11 @@
 import { keywords } from "@/types/shared";
-import { assert, expectDiagnostics, lex, tokenKinds, withoutEof } from "./helpers";
+import {
+  assert,
+  expectDiagnostics,
+  lex,
+  tokenKinds,
+  withoutEof,
+} from "./helpers";
 import { describe, test } from "./tester";
 
 const tokensOf = (source: string) => withoutEof(lex(source).tokens);
@@ -120,5 +126,31 @@ describe("lexer", () => {
   test("errors: unexpected char", () => {
     const result = lex("@");
     expectDiagnostics(result.diagnostics, ["LEX001"]);
+  });
+
+  test("full program tokenization", () => {
+    const source = `
+import io from "std:io";
+
+const constant_value = 50;
+
+fn add(x: int, y: int) {
+  return x + y;
+}
+
+fn main() {
+  let float_addition = 6.9 + 4.2;
+  io.println("sum: " + add(6, 9));
+}
+`;
+    const result = lex(source);
+    assert.equal(result.diagnostics.length, 0);
+    const kinds = tokenKinds(withoutEof(result.tokens));
+    assert.ok(kinds.includes("Keyword"));
+    assert.ok(kinds.includes("Identifier"));
+    assert.ok(kinds.includes("Operator"));
+    assert.ok(kinds.includes("Punctuator"));
+    assert.ok(kinds.includes("String"));
+    assert.ok(kinds.includes("Number"));
   });
 });
