@@ -55,7 +55,6 @@ import type {
   WildcardPattern,
 } from "@/types/ast";
 import type { Diagnostic } from "@/types/diagnostic";
-import { errorDiagnostic } from "@/types/diagnostic";
 import type { Span } from "@/types/position";
 import type { LiteralType, Operator } from "@/types/shared";
 import type { Token } from "@/types/token";
@@ -1446,7 +1445,7 @@ export class Parser {
   }
 
   private report(message: string, span: Span, code?: string) {
-    this.diagnostics.push(errorDiagnostic(message, span, code));
+    this.diagnostics.push({ severity: "error", message, span, code });
   }
 
   private spanFrom(start?: Span, end?: Span): Span {

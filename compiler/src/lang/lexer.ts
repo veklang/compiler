@@ -1,5 +1,4 @@
 import type { Diagnostic } from "@/types/diagnostic";
-import { errorDiagnostic } from "@/types/diagnostic";
 import type { Position, Span } from "@/types/position";
 import type { Operator, Punctuator } from "@/types/shared";
 import type { Token } from "@/types/token";
@@ -130,13 +129,12 @@ export class Lexer {
       const start = this.position();
       const bad = this.advance();
       const end = this.position();
-      this.diagnostics.push(
-        errorDiagnostic(
-          `Unexpected character '${bad}'.`,
-          { start, end },
-          "LEX001",
-        ),
-      );
+      this.diagnostics.push({
+        severity: "error",
+        message: `Unexpected character '${bad}'.`,
+        span: { start, end },
+        code: "LEX001",
+      });
     }
 
     const eofPos = this.position();
@@ -157,9 +155,12 @@ export class Lexer {
       const end = this.position();
       const lexeme = this.source.slice(start.index, end.index);
       if (digitsStart.index === end.index) {
-        this.diagnostics.push(
-          errorDiagnostic("Invalid hex literal.", { start, end }, "LEX010"),
-        );
+        this.diagnostics.push({
+          severity: "error",
+          message: "Invalid hex literal.",
+          span: { start, end },
+          code: "LEX010",
+        });
       }
       this.tokens.push(
         this.makeToken("Number", lexeme, { start, end }, { value: lexeme }),
@@ -181,9 +182,12 @@ export class Lexer {
       const end = this.position();
       const lexeme = this.source.slice(start.index, end.index);
       if (digitsStart.index === end.index) {
-        this.diagnostics.push(
-          errorDiagnostic("Invalid binary literal.", { start, end }, "LEX011"),
-        );
+        this.diagnostics.push({
+          severity: "error",
+          message: "Invalid binary literal.",
+          span: { start, end },
+          code: "LEX011",
+        });
       }
       this.tokens.push(
         this.makeToken("Number", lexeme, { start, end }, { value: lexeme }),
@@ -207,13 +211,12 @@ export class Lexer {
       while (this.isDigit(this.peek()) || this.peek() === "_") this.advance();
       if (exponentStart.index === this.position().index) {
         const end = this.position();
-        this.diagnostics.push(
-          errorDiagnostic(
-            "Invalid exponent in numeric literal.",
-            { start, end },
-            "LEX013",
-          ),
-        );
+        this.diagnostics.push({
+          severity: "error",
+          message: "Invalid exponent in numeric literal.",
+          span: { start, end },
+          code: "LEX013",
+        });
       }
     }
 
@@ -224,9 +227,12 @@ export class Lexer {
     );
 
     if (!isFloat && lexeme.includes(".")) {
-      this.diagnostics.push(
-        errorDiagnostic("Invalid numeric literal.", { start, end }, "LEX012"),
-      );
+      this.diagnostics.push({
+        severity: "error",
+        message: "Invalid numeric literal.",
+        span: { start, end },
+        code: "LEX012",
+      });
     }
   }
 
@@ -265,9 +271,12 @@ export class Lexer {
     }
 
     const end = this.position();
-    this.diagnostics.push(
-      errorDiagnostic("Unterminated string literal.", { start, end }, "LEX002"),
-    );
+    this.diagnostics.push({
+      severity: "error",
+      message: "Unterminated string literal.",
+      span: { start, end },
+      code: "LEX002",
+    });
   }
 
   private scanIdentifier() {
@@ -311,13 +320,12 @@ export class Lexer {
     }
 
     const pos = this.position();
-    this.diagnostics.push(
-      errorDiagnostic(
-        "Unterminated block comment.",
-        { start: pos, end: pos },
-        "LEX003",
-      ),
-    );
+    this.diagnostics.push({
+      severity: "error",
+      message: "Unterminated block comment.",
+      span: { start: pos, end: pos },
+      code: "LEX003",
+    });
   }
 
   private makeToken(

@@ -8,14 +8,3 @@ export interface Diagnostic {
   span: Span;
   code?: string;
 }
-
-export const errorDiagnostic = (
-  message: string,
-  span: Span,
-  code?: string,
-): Diagnostic => ({
-  severity: "error",
-  message,
-  span,
-  code,
-});
