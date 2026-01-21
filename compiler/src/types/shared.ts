@@ -1,6 +1,5 @@
 /**
  * Shared type definitions used across the lexer and parser.
- * This eliminates duplication between token.ts and ast.ts.
  */
 
 export const keywords = [
@@ -33,6 +32,8 @@ export const keywords = [
   "char",
   "string",
   "bool",
+  "true",
+  "false",
   "void",
   "null",
   "enum",
@@ -56,56 +57,40 @@ export const keywords = [
 ] as const;
 
 export type Operator =
-  | "Minus"
-  | "Plus"
-  | "Slash"
-  | "Asterisk"
-  | "Modulo"
-  | "Exponentiation"
-  | "Bang"
-  | "BangEqual"
-  | "Equal"
-  | "EqualEqual"
-  | "Greater"
-  | "GreaterEqual"
-  | "Less"
-  | "LessEqual"
-  | "And"
-  | "AndAnd"
-  | "Or"
-  | "OrOr"
-  | "Xor"
-  | "LeftShift"
-  | "RightShift"
-  | "PlusEqual"
-  | "MinusEqual"
-  | "AsteriskEqual"
-  | "SlashEqual"
-  | "ModuloEqual"
-  | "AndEqual"
-  | "OrEqual"
-  | "XorEqual"
-  | "LeftShiftEqual"
-  | "RightShiftEqual"
-  | "PlusPlus"
-  | "MinusMinus";
+  | "+"
+  | "-"
+  | "*"
+  | "/"
+  | "%"
+  | "**"
+  | "!"
+  | "!="
+  | "="
+  | "=="
+  | ">"
+  | ">="
+  | "<"
+  | "<="
+  | "&&"
+  | "||"
+  | "^"
+  | "&"
+  | "|"
+  | "<<"
+  | ">>"
+  | "+="
+  | "-="
+  | "*="
+  | "/="
+  | "%="
+  | "&="
+  | "|="
+  | "^="
+  | "<<="
+  | ">>="
+  | "++"
+  | "--";
 
-export type PunctuationType =
-  | "LeftParen"
-  | "RightParen"
-  | "LeftBrace"
-  | "RightBrace"
-  | "Comma"
-  | "Dot"
-  | "Colon"
-  | "Semicolon"
-  | "QuestionMark";
+export type Punctuator = "(" | ")" | "{" | "}" | "," | "." | ":" | ";" | "?";
 
-export type LiteralType =
-  | "Identifier"
-  | "String"
-  | "Integer"
-  | "Float"
-  | "True"
-  | "False"
-  | "Null";
+export type LiteralType = "String" | "Number" | "Boolean" | "Null";

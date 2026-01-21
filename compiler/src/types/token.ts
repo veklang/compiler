@@ -1,30 +1,23 @@
-import type {
-  Operator as BaseOperator,
-  LiteralType,
-  PunctuationType,
-} from "@/types/shared";
+import type { Span } from "@/types/position";
+import type { Operator, Punctuator } from "@/types/shared";
 
 export { keywords } from "@/types/shared";
 
-export type Punctuation = `Punctuation:${PunctuationType}`;
-
-export type Operator = `Operator:${BaseOperator}`;
-
-export type Literal = `Literal:${LiteralType}`;
-
-export type Special = "Special:EOL" | "Special:EOF";
-
-export type TokenType =
-  | Punctuation
-  | Operator
-  | Literal
-  | Special
+export type TokenKind =
+  | "Identifier"
   | "Keyword"
-  | "Identifier";
+  | "Number"
+  | "String"
+  | "Operator"
+  | "Punctuator"
+  | "EOL"
+  | "EOF";
 
 export interface Token {
-  type: TokenType;
+  kind: TokenKind;
   lexeme: string;
-  line: number;
-  column: number;
+  span: Span;
+  value?: number | string;
+  operator?: Operator;
+  punctuator?: Punctuator;
 }

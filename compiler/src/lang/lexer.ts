@@ -1,355 +1,333 @@
-import { keywords, type Token, type TokenType } from "@/types/token";
+import { type Diagnostic, errorDiagnostic } from "@/types/diagnostic";
+import type { Position, Span } from "@/types/position";
+import type { Operator, Punctuator } from "@/types/shared";
+import type { Token } from "@/types/token";
+import { keywords } from "@/types/token";
+
+const operatorCandidates: Operator[] = [
+  "<<=",
+  ">>=",
+  "**",
+  "==",
+  "!=",
+  "<=",
+  ">=",
+  "&&",
+  "||",
+  "<<",
+  ">>",
+  "++",
+  "--",
+  "+=",
+  "-=",
+  "*=",
+  "/=",
+  "%=",
+  "&=",
+  "|=",
+  "^=",
+  "+",
+  "-",
+  "*",
+  "/",
+  "%",
+  "!",
+  "=",
+  ">",
+  "<",
+  "&",
+  "|",
+  "^",
+];
+
+const punctuators: Punctuator[] = ["(", ")", "{", "}", ",", ".", ":", ";", "?"];
+
+export interface LexResult {
+  tokens: Token[];
+  diagnostics: Diagnostic[];
+}
 
 export class Lexer {
   private source: string;
   private tokens: Token[] = [];
-  private start = 0;
-  private current = 0;
-  private column = 0;
+  private diagnostics: Diagnostic[] = [];
+  private index = 0;
   private line = 1;
+  private column = 1;
 
   constructor(source: string) {
-    this.source = source.trim();
+    this.source = source;
   }
 
-  public lex() {
+  public lex(): LexResult {
     while (!this.isAtEnd()) {
-      this.start = this.current;
-      this.scanToken();
-    }
+      const ch = this.peek();
 
-    this.addToken("Special:EOF", "");
-    return this.tokens;
-  }
-
-  private scanToken() {
-    const c = this.nextChar();
-
-    switch (c) {
-      case " ":
-      case "\r":
-      case "\t":
-      case "\n": {
-        break;
+      if (ch === " " || ch === "\r" || ch === "\t") {
+        this.advance();
+        continue;
       }
-
-      case "(": {
-        this.addToken("Punctuation:LeftParen", "(");
-        break;
-      }
-
-      case ")": {
-        this.addToken("Punctuation:RightParen", ")");
-        break;
-      }
-
-      case "{": {
-        this.addToken("Punctuation:LeftBrace", "{");
-        break;
-      }
-
-      case "}": {
-        this.addToken("Punctuation:RightBrace", "}");
-        break;
-      }
-      case ",": {
-        this.addToken("Punctuation:Comma", ",");
-        break;
-      }
-
-      case ".": {
-        this.addToken("Punctuation:Dot", ".");
-        break;
-      }
-
-      case ":": {
-        this.addToken("Punctuation:Colon", ":");
-        break;
-      }
-
-      case ";": {
-        this.addToken("Punctuation:Semicolon", ";");
-        break;
-      }
-
-      case "-": {
-        this.scanOperator("-", "Operator:Minus", [
-          { match: "-", token: "Operator:MinusMinus" },
-          { match: "=", token: "Operator:MinusEqual" },
-        ]);
-        break;
-      }
-
-      case "+": {
-        this.scanOperator("+", "Operator:Plus", [
-          { match: "+", token: "Operator:PlusPlus" },
-          { match: "=", token: "Operator:PlusEqual" },
-        ]);
-        break;
-      }
-
-      case "/": {
-        if (this.match("/")) {
-          // Single-line comment
-          while (!this.isAtEnd() && this.peekChar() !== "\n") this.nextChar();
-        } else if (this.match("*")) {
-          // Multi-line comment
-          this.scanMultiLineComment();
-        } else if (this.match("=")) {
-          this.addToken("Operator:SlashEqual", "/=");
-        } else {
-          this.addToken("Operator:Slash", "/");
-        }
-        break;
-      }
-
-      case "%": {
-        this.scanOperator("%", "Operator:Modulo", [
-          { match: "=", token: "Operator:ModuloEqual" },
-        ]);
-        break;
-      }
-
-      case "*": {
-        this.scanOperator("*", "Operator:Asterisk", [
-          { match: "*", token: "Operator:Exponentiation" },
-          { match: "=", token: "Operator:AsteriskEqual" },
-        ]);
-        break;
-      }
-
-      case "!": {
-        this.scanOperator("!", "Operator:Bang", [
-          { match: "=", token: "Operator:BangEqual" },
-        ]);
-        break;
-      }
-
-      case "=": {
-        this.scanOperator("=", "Operator:Equal", [
-          { match: "=", token: "Operator:EqualEqual" },
-        ]);
-        break;
-      }
-
-      case "<": {
-        this.scanShiftOperator(
-          "<",
-          "Operator:Less",
-          "Operator:LeftShift",
-          "Operator:LessEqual",
-          "Operator:LeftShiftEqual",
-        );
-        break;
-      }
-
-      case ">": {
-        this.scanShiftOperator(
-          ">",
-          "Operator:Greater",
-          "Operator:RightShift",
-          "Operator:GreaterEqual",
-          "Operator:RightShiftEqual",
-        );
-        break;
-      }
-
-      case '"': {
-        this.scanString();
-        break;
-      }
-
-      case "&": {
-        this.scanOperator("&", "Operator:And", [
-          { match: "&", token: "Operator:AndAnd" },
-          { match: "=", token: "Operator:AndEqual" },
-        ]);
-        break;
-      }
-
-      case "|": {
-        this.scanOperator("|", "Operator:Or", [
-          { match: "|", token: "Operator:OrOr" },
-          { match: "=", token: "Operator:OrEqual" },
-        ]);
-        break;
-      }
-
-      case "^": {
-        this.scanOperator("^", "Operator:Xor", [
-          { match: "=", token: "Operator:XorEqual" },
-        ]);
-        break;
-      }
-
-      default: {
-        if (this.isDigit(c)) this.scanNumber();
-        else if (this.isAlpha(c)) this.scanIdentifier();
-        else
-          throw new SyntaxError(
-            `Unexpected character '${c}' at line ${this.line} column ${this.column}`,
-          );
-      }
-    }
-  }
-
-  private addToken(type: TokenType, lexeme: string) {
-    this.tokens.push({ type, lexeme, line: this.line, column: this.column });
-  }
-
-  private isAtEnd() {
-    return this.current >= this.source.length;
-  }
-
-  private nextChar(offset = 0) {
-    if (this.current + offset >= this.source.length) {
-      this.current = this.source.length;
-      return "\0";
-    }
-
-    const inner = () => {
-      const ch = this.source[this.current++];
 
       if (ch === "\n") {
-        this.line++;
-        this.column = 0;
-        this.addToken("Special:EOL", "\n");
-      } else this.column++;
+        const start = this.position();
+        this.advance();
+        const end = this.position();
+        this.tokens.push(this.makeToken("EOL", "\n", { start, end }));
+        continue;
+      }
 
-      return ch;
-    };
+      if (this.isDigit(ch)) {
+        this.scanNumber();
+        continue;
+      }
 
-    if (offset > 0) {
-      let ch = "";
-      for (let i = 0; i < offset; i++) ch = inner();
-      return ch;
+      if (this.isAlpha(ch)) {
+        this.scanIdentifier();
+        continue;
+      }
+
+      if (ch === '"') {
+        this.scanString();
+        continue;
+      }
+
+      if (ch === "/") {
+        if (this.peek(1) === "/") {
+          this.advance();
+          this.advance();
+          while (!this.isAtEnd() && this.peek() !== "\n") this.advance();
+          continue;
+        }
+
+        if (this.peek(1) === "*") {
+          this.advance();
+          this.advance();
+          this.scanBlockComment();
+          continue;
+        }
+      }
+
+      const operator = this.matchOperator();
+      if (operator) {
+        const start = this.position();
+        for (let i = 0; i < operator.length; i++) this.advance();
+        const end = this.position();
+        this.tokens.push(
+          this.makeToken(
+            "Operator",
+            operator,
+            { start, end },
+            {
+              operator,
+            },
+          ),
+        );
+        continue;
+      }
+
+      if (punctuators.includes(ch as Punctuator)) {
+        const start = this.position();
+        this.advance();
+        const end = this.position();
+        this.tokens.push(
+          this.makeToken(
+            "Punctuator",
+            ch,
+            { start, end },
+            {
+              punctuator: ch as Punctuator,
+            },
+          ),
+        );
+        continue;
+      }
+
+      const start = this.position();
+      const bad = this.advance();
+      const end = this.position();
+      this.diagnostics.push(
+        errorDiagnostic(
+          `Unexpected character '${bad}'.`,
+          { start, end },
+          "LEX001",
+        ),
+      );
     }
 
-    return inner();
-  }
-
-  private match(expected: string) {
-    if (this.isAtEnd()) return false;
-    if (this.peekChar() !== expected) return false;
-    this.nextChar();
-    return true;
-  }
-
-  private peekChar(offset = 0) {
-    if (this.current + offset >= this.source.length) return "\0";
-    return this.source[this.current + offset];
+    const eofPos = this.position();
+    this.tokens.push(this.makeToken("EOF", "", { start: eofPos, end: eofPos }));
+    return { tokens: this.tokens, diagnostics: this.diagnostics };
   }
 
   private scanNumber() {
-    while (this.isDigit(this.peekChar())) this.nextChar();
-    if (this.peekChar() === "." && this.isDigit(this.peekChar(1))) {
-      this.nextChar();
-      while (this.isDigit(this.peekChar())) this.nextChar();
+    const start = this.position();
+    let hasDot = false;
+
+    while (!this.isAtEnd()) {
+      const ch = this.peek();
+      if (this.isDigit(ch)) {
+        this.advance();
+        continue;
+      }
+
+      if (ch === "." && !hasDot && this.isDigit(this.peek(1))) {
+        hasDot = true;
+        this.advance();
+        continue;
+      }
+      break;
     }
 
-    const lexeme = this.source.substring(this.start, this.current);
-    if (lexeme.includes(".")) this.addToken("Literal:Float", lexeme);
-    else this.addToken("Literal:Integer", lexeme);
+    const end = this.position();
+    const lexeme = this.source.slice(start.index, end.index);
+    this.tokens.push(
+      this.makeToken(
+        "Number",
+        lexeme,
+        { start, end },
+        {
+          value: Number(lexeme),
+        },
+      ),
+    );
   }
 
   private scanString() {
-    while (!this.isAtEnd() && this.peekChar() !== '"') this.nextChar();
+    const start = this.position();
+    this.advance();
+    let value = "";
 
-    if (this.isAtEnd())
-      throw new SyntaxError(
-        `Unterminated string at line ${this.line} column ${this.column}`,
-      );
+    while (!this.isAtEnd()) {
+      const ch = this.peek();
+      if (ch === '"') {
+        this.advance();
+        const end = this.position();
+        const lexeme = this.source.slice(start.index, end.index);
+        this.tokens.push(
+          this.makeToken("String", lexeme, { start, end }, { value }),
+        );
+        return;
+      }
 
-    this.nextChar();
-    this.addToken(
-      "Literal:String",
-      this.source.substring(this.start + 1, this.current - 1),
+      if (ch === "\n") {
+        const end = this.position();
+        this.diagnostics.push(
+          errorDiagnostic(
+            "Unterminated string literal.",
+            { start, end },
+            "LEX002",
+          ),
+        );
+        return;
+      }
+
+      if (ch === "\\") {
+        this.advance();
+        const next = this.peek();
+        if (next === "n") value += "\n";
+        else if (next === "t") value += "\t";
+        else if (next === '"') value += '"';
+        else if (next === "\\") value += "\\";
+        else value += next;
+        this.advance();
+        continue;
+      }
+
+      value += ch;
+      this.advance();
+    }
+
+    const end = this.position();
+    this.diagnostics.push(
+      errorDiagnostic("Unterminated string literal.", { start, end }, "LEX002"),
     );
   }
 
   private scanIdentifier() {
-    while (this.isAlphaNumeric(this.peekChar())) this.nextChar();
-    const text = this.source.substring(this.start, this.current);
-    if (keywords.includes(text as never)) this.addToken("Keyword", text);
-    else this.addToken("Identifier", text);
+    const start = this.position();
+    while (!this.isAtEnd() && this.isAlphaNumeric(this.peek())) this.advance();
+    const end = this.position();
+    const lexeme = this.source.slice(start.index, end.index);
+
+    if (keywords.includes(lexeme as never)) {
+      this.tokens.push(this.makeToken("Keyword", lexeme, { start, end }));
+    } else {
+      this.tokens.push(this.makeToken("Identifier", lexeme, { start, end }));
+    }
   }
 
-  private isDigit(c: string): boolean {
-    return c >= "0" && c <= "9";
-  }
-
-  private isAlpha(c: string): boolean {
-    return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "_";
-  }
-
-  private isAlphaNumeric(c: string): boolean {
-    return this.isAlpha(c) || this.isDigit(c);
-  }
-
-  /**
-   * Scans an operator with optional single or double character variations.
-   * @param char The primary character
-   * @param singleToken Token type if only the single character is matched
-   * @param patterns Array of { match, token } for multi-character operators
-   */
-  private scanOperator(
-    char: string,
-    singleToken: TokenType,
-    patterns: { match: string; token: TokenType }[],
-  ) {
-    for (const pattern of patterns) {
-      if (this.match(pattern.match)) {
-        this.addToken(pattern.token, char + pattern.match);
+  private scanBlockComment() {
+    while (!this.isAtEnd()) {
+      if (this.peek() === "*" && this.peek(1) === "/") {
+        this.advance();
+        this.advance();
         return;
       }
+      this.advance();
     }
-    this.addToken(singleToken, char);
+
+    const pos = this.position();
+    this.diagnostics.push(
+      errorDiagnostic(
+        "Unterminated block comment.",
+        { start: pos, end: pos },
+        "LEX003",
+      ),
+    );
   }
 
-  /**
-   * Scans shift operators and comparison operators that use the same character twice.
-   * @param char The operator character ('<' or '>')
-   * @param singleToken Token for single character (e.g., '<')
-   * @param doubleToken Token for double character (e.g., '<<')
-   * @param equalToken Token for single + '=' (e.g., '<=')
-   * @param doubleEqualToken Token for double + '=' (e.g., '<<=')
-   */
-  private scanShiftOperator(
-    char: string,
-    singleToken: TokenType,
-    doubleToken: TokenType,
-    equalToken: TokenType,
-    doubleEqualToken: TokenType,
-  ) {
-    if (this.match(char)) {
-      if (this.match("=")) {
-        this.addToken(doubleEqualToken, `${char}${char}=`);
-      } else {
-        this.addToken(doubleToken, char + char);
-      }
-    } else if (this.match("=")) {
-      this.addToken(equalToken, `${char}=`);
+  private makeToken(
+    kind: Token["kind"],
+    lexeme: string,
+    span: Span,
+    extras?: Partial<Token>,
+  ): Token {
+    return { kind, lexeme, span, ...extras };
+  }
+
+  private matchOperator(): Operator | null {
+    for (const candidate of operatorCandidates) {
+      if (this.source.startsWith(candidate, this.index)) return candidate;
+    }
+    return null;
+  }
+
+  private advance() {
+    if (this.isAtEnd()) return "\0";
+    const ch = this.source[this.index];
+    this.index++;
+    if (ch === "\n") {
+      this.line++;
+      this.column = 1;
     } else {
-      this.addToken(singleToken, char);
+      this.column++;
     }
+    return ch;
   }
 
-  // Scans a multi-line comment /* ... */
-  private scanMultiLineComment() {
-    while (
-      !this.isAtEnd() &&
-      !(this.peekChar() === "*" && this.peekChar(1) === "/")
-    ) {
-      this.nextChar();
-    }
+  private peek(offset = 0) {
+    return this.index + offset >= this.source.length
+      ? "\0"
+      : this.source[this.index + offset];
+  }
 
-    if (this.isAtEnd()) {
-      throw new SyntaxError(
-        `Unterminated multi-line comment at line ${this.line} column ${this.column}`,
-      );
-    }
+  private position(): Position {
+    return { index: this.index, line: this.line, column: this.column };
+  }
 
-    this.nextChar();
-    this.nextChar();
+  private isAtEnd() {
+    return this.index >= this.source.length;
+  }
+
+  private isDigit(ch: string) {
+    return ch >= "0" && ch <= "9";
+  }
+
+  private isAlpha(ch: string) {
+    return (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch === "_";
+  }
+
+  private isAlphaNumeric(ch: string) {
+    return this.isAlpha(ch) || this.isDigit(ch);
   }
 }

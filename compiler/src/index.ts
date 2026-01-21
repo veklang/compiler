@@ -3,8 +3,10 @@ import { Lexer } from "@/lang/lexer";
 import { Parser } from "@/lang/parser";
 
 const source = "6.9 + 420";
-const tokens = new Lexer(source).lex();
-const ast = new Parser(tokens).parse();
+const { tokens, diagnostics: lexDiagnostics } = new Lexer(source).lex();
+const { program, diagnostics: parseDiagnostics } = new Parser(
+  tokens,
+).parseProgram();
 
 console.log(
   inspect(tokens, {
@@ -14,8 +16,14 @@ console.log(
 );
 
 console.log(
-  inspect(ast, {
+  inspect(program, {
     depth: 50,
     colors: true,
   }),
 );
+
+if (lexDiagnostics.length || parseDiagnostics.length) {
+  console.log(
+    inspect({ lexDiagnostics, parseDiagnostics }, { depth: 50, colors: true }),
+  );
+}
