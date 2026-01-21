@@ -1,63 +1,367 @@
 import type { Span } from "@/types/position";
 import type { LiteralType, Operator } from "@/types/shared";
 
-export interface BaseNode {
-  type: string;
+export interface Node {
+  kind: string;
   span: Span;
 }
 
-export interface Program extends BaseNode {
-  type: "Program";
+export interface Program extends Node {
+  kind: "Program";
   body: Statement[];
 }
 
-export type Statement = ExpressionStatement;
+export type Statement =
+  | ImportDeclaration
+  | ExportDefaultDeclaration
+  | FunctionDeclaration
+  | VariableDeclaration
+  | TypeAliasDeclaration
+  | StructDeclaration
+  | EnumDeclaration
+  | ClassDeclaration
+  | ReturnStatement
+  | IfStatement
+  | WhileStatement
+  | ForStatement
+  | MatchStatement
+  | BreakStatement
+  | ContinueStatement
+  | BlockStatement
+  | ExpressionStatement;
 
-export interface ExpressionStatement extends BaseNode {
-  type: "ExpressionStatement";
+export interface Identifier extends Node {
+  kind: "Identifier";
+  name: string;
+}
+
+export interface StringLiteralExpression extends LiteralExpression {
+  literalType: "String";
+  value: string;
+}
+
+export interface BlockStatement extends Node {
+  kind: "BlockStatement";
+  body: Statement[];
+}
+
+export interface ImportDeclaration extends Node {
+  kind: "ImportDeclaration";
+  defaultImport?: Identifier;
+  namedImports?: Identifier[];
+  source: StringLiteralExpression;
+}
+
+export interface ExportDefaultDeclaration extends Node {
+  kind: "ExportDefaultDeclaration";
+  expression: Expression;
+}
+
+export interface FunctionDeclaration extends Node {
+  kind: "FunctionDeclaration";
+  name: Identifier;
+  typeParams?: TypeParameter[];
+  params: Parameter[];
+  returnType?: TypeNode;
+  body: BlockStatement;
+  isInline: boolean;
+  isPublic: boolean;
+}
+
+export interface Parameter extends Node {
+  kind: "Parameter";
+  name: Identifier;
+  type: TypeNode;
+  isMutable: boolean;
+}
+
+export interface VariableDeclaration extends Node {
+  kind: "VariableDeclaration";
+  declarationKind: "let" | "const";
+  name: Identifier;
+  typeAnnotation?: TypeNode;
+  initializer?: Expression;
+  isPublic: boolean;
+}
+
+export interface TypeAliasDeclaration extends Node {
+  kind: "TypeAliasDeclaration";
+  name: Identifier;
+  type: TypeNode;
+  isPublic: boolean;
+}
+
+export interface StructDeclaration extends Node {
+  kind: "StructDeclaration";
+  name: Identifier;
+  typeParams?: TypeParameter[];
+  fields: StructField[];
+  isPublic: boolean;
+}
+
+export interface StructField extends Node {
+  kind: "StructField";
+  name: Identifier;
+  type: TypeNode;
+}
+
+export interface EnumDeclaration extends Node {
+  kind: "EnumDeclaration";
+  name: Identifier;
+  typeParams?: TypeParameter[];
+  variants: EnumVariant[];
+  isPublic: boolean;
+}
+
+export interface EnumVariant extends Node {
+  kind: "EnumVariant";
+  name: Identifier;
+  payload?: TypeNode[];
+}
+
+export interface ClassDeclaration extends Node {
+  kind: "ClassDeclaration";
+  name: Identifier;
+  typeParams?: TypeParameter[];
+  isAbstract: boolean;
+  isPublic: boolean;
+  extendsType?: TypeNode;
+  implementsTypes?: TypeNode[];
+  members: ClassMember[];
+}
+
+export type ClassMember = ClassField | ClassMethod;
+
+export interface ClassField extends Node {
+  kind: "ClassField";
+  name: Identifier;
+  type: TypeNode;
+  isPublic: boolean;
+  isStatic: boolean;
+}
+
+export interface ClassMethod extends Node {
+  kind: "ClassMethod";
+  name: Identifier;
+  params: Parameter[];
+  returnType?: TypeNode;
+  body: BlockStatement | null;
+  isPublic: boolean;
+  isStatic: boolean;
+  isGetter: boolean;
+  isSetter: boolean;
+  isAbstract: boolean;
+}
+
+export interface ReturnStatement extends Node {
+  kind: "ReturnStatement";
+  value?: Expression;
+}
+
+export interface IfStatement extends Node {
+  kind: "IfStatement";
+  condition: Expression;
+  thenBranch: BlockStatement;
+  elseBranch?: BlockStatement | IfStatement;
+}
+
+export interface WhileStatement extends Node {
+  kind: "WhileStatement";
+  condition: Expression;
+  body: BlockStatement;
+}
+
+export interface ForStatement extends Node {
+  kind: "ForStatement";
+  iterator: Identifier;
+  iterable: Expression;
+  body: BlockStatement;
+}
+
+export interface MatchStatement extends Node {
+  kind: "MatchStatement";
+  expression: Expression;
+  arms: MatchArm[];
+}
+
+export interface MatchArm extends Node {
+  kind: "MatchArm";
+  pattern: Pattern;
+  body: BlockStatement | Expression;
+}
+
+export type Pattern = IdentifierPattern | LiteralPattern | WildcardPattern;
+
+export interface IdentifierPattern extends Node {
+  kind: "IdentifierPattern";
+  name: Identifier;
+}
+
+export interface LiteralPattern extends Node {
+  kind: "LiteralPattern";
+  literal: LiteralExpression;
+}
+
+export interface WildcardPattern extends Node {
+  kind: "WildcardPattern";
+}
+
+export interface BreakStatement extends Node {
+  kind: "BreakStatement";
+}
+
+export interface ContinueStatement extends Node {
+  kind: "ContinueStatement";
+}
+
+export interface ExpressionStatement extends Node {
+  kind: "ExpressionStatement";
   expression: Expression;
 }
 
 export type Expression =
-  | BinaryExpression
-  | UnaryExpression
   | LiteralExpression
   | IdentifierExpression
+  | BinaryExpression
+  | UnaryExpression
+  | AssignmentExpression
+  | CallExpression
+  | MemberExpression
+  | ArrayLiteralExpression
+  | TupleLiteralExpression
+  | MapLiteralExpression
+  | StructLiteralExpression
   | GroupingExpression
-  | AssignmentExpression;
+  | ArrowFunctionExpression
+  | FunctionExpression
+  | CastExpression;
 
-export interface BinaryExpression extends BaseNode {
-  type: "BinaryExpression";
+export interface LiteralExpression extends Node {
+  kind: "LiteralExpression";
+  literalType: LiteralType;
+  raw: string;
+  value: string | number | boolean | null;
+}
+
+export interface IdentifierExpression extends Node {
+  kind: "IdentifierExpression";
+  name: string;
+}
+
+export interface BinaryExpression extends Node {
+  kind: "BinaryExpression";
   operator: Operator;
   left: Expression;
   right: Expression;
 }
 
-export interface AssignmentExpression extends BaseNode {
-  type: "AssignmentExpression";
-  operator: Operator;
-  left: IdentifierExpression;
+export interface AssignmentExpression extends Node {
+  kind: "AssignmentExpression";
+  left: Expression;
   right: Expression;
 }
 
-export interface UnaryExpression extends BaseNode {
-  type: "UnaryExpression";
+export interface UnaryExpression extends Node {
+  kind: "UnaryExpression";
   operator: Operator;
   argument: Expression;
 }
 
-export interface GroupingExpression extends BaseNode {
-  type: "GroupingExpression";
+export interface CallExpression extends Node {
+  kind: "CallExpression";
+  callee: Expression;
+  args: Expression[];
+}
+
+export interface MemberExpression extends Node {
+  kind: "MemberExpression";
+  object: Expression;
+  property: Identifier;
+}
+
+export interface ArrayLiteralExpression extends Node {
+  kind: "ArrayLiteralExpression";
+  elements: Expression[];
+}
+
+export interface TupleLiteralExpression extends Node {
+  kind: "TupleLiteralExpression";
+  elements: Expression[];
+}
+
+export interface MapLiteralExpression extends Node {
+  kind: "MapLiteralExpression";
+  entries: MapEntry[];
+}
+
+export interface MapEntry extends Node {
+  kind: "MapEntry";
+  key: Expression;
+  value: Expression;
+}
+
+export interface StructLiteralExpression extends Node {
+  kind: "StructLiteralExpression";
+  name: IdentifierExpression;
+  fields: StructLiteralField[];
+}
+
+export interface StructLiteralField extends Node {
+  kind: "StructLiteralField";
+  name: Identifier;
+  value: Expression;
+}
+
+export interface GroupingExpression extends Node {
+  kind: "GroupingExpression";
   expression: Expression;
 }
 
-export interface IdentifierExpression extends BaseNode {
-  type: "IdentifierExpression";
-  name: string;
+export interface ArrowFunctionExpression extends Node {
+  kind: "ArrowFunctionExpression";
+  params: Parameter[];
+  returnType?: TypeNode;
+  body: BlockStatement | Expression;
 }
 
-export interface LiteralExpression extends BaseNode {
-  type: "LiteralExpression";
-  literalType: LiteralType;
-  value: string | number | boolean | null;
+export interface FunctionExpression extends Node {
+  kind: "FunctionExpression";
+  params: Parameter[];
+  returnType?: TypeNode;
+  body: BlockStatement;
+}
+
+export interface CastExpression extends Node {
+  kind: "CastExpression";
+  expression: Expression;
+  type: TypeNode;
+}
+
+export type TypeNode = NamedType | UnionType | TupleType | FunctionType;
+
+export interface TypeParameter extends Node {
+  kind: "TypeParameter";
+  name: Identifier;
+}
+
+export interface NamedType extends Node {
+  kind: "NamedType";
+  name: Identifier;
+  typeArgs?: TypeNode[];
+}
+
+export interface UnionType extends Node {
+  kind: "UnionType";
+  types: TypeNode[];
+}
+
+export interface TupleType extends Node {
+  kind: "TupleType";
+  elements: TypeNode[];
+}
+
+export interface FunctionType extends Node {
+  kind: "FunctionType";
+  params: TypeNode[];
+  returnType: TypeNode;
 }

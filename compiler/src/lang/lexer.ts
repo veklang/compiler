@@ -1,46 +1,43 @@
-import { type Diagnostic, errorDiagnostic } from "@/types/diagnostic";
+import type { Diagnostic } from "@/types/diagnostic";
+import { errorDiagnostic } from "@/types/diagnostic";
 import type { Position, Span } from "@/types/position";
 import type { Operator, Punctuator } from "@/types/shared";
 import type { Token } from "@/types/token";
 import { keywords } from "@/types/token";
 
 const operatorCandidates: Operator[] = [
-  "<<=",
-  ">>=",
-  "**",
+  "=>",
+  "->",
   "==",
   "!=",
   "<=",
   ">=",
   "&&",
   "||",
-  "<<",
-  ">>",
-  "++",
-  "--",
-  "+=",
-  "-=",
-  "*=",
-  "/=",
-  "%=",
-  "&=",
-  "|=",
-  "^=",
   "+",
   "-",
   "*",
   "/",
   "%",
-  "!",
   "=",
   ">",
   "<",
-  "&",
   "|",
-  "^",
 ];
 
-const punctuators: Punctuator[] = ["(", ")", "{", "}", ",", ".", ":", ";", "?"];
+const punctuators: Punctuator[] = [
+  "(",
+  ")",
+  "{",
+  "}",
+  "[",
+  "]",
+  ",",
+  ".",
+  ":",
+  ";",
+  "?",
+];
 
 export interface LexResult {
   tokens: Token[];
@@ -69,10 +66,21 @@ export class Lexer {
       }
 
       if (ch === "\n") {
-        const start = this.position();
         this.advance();
-        const end = this.position();
-        this.tokens.push(this.makeToken("EOL", "\n", { start, end }));
+        continue;
+      }
+
+      if (ch === "/" && this.peek(1) === "/") {
+        this.advance();
+        this.advance();
+        while (!this.isAtEnd() && this.peek() !== "\n") this.advance();
+        continue;
+      }
+
+      if (ch === "/" && this.peek(1) === "*") {
+        this.advance();
+        this.advance();
+        this.scanBlockComment();
         continue;
       }
 
@@ -91,36 +99,13 @@ export class Lexer {
         continue;
       }
 
-      if (ch === "/") {
-        if (this.peek(1) === "/") {
-          this.advance();
-          this.advance();
-          while (!this.isAtEnd() && this.peek() !== "\n") this.advance();
-          continue;
-        }
-
-        if (this.peek(1) === "*") {
-          this.advance();
-          this.advance();
-          this.scanBlockComment();
-          continue;
-        }
-      }
-
       const operator = this.matchOperator();
       if (operator) {
         const start = this.position();
         for (let i = 0; i < operator.length; i++) this.advance();
         const end = this.position();
         this.tokens.push(
-          this.makeToken(
-            "Operator",
-            operator,
-            { start, end },
-            {
-              operator,
-            },
-          ),
+          this.makeToken("Operator", operator, { start, end }, { operator }),
         );
         continue;
       }
@@ -161,35 +146,88 @@ export class Lexer {
 
   private scanNumber() {
     const start = this.position();
-    let hasDot = false;
+    let isFloat = false;
 
-    while (!this.isAtEnd()) {
-      const ch = this.peek();
-      if (this.isDigit(ch)) {
+    if (this.peek() === "0" && (this.peek(1) === "x" || this.peek(1) === "X")) {
+      this.advance();
+      this.advance();
+      const digitsStart = this.position();
+      while (this.isHexDigit(this.peek()) || this.peek() === "_")
         this.advance();
-        continue;
+      const end = this.position();
+      const lexeme = this.source.slice(start.index, end.index);
+      if (digitsStart.index === end.index) {
+        this.diagnostics.push(
+          errorDiagnostic("Invalid hex literal.", { start, end }, "LEX010"),
+        );
       }
+      this.tokens.push(
+        this.makeToken("Number", lexeme, { start, end }, { value: lexeme }),
+      );
+      return;
+    }
 
-      if (ch === "." && !hasDot && this.isDigit(this.peek(1))) {
-        hasDot = true;
+    if (this.peek() === "0" && (this.peek(1) === "b" || this.peek(1) === "B")) {
+      this.advance();
+      this.advance();
+      const digitsStart = this.position();
+      while (
+        this.peek() === "0" ||
+        this.peek() === "1" ||
+        this.peek() === "_"
+      ) {
         this.advance();
-        continue;
       }
-      break;
+      const end = this.position();
+      const lexeme = this.source.slice(start.index, end.index);
+      if (digitsStart.index === end.index) {
+        this.diagnostics.push(
+          errorDiagnostic("Invalid binary literal.", { start, end }, "LEX011"),
+        );
+      }
+      this.tokens.push(
+        this.makeToken("Number", lexeme, { start, end }, { value: lexeme }),
+      );
+      return;
+    }
+
+    while (this.isDigit(this.peek()) || this.peek() === "_") this.advance();
+
+    if (this.peek() === "." && this.isDigit(this.peek(1))) {
+      isFloat = true;
+      this.advance();
+      while (this.isDigit(this.peek()) || this.peek() === "_") this.advance();
+    }
+
+    if (this.peek() === "e" || this.peek() === "E") {
+      isFloat = true;
+      this.advance();
+      if (this.peek() === "+" || this.peek() === "-") this.advance();
+      const exponentStart = this.position();
+      while (this.isDigit(this.peek()) || this.peek() === "_") this.advance();
+      if (exponentStart.index === this.position().index) {
+        const end = this.position();
+        this.diagnostics.push(
+          errorDiagnostic(
+            "Invalid exponent in numeric literal.",
+            { start, end },
+            "LEX013",
+          ),
+        );
+      }
     }
 
     const end = this.position();
     const lexeme = this.source.slice(start.index, end.index);
     this.tokens.push(
-      this.makeToken(
-        "Number",
-        lexeme,
-        { start, end },
-        {
-          value: Number(lexeme),
-        },
-      ),
+      this.makeToken("Number", lexeme, { start, end }, { value: lexeme }),
     );
+
+    if (!isFloat && lexeme.includes(".")) {
+      this.diagnostics.push(
+        errorDiagnostic("Invalid numeric literal.", { start, end }, "LEX012"),
+      );
+    }
   }
 
   private scanString() {
@@ -209,23 +247,12 @@ export class Lexer {
         return;
       }
 
-      if (ch === "\n") {
-        const end = this.position();
-        this.diagnostics.push(
-          errorDiagnostic(
-            "Unterminated string literal.",
-            { start, end },
-            "LEX002",
-          ),
-        );
-        return;
-      }
-
       if (ch === "\\") {
         this.advance();
         const next = this.peek();
         if (next === "n") value += "\n";
         else if (next === "t") value += "\t";
+        else if (next === "r") value += "\r";
         else if (next === '"') value += '"';
         else if (next === "\\") value += "\\";
         else value += next;
@@ -249,11 +276,28 @@ export class Lexer {
     const end = this.position();
     const lexeme = this.source.slice(start.index, end.index);
 
-    if (keywords.includes(lexeme as never)) {
-      this.tokens.push(this.makeToken("Keyword", lexeme, { start, end }));
-    } else {
-      this.tokens.push(this.makeToken("Identifier", lexeme, { start, end }));
+    if (lexeme === "is") {
+      this.tokens.push(
+        this.makeToken("Operator", lexeme, { start, end }, { operator: "is" }),
+      );
+      return;
     }
+
+    if (keywords.includes(lexeme as never)) {
+      this.tokens.push(
+        this.makeToken(
+          "Keyword",
+          lexeme,
+          { start, end },
+          {
+            keyword: lexeme as never,
+          },
+        ),
+      );
+      return;
+    }
+
+    this.tokens.push(this.makeToken("Identifier", lexeme, { start, end }));
   }
 
   private scanBlockComment() {
@@ -321,6 +365,14 @@ export class Lexer {
 
   private isDigit(ch: string) {
     return ch >= "0" && ch <= "9";
+  }
+
+  private isHexDigit(ch: string) {
+    return (
+      (ch >= "0" && ch <= "9") ||
+      (ch >= "a" && ch <= "f") ||
+      (ch >= "A" && ch <= "F")
+    );
   }
 
   private isAlpha(ch: string) {

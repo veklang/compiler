@@ -1,5 +1,5 @@
 import type { Span } from "@/types/position";
-import type { Operator, Punctuator } from "@/types/shared";
+import type { Keyword, Operator, Punctuator } from "@/types/shared";
 
 export { keywords } from "@/types/shared";
 
@@ -10,14 +10,14 @@ export type TokenKind =
   | "String"
   | "Operator"
   | "Punctuator"
-  | "EOL"
   | "EOF";
 
 export interface Token {
   kind: TokenKind;
   lexeme: string;
   span: Span;
-  value?: number | string;
+  value?: string;
+  keyword?: Keyword;
   operator?: Operator;
   punctuator?: Punctuator;
 }

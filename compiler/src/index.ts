@@ -2,7 +2,7 @@ import { inspect } from "node:util";
 import { Lexer } from "@/lang/lexer";
 import { Parser } from "@/lang/parser";
 
-const source = "6.9 + 420";
+const source = "6.9 + 420;";
 const { tokens, diagnostics: lexDiagnostics } = new Lexer(source).lex();
 const { program, diagnostics: parseDiagnostics } = new Parser(
   tokens,
