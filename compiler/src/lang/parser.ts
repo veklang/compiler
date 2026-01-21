@@ -1,6 +1,6 @@
 import type {
+  Argument,
   ArrayLiteralExpression,
-  ArrowFunctionExpression,
   AssignmentExpression,
   BinaryExpression,
   BlockStatement,
@@ -24,6 +24,8 @@ import type {
   IdentifierPattern,
   IfStatement,
   ImportDeclaration,
+  KwSpreadArgument,
+  KwVariadicParameter,
   LiteralExpression,
   LiteralPattern,
   MapEntry,
@@ -31,12 +33,17 @@ import type {
   MatchArm,
   MatchStatement,
   MemberExpression,
+  NamedArgument,
   NamedType,
   Node,
   Parameter,
+  ParameterNode,
+  ParameterSeparator,
   Pattern,
+  PositionalArgument,
   Program,
   ReturnStatement,
+  SpreadArgument,
   Statement,
   StringLiteralExpression,
   StructDeclaration,
@@ -51,6 +58,7 @@ import type {
   UnaryExpression,
   UnionType,
   VariableDeclaration,
+  VariadicParameter,
   WhileStatement,
   WildcardPattern,
 } from "@/types/ast";
@@ -303,26 +311,10 @@ export class Parser {
     const variants: EnumVariant[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
       const variantName = this.parseIdentifier();
-      let payload: TypeNode[] | undefined;
-      if (this.matchPunctuator("(")) {
-        payload = [];
-        if (!this.checkPunctuator(")")) {
-          do {
-            const type = this.parseType();
-            if (type) payload.push(type);
-          } while (this.matchPunctuator(","));
-        }
-        this.expectPunctuator(")");
-      }
-
       const variant: EnumVariant = {
         kind: "EnumVariant",
-        span: this.spanFrom(
-          variantName?.span,
-          payload?.[payload.length - 1]?.span ?? variantName?.span,
-        ),
+        span: this.spanFrom(variantName?.span, variantName?.span),
         name: variantName ?? this.placeholderIdentifier(this.currentSpan()),
-        payload,
       };
       variants.push(variant);
       if (!this.matchPunctuator(",")) break;
@@ -610,6 +602,11 @@ export class Parser {
       } satisfies LiteralPattern;
     }
 
+    if (token.kind === "Operator" && token.lexeme === "=>") {
+      this.report("Unexpected '=>' outside match arm.", token.span, "PAR042");
+      return this.placeholderPattern(token.span);
+    }
+
     if (token.kind === "Keyword") {
       if (
         token.lexeme === "true" ||
@@ -869,8 +866,6 @@ export class Parser {
 
   private parsePrimary(): Expression | null {
     if (this.checkPunctuator("(")) {
-      const arrow = this.tryParseArrowFunction();
-      if (arrow) return arrow;
       return this.parseGroupingOrTuple();
     }
 
@@ -1001,7 +996,9 @@ export class Parser {
 
     if (!this.checkPunctuator(")")) {
       do {
-        const element = this.withStructLiteral(true, () => this.parseExpression());
+        const element = this.withStructLiteral(true, () =>
+          this.parseExpression(),
+        );
         if (element) elements.push(element);
       } while (this.matchPunctuator(","));
     }
@@ -1037,72 +1034,307 @@ export class Parser {
     };
   }
 
-  private tryParseArrowFunction(): ArrowFunctionExpression | null {
-    const checkpoint = this.checkpoint();
-    const start = this.expectPunctuator("(");
-    const params = this.parseParameterListInner();
-    if (!this.matchPunctuator(")") || !this.matchOperator("=>")) {
-      this.restore(checkpoint);
-      return null;
-    }
-
-    const returnType = this.matchPunctuator(":") ? this.parseType() : undefined;
-    const body = this.checkPunctuator("{")
-      ? this.parseBlockStatement()
-      : (this.parseExpression() ??
-        this.placeholderExpression(this.currentSpan()));
-
-    return {
-      kind: "ArrowFunctionExpression",
-      span: this.spanFrom(start?.span, body.span),
-      params,
-      returnType: returnType ?? undefined,
-      body,
-    };
-  }
-
-  private parseArgumentList(): Expression[] {
-    const args: Expression[] = [];
+  private parseArgumentList(): Argument[] {
+    const args: Argument[] = [];
+    let seenNamed = false;
+    let seenKwSpread = false;
     if (!this.checkPunctuator(")")) {
       do {
-        const arg = this.parseExpression();
-        if (arg) args.push(arg);
+        if (this.matchOperator("**")) {
+          if (seenKwSpread) {
+            this.report(
+              "Multiple '**kwargs' arguments are not allowed.",
+              this.previousSpan(),
+              "PAR068",
+            );
+          }
+          const value =
+            this.parseExpression() ??
+            this.placeholderExpression(this.currentSpan());
+          const arg: KwSpreadArgument = {
+            kind: "KwSpreadArgument",
+            span: this.spanFrom(this.previousSpan(), value.span),
+            value,
+          };
+          args.push(arg);
+          seenNamed = true;
+          seenKwSpread = true;
+          continue;
+        }
+
+        if (this.matchOperator("*")) {
+          const value =
+            this.parseExpression() ??
+            this.placeholderExpression(this.currentSpan());
+          const arg: SpreadArgument = {
+            kind: "SpreadArgument",
+            span: this.spanFrom(this.previousSpan(), value.span),
+            value,
+          };
+          args.push(arg);
+          continue;
+        }
+
+        if (this.checkArgumentNamed()) {
+          const name =
+            this.parseIdentifier() ??
+            this.placeholderIdentifier(this.currentSpan());
+          this.expectOperator("=");
+          const value =
+            this.parseExpression() ??
+            this.placeholderExpression(this.currentSpan());
+          const arg: NamedArgument = {
+            kind: "NamedArgument",
+            span: this.spanFrom(name.span, value.span),
+            name,
+            value,
+          };
+          args.push(arg);
+          seenNamed = true;
+          continue;
+        }
+
+        if (seenNamed) {
+          this.report(
+            "Positional arguments cannot follow named arguments.",
+            this.currentSpan(),
+            "PAR060",
+          );
+        }
+
+        const value = this.parseExpression();
+        if (value) {
+          const arg: PositionalArgument = {
+            kind: "PositionalArgument",
+            span: value.span,
+            value,
+          };
+          args.push(arg);
+        }
       } while (this.matchPunctuator(","));
     }
     return args;
   }
 
-  private parseParameterList(): Parameter[] {
+  private parseParameterList(): ParameterNode[] {
     this.expectPunctuator("(");
     const params = this.parseParameterListInner();
     this.expectPunctuator(")");
     return params;
   }
 
-  private parseParameterListInner(): Parameter[] {
-    const params: Parameter[] = [];
+  private parseParameterListInner(): ParameterNode[] {
+    const params: ParameterNode[] = [];
+    let namedOnly = false;
+    let seenDefault = false;
+    let seenVariadic = false;
+    let seenKwVariadic = false;
+    let seenSeparator = false;
     if (!this.checkPunctuator(")")) {
       do {
-        const param = this.parseParameter();
-        if (param) params.push(param);
+        const parsed = this.parseParameter({
+          namedOnly,
+          seenDefault,
+          seenVariadic,
+          seenKwVariadic,
+          seenSeparator,
+        });
+        if (parsed) {
+          params.push(parsed.node);
+          if (parsed.makesNamedOnly) namedOnly = true;
+          if (parsed.hasDefault) seenDefault = true;
+          if (parsed.seenVariadic) seenVariadic = true;
+          if (parsed.seenKwVariadic) seenKwVariadic = true;
+          if (parsed.seenSeparator) seenSeparator = true;
+        }
       } while (this.matchPunctuator(","));
     }
     return params;
   }
 
-  private parseParameter(): Parameter | null {
+  private parseParameter(context: {
+    namedOnly: boolean;
+    seenDefault: boolean;
+    seenVariadic: boolean;
+    seenKwVariadic: boolean;
+    seenSeparator: boolean;
+  }): {
+    node: ParameterNode;
+    makesNamedOnly: boolean;
+    hasDefault: boolean;
+    seenVariadic: boolean;
+    seenKwVariadic: boolean;
+    seenSeparator: boolean;
+  } | null {
+    if (this.matchOperator("*")) {
+      if (this.checkPunctuator(",") || this.checkPunctuator(")")) {
+        if (
+          context.seenSeparator ||
+          context.seenVariadic ||
+          context.seenKwVariadic
+        ) {
+          this.report(
+            "Multiple '*' separators or varargs are not allowed.",
+            this.previousSpan(),
+            "PAR063",
+          );
+        }
+        const sep: ParameterSeparator = {
+          kind: "ParameterSeparator",
+          span: this.previousSpan(),
+          separator: "*",
+        };
+        return {
+          node: sep,
+          makesNamedOnly: true,
+          hasDefault: false,
+          seenVariadic: false,
+          seenKwVariadic: false,
+          seenSeparator: true,
+        };
+      }
+
+      if (context.seenVariadic) {
+        this.report(
+          "Multiple '*args' parameters are not allowed.",
+          this.previousSpan(),
+          "PAR064",
+        );
+      }
+
+      const name =
+        this.parseIdentifier() ??
+        this.placeholderIdentifier(this.currentSpan());
+      this.expectPunctuator(":");
+      const type = this.parseType() ?? this.placeholderType(name.span);
+      const node: VariadicParameter = {
+        kind: "VariadicParameter",
+        span: this.spanFrom(name.span, type.span),
+        name,
+        type,
+      };
+      return {
+        node,
+        makesNamedOnly: true,
+        hasDefault: false,
+        seenVariadic: true,
+        seenKwVariadic: false,
+        seenSeparator: false,
+      };
+    }
+
+    if (this.matchOperator("**")) {
+      if (this.checkPunctuator(",") || this.checkPunctuator(")")) {
+        if (
+          context.seenSeparator ||
+          context.seenVariadic ||
+          context.seenKwVariadic
+        ) {
+          this.report(
+            "Multiple '**' separators or kwargs are not allowed.",
+            this.previousSpan(),
+            "PAR065",
+          );
+        }
+        const sep: ParameterSeparator = {
+          kind: "ParameterSeparator",
+          span: this.previousSpan(),
+          separator: "**",
+        };
+        return {
+          node: sep,
+          makesNamedOnly: true,
+          hasDefault: false,
+          seenVariadic: false,
+          seenKwVariadic: false,
+          seenSeparator: true,
+        };
+      }
+
+      if (context.seenKwVariadic) {
+        this.report(
+          "Multiple '**kwargs' parameters are not allowed.",
+          this.previousSpan(),
+          "PAR066",
+        );
+      }
+
+      const name =
+        this.parseIdentifier() ??
+        this.placeholderIdentifier(this.currentSpan());
+      this.expectPunctuator(":");
+      const type = this.parseType() ?? this.placeholderType(name.span);
+      const node: KwVariadicParameter = {
+        kind: "KwVariadicParameter",
+        span: this.spanFrom(name.span, type.span),
+        name,
+        type,
+      };
+      return {
+        node,
+        makesNamedOnly: true,
+        hasDefault: false,
+        seenVariadic: false,
+        seenKwVariadic: true,
+        seenSeparator: false,
+      };
+    }
+
     const name = this.parseIdentifier();
     if (!name) return null;
+
+    if (context.seenKwVariadic) {
+      this.report(
+        "No parameters allowed after '**kwargs'.",
+        name.span,
+        "PAR067",
+      );
+    }
+
     this.expectPunctuator(":");
     const isMutable = this.matchKeyword("mut");
     const type = this.parseType() ?? this.placeholderType(name.span);
+    let defaultValue: Expression | undefined;
+    let hasDefault = false;
 
-    return {
+    if (this.matchOperator("=")) {
+      if (isMutable) {
+        this.report(
+          "Default values are not allowed for mut parameters.",
+          name.span,
+          "PAR061",
+        );
+      }
+      defaultValue =
+        this.parseExpression() ??
+        this.placeholderExpression(this.currentSpan());
+      hasDefault = true;
+    }
+
+    if (!hasDefault && context.seenDefault) {
+      this.report(
+        "Required parameters cannot follow default parameters.",
+        name.span,
+        "PAR062",
+      );
+    }
+
+    const node: Parameter = {
       kind: "Parameter",
-      span: this.spanFrom(name.span, type.span),
+      span: this.spanFrom(name.span, defaultValue?.span ?? type.span),
       name,
       type,
       isMutable: !!isMutable,
+      isNamedOnly: context.namedOnly,
+      defaultValue,
+    };
+    return {
+      node,
+      makesNamedOnly: false,
+      hasDefault,
+      seenVariadic: false,
+      seenKwVariadic: false,
+      seenSeparator: false,
     };
   }
 
@@ -1260,6 +1492,14 @@ export class Parser {
       if (token.lexeme === "null") {
         literalType = "Null";
         value = null;
+      }
+      if (token.lexeme === "NaN") {
+        literalType = "Float";
+        value = Number.NaN;
+      }
+      if (token.lexeme === "Infinity") {
+        literalType = "Float";
+        value = Number.POSITIVE_INFINITY;
       }
     }
 
@@ -1507,6 +1747,16 @@ export class Parser {
     };
   }
 
+  private checkArgumentNamed(): boolean {
+    const current = this.peek();
+    const next = this.peek(1);
+    return (
+      current?.kind === "Identifier" &&
+      next?.kind === "Operator" &&
+      next.operator === "="
+    );
+  }
+
   private withStructLiteral<T>(enabled: boolean, fn: () => T): T {
     const previous = this.structLiteralEnabled;
     this.structLiteralEnabled = enabled;
@@ -1515,14 +1765,5 @@ export class Parser {
     } finally {
       this.structLiteralEnabled = previous;
     }
-  }
-
-  private checkpoint() {
-    return { index: this.current, diagnostics: this.diagnostics.length };
-  }
-
-  private restore(checkpoint: { index: number; diagnostics: number }) {
-    this.current = checkpoint.index;
-    this.diagnostics.length = checkpoint.diagnostics;
   }
 }

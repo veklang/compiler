@@ -30,7 +30,7 @@ pub default 3.14;
   test("let/const declarations", () => {
     const program = parseOk(`
 let x = 10;
-const y: int = 20;
+const y: i32 = 20;
 `);
     assert.deepEqual(getProgramBodyKinds(program), [
       "VariableDeclaration",
@@ -39,18 +39,18 @@ const y: int = 20;
   });
 
   test("const must have initializer", () => {
-    const result = parse("const nope: int;");
+    const result = parse("const nope: i32;");
     expectDiagnostics(result.parseDiagnostics, ["PAR011"]);
   });
 
   test("type alias with union", () => {
-    const program = parseOk("alias ID = int | string;");
+    const program = parseOk("alias ID = i32 | string;");
     assert.equal(program.body[0].kind, "TypeAliasDeclaration");
   });
 
   test("function declarations", () => {
     const program = parseOk(`
-inline fn add(x: int, y: int): int { return x + y; }
+inline fn add(x: i32, y: i32): i32 { return x + y; }
 fn main(): void { return; }
 `);
     assert.deepEqual(getProgramBodyKinds(program), [
@@ -59,18 +59,72 @@ fn main(): void { return; }
     ]);
   });
 
-  test("arrow and fn expressions", () => {
+  test("function expressions", () => {
     const program = parseOk(`
-let f = (x: int, y: int) => x + y;
-let g = fn(x: int, y: int): int { return x + y; };
+let g = fn(x: i32, y: i32): i32 { return x + y; };
 `);
     assert.equal(program.body[0].kind, "VariableDeclaration");
   });
 
+  test("named args, defaults, and varargs", () => {
+    const program = parseOk(`
+fn print(message: string, *, stream: Stream = io.stdout) {
+  return;
+}
+
+fn sum(*values: Array<i32>) {
+  return;
+}
+
+fn log(**meta: Map<string, string>) {
+  return;
+}
+
+fn open(path: string, mode: string = "r", timeout: i32 | null = null) {
+  return;
+}
+
+fn main() {
+  print("hello\\n", stream=io.stderr);
+  sum(*values);
+  log(**meta);
+}
+`);
+    assert.equal(program.body.length, 5);
+  });
+
+  test("invalid default ordering", () => {
+    const result = parse("fn bad(x: i32 = 1, y: i32) { return; }");
+    expectDiagnostics(result.parseDiagnostics, ["PAR062"]);
+  });
+
+  test("default not allowed on mut", () => {
+    const result = parse("fn bad(x: mut i32 = 1) { return; }");
+    expectDiagnostics(result.parseDiagnostics, ["PAR061"]);
+  });
+
+  test("strict varargs/kwargs rules", () => {
+    const dupVarargs = parse(
+      "fn bad(*a: Array<i32>, *b: Array<i32>) { return; }",
+    );
+    expectDiagnostics(dupVarargs.parseDiagnostics, ["PAR064"]);
+
+    const dupKw = parse(
+      "fn bad(**a: Map<string, i32>, **b: Map<string, i32>) { return; }",
+    );
+    expectDiagnostics(dupKw.parseDiagnostics, ["PAR066"]);
+
+    const afterKw = parse("fn bad(**a: Map<string, i32>, x: i32) { return; }");
+    expectDiagnostics(afterKw.parseDiagnostics, ["PAR067"]);
+
+    const dupSep = parse("fn bad(*, *, x: i32) { return; }");
+    expectDiagnostics(dupSep.parseDiagnostics, ["PAR063"]);
+  });
+
   test("struct and enum", () => {
     const program = parseOk(`
-struct Stuff { num: int, str: string }
-enum Result<T, E> { Ok(T), Err(E) }
+struct Stuff { num: i32, str: string }
+enum Color { Red, Green, Blue }
 `);
     assert.deepEqual(getProgramBodyKinds(program), [
       "StructDeclaration",
@@ -81,9 +135,9 @@ enum Result<T, E> { Ok(T), Err(E) }
   test("class declaration", () => {
     const program = parseOk(`
 abstract class Stuff extends Base implements IFoo, IBar {
-  pub static value: int;
-  pub fn constructor(v: int) { return; }
-  abstract fn get(): int;
+  pub static value: i32;
+  pub fn constructor(v: i32) { return; }
+  abstract fn get(): i32;
 }
 `);
     assert.equal(program.body[0].kind, "ClassDeclaration");
@@ -110,7 +164,7 @@ let x = 1 + 2 * 3 == 7 || 4 < 5;
 
   test("calls, member, cast", () => {
     const program = parseOk(`
-let v = io.println("hi") as void;
+let v = io.print("hi\\n", stream=io.stderr) as void;
 `);
     assert.equal(program.body[0].kind, "VariableDeclaration");
   });
@@ -127,7 +181,7 @@ let s = Stuff { num: 69, str: "lol" };
 
   test("return tuple literals", () => {
     const program = parseOk(`
-fn pair(): (int, int) { return 1, 2; }
+fn pair(): (i32, i32) { return 1, 2; }
 `);
     assert.equal(program.body[0].kind, "FunctionDeclaration");
   });
@@ -150,13 +204,13 @@ import io from "std:io";
 
 const constant_value = 50;
 
-fn add(x: int, y: int) {
+fn add(x: i32, y: i32) {
   return x + y;
 }
 
 fn main() {
   let float_addition = 6.9 + 4.2;
-  io.println("sum: " + add(6, 9));
+  io.print("sum: " + add(6, 9) + "\\n");
 }
 `);
     assert.equal(program.body.length, 4);
@@ -168,17 +222,17 @@ import io from "std:io";
 
 fn main() {
   match 50 {
-    1 => io.println("one"),
-    50 => io.println("fifty"),
-    _ => io.println("other"),
+    1 => io.print("one\\n"),
+    50 => io.print("fifty\\n"),
+    _ => io.print("other\\n"),
   }
 
   for i in range(0, 5) {
-    io.println(i);
+    io.print(i + "\\n");
   }
 
   for val in [6, 9, 4, 2, 0] {
-    io.println(val);
+    io.print(val + "\\n");
   }
 }
 `);
@@ -189,39 +243,34 @@ fn main() {
     const program = parseOk(`
 import io from "std:io";
 
-enum Result<T, E> {
-  Ok(T),
-  Err(E),
-}
-
-fn might_fail(flag: bool): Result<int, string> {
+fn might_fail(flag: bool): (i32, string | null) {
   if flag {
-    return Ok(42);
+    return 42, null;
   } else {
-    return Err("bad flag");
+    return 0, "bad flag";
   }
 }
 
 fn main() {
-  match might_fail(false) {
-    Ok => io.println("value"),
-    Err => io.eprintln("error"),
+  let result = might_fail(false);
+  match result {
+    _ => io.eprint("done\\n"),
   }
 }
 `);
-    assert.equal(program.body.length, 4);
+    assert.equal(program.body.length, 3);
   });
 
   test("oop sample program", () => {
     const program = parseOk(`
 class Stuff {
-  value: int;
+  value: i32;
 
-  pub fn constructor(v: int) {
+  pub fn constructor(v: i32) {
     return;
   }
 
-  pub fn get_value(): int {
+  pub fn get_value(): i32 {
     return this.value;
   }
 }

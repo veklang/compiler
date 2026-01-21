@@ -32,13 +32,14 @@ describe("lexer", () => {
   });
 
   test("operators", () => {
-    const tokens = tokensOf("+ - * / % = == != is > >= < <= && || | => ->");
+    const tokens = tokensOf("+ - * ** / % = == != is > >= < <= && || | => ->");
     assert.deepEqual(
       tokens.map((t) => [t.kind, t.lexeme]),
       [
         ["Operator", "+"],
         ["Operator", "-"],
         ["Operator", "*"],
+        ["Operator", "**"],
         ["Operator", "/"],
         ["Operator", "%"],
         ["Operator", "="],
@@ -65,12 +66,20 @@ describe("lexer", () => {
     assert.equal(kinds[kinds.length - 1], "Identifier");
   });
 
-  test("decimal, float, exponent", () => {
+  test("decimal, f32, exponent", () => {
     const tokens = tokensOf("123 6.9 2.0e5 1_000_000 3.14E-2");
     assert.deepEqual(
       tokens.map((t) => t.lexeme),
       ["123", "6.9", "2.0e5", "1_000_000", "3.14E-2"],
     );
+  });
+
+  test("NaN and Infinity literals", () => {
+    const tokens = tokensOf("NaN Infinity");
+    assert.deepEqual(tokens.map((t) => [t.kind, t.lexeme]), [
+      ["Keyword", "NaN"],
+      ["Keyword", "Infinity"],
+    ]);
   });
 
   test("hex and binary", () => {
@@ -104,17 +113,17 @@ describe("lexer", () => {
     );
   });
 
-  test("errors: unterminated string", () => {
+  test("unterminated string", () => {
     const result = lex('"oops');
     expectDiagnostics(result.diagnostics, ["LEX002"]);
   });
 
-  test("errors: unterminated block comment", () => {
+  test("unterminated block comment", () => {
     const result = lex("/* nope");
     expectDiagnostics(result.diagnostics, ["LEX003"]);
   });
 
-  test("errors: invalid hex/binary/exponent", () => {
+  test("invalid hex/binary/exponent", () => {
     const hex = lex("0x");
     const bin = lex("0b");
     const exp = lex("1e+");
@@ -123,7 +132,7 @@ describe("lexer", () => {
     expectDiagnostics(exp.diagnostics, ["LEX013"]);
   });
 
-  test("errors: unexpected char", () => {
+  test("unexpected char", () => {
     const result = lex("@");
     expectDiagnostics(result.diagnostics, ["LEX001"]);
   });
@@ -134,13 +143,13 @@ import io from "std:io";
 
 const constant_value = 50;
 
-fn add(x: int, y: int) {
+fn add(x: i32, y: i32) {
   return x + y;
 }
 
 fn main() {
   let float_addition = 6.9 + 4.2;
-  io.println("sum: " + add(6, 9));
+  io.print("sum: " + add(6, 9) + "\\n");
 }
 `;
     const result = lex(source);

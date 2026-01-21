@@ -39,9 +39,24 @@ export const keywords = [
   "null",
   "mut",
   "from",
+  "i8",
+  "i16",
+  "i32",
+  "i64",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "f16",
+  "f32",
+  "f64",
+  "bool",
+  "string",
   // Literals
   "true",
   "false",
+  "NaN",
+  "Infinity",
 ] as const;
 
 export type Keyword = (typeof keywords)[number];
@@ -50,6 +65,7 @@ export type Operator =
   | "+"
   | "-"
   | "*"
+  | "**"
   | "/"
   | "%"
   | "="

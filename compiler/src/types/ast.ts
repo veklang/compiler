@@ -61,7 +61,7 @@ export interface FunctionDeclaration extends Node {
   kind: "FunctionDeclaration";
   name: Identifier;
   typeParams?: TypeParameter[];
-  params: Parameter[];
+  params: ParameterNode[];
   returnType?: TypeNode;
   body: BlockStatement;
   isInline: boolean;
@@ -73,7 +73,32 @@ export interface Parameter extends Node {
   name: Identifier;
   type: TypeNode;
   isMutable: boolean;
+  isNamedOnly: boolean;
+  defaultValue?: Expression;
 }
+
+export interface VariadicParameter extends Node {
+  kind: "VariadicParameter";
+  name: Identifier;
+  type: TypeNode;
+}
+
+export interface KwVariadicParameter extends Node {
+  kind: "KwVariadicParameter";
+  name: Identifier;
+  type: TypeNode;
+}
+
+export interface ParameterSeparator extends Node {
+  kind: "ParameterSeparator";
+  separator: "*" | "**";
+}
+
+export type ParameterNode =
+  | Parameter
+  | VariadicParameter
+  | KwVariadicParameter
+  | ParameterSeparator;
 
 export interface VariableDeclaration extends Node {
   kind: "VariableDeclaration";
@@ -116,7 +141,6 @@ export interface EnumDeclaration extends Node {
 export interface EnumVariant extends Node {
   kind: "EnumVariant";
   name: Identifier;
-  payload?: TypeNode[];
 }
 
 export interface ClassDeclaration extends Node {
@@ -143,7 +167,7 @@ export interface ClassField extends Node {
 export interface ClassMethod extends Node {
   kind: "ClassMethod";
   name: Identifier;
-  params: Parameter[];
+  params: ParameterNode[];
   returnType?: TypeNode;
   body: BlockStatement | null;
   isPublic: boolean;
@@ -232,7 +256,6 @@ export type Expression =
   | MapLiteralExpression
   | StructLiteralExpression
   | GroupingExpression
-  | ArrowFunctionExpression
   | FunctionExpression
   | CastExpression;
 
@@ -270,7 +293,34 @@ export interface UnaryExpression extends Node {
 export interface CallExpression extends Node {
   kind: "CallExpression";
   callee: Expression;
-  args: Expression[];
+  args: Argument[];
+}
+
+export type Argument =
+  | PositionalArgument
+  | NamedArgument
+  | SpreadArgument
+  | KwSpreadArgument;
+
+export interface PositionalArgument extends Node {
+  kind: "PositionalArgument";
+  value: Expression;
+}
+
+export interface NamedArgument extends Node {
+  kind: "NamedArgument";
+  name: Identifier;
+  value: Expression;
+}
+
+export interface SpreadArgument extends Node {
+  kind: "SpreadArgument";
+  value: Expression;
+}
+
+export interface KwSpreadArgument extends Node {
+  kind: "KwSpreadArgument";
+  value: Expression;
 }
 
 export interface MemberExpression extends Node {
@@ -317,16 +367,9 @@ export interface GroupingExpression extends Node {
   expression: Expression;
 }
 
-export interface ArrowFunctionExpression extends Node {
-  kind: "ArrowFunctionExpression";
-  params: Parameter[];
-  returnType?: TypeNode;
-  body: BlockStatement | Expression;
-}
-
 export interface FunctionExpression extends Node {
   kind: "FunctionExpression";
-  params: Parameter[];
+  params: ParameterNode[];
   returnType?: TypeNode;
   body: BlockStatement;
 }
