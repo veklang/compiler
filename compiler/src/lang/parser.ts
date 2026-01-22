@@ -884,7 +884,9 @@ export class Parser {
       if (
         token.lexeme === "true" ||
         token.lexeme === "false" ||
-        token.lexeme === "null"
+        token.lexeme === "null" ||
+        token.lexeme === "NaN" ||
+        token.lexeme === "Infinity"
       ) {
         return this.literalFromToken(token);
       }
