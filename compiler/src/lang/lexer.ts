@@ -119,9 +119,7 @@ export class Lexer {
             "Punctuator",
             ch,
             { start, end },
-            {
-              punctuator: ch as Punctuator,
-            },
+            { punctuator: ch as Punctuator },
           ),
         );
         continue;
@@ -163,9 +161,7 @@ export class Lexer {
           code: "LEX010",
         });
       }
-      this.tokens.push(
-        this.makeToken("Number", lexeme, { start, end }, { value: lexeme }),
-      );
+      this.tokens.push(this.makeToken("Number", lexeme, { start, end }));
       return;
     }
 
@@ -190,9 +186,7 @@ export class Lexer {
           code: "LEX011",
         });
       }
-      this.tokens.push(
-        this.makeToken("Number", lexeme, { start, end }, { value: lexeme }),
-      );
+      this.tokens.push(this.makeToken("Number", lexeme, { start, end }));
       return;
     }
 
@@ -223,9 +217,7 @@ export class Lexer {
 
     const end = this.position();
     const lexeme = this.source.slice(start.index, end.index);
-    this.tokens.push(
-      this.makeToken("Number", lexeme, { start, end }, { value: lexeme }),
-    );
+    this.tokens.push(this.makeToken("Number", lexeme, { start, end }));
 
     if (!isFloat && lexeme.includes(".")) {
       this.diagnostics.push({
@@ -240,7 +232,7 @@ export class Lexer {
   private scanString() {
     const start = this.position();
     this.advance();
-    let value = "";
+    // keep raw lexeme; validate escapes by consuming them
 
     while (!this.isAtEnd()) {
       const ch = this.peek();
@@ -248,26 +240,15 @@ export class Lexer {
         this.advance();
         const end = this.position();
         const lexeme = this.source.slice(start.index, end.index);
-        this.tokens.push(
-          this.makeToken("String", lexeme, { start, end }, { value }),
-        );
+        this.tokens.push(this.makeToken("String", lexeme, { start, end }));
         return;
       }
 
       if (ch === "\\") {
         this.advance();
-        const next = this.peek();
-        if (next === "n") value += "\n";
-        else if (next === "t") value += "\t";
-        else if (next === "r") value += "\r";
-        else if (next === '"') value += '"';
-        else if (next === "\\") value += "\\";
-        else value += next;
         this.advance();
         continue;
       }
-
-      value += ch;
       this.advance();
     }
 
@@ -299,9 +280,7 @@ export class Lexer {
           "Keyword",
           lexeme,
           { start, end },
-          {
-            keyword: lexeme as never,
-          },
+          { keyword: lexeme as never },
         ),
       );
       return;
@@ -328,6 +307,8 @@ export class Lexer {
       code: "LEX003",
     });
   }
+
+  // no literal coercion at lex time
 
   private makeToken(
     kind: Token["kind"],

@@ -3,6 +3,7 @@ import type {
   ArrayLiteralExpression,
   AssignmentExpression,
   BinaryExpression,
+  BindingPattern,
   BlockStatement,
   CallExpression,
   CastExpression,
@@ -50,6 +51,7 @@ import type {
   StructField,
   StructLiteralExpression,
   StructLiteralField,
+  TupleBinding,
   TupleLiteralExpression,
   TupleType,
   TypeAliasDeclaration,
@@ -221,7 +223,8 @@ export class Parser {
     const keywordToken = this.advance();
     const declarationKind = keywordToken?.lexeme === "const" ? "const" : "let";
     const name =
-      this.parseIdentifier() ?? this.placeholderIdentifier(keywordToken?.span);
+      this.parseBindingPattern() ??
+      this.placeholderIdentifier(keywordToken?.span);
     let typeAnnotation: TypeNode | undefined;
     let initializer: Expression | undefined;
 
@@ -865,9 +868,7 @@ export class Parser {
   }
 
   private parsePrimary(): Expression | null {
-    if (this.checkPunctuator("(")) {
-      return this.parseGroupingOrTuple();
-    }
+    if (this.checkPunctuator("(")) return this.parseGroupingOrTuple();
 
     if (this.matchPunctuator("[")) return this.parseArrayLiteral();
     if (this.matchPunctuator("{")) return this.parseMapLiteral();
@@ -1357,6 +1358,41 @@ export class Parser {
     return params;
   }
 
+  private parseBindingPattern(): BindingPattern | null {
+    if (this.matchPunctuator("(")) {
+      const elements: Identifier[] = [];
+      if (!this.checkPunctuator(")")) {
+        do {
+          const id = this.parseIdentifier();
+          if (id) elements.push(id);
+        } while (this.matchPunctuator(","));
+      }
+      const end = this.expectPunctuator(")");
+      const span = this.spanFrom(
+        elements[0]?.span,
+        end?.span ?? this.currentSpan(),
+      );
+      const tuple: TupleBinding = { kind: "TupleBinding", span, elements };
+      return tuple;
+    }
+
+    const first = this.parseIdentifier();
+    if (!first) return null;
+    if (!this.checkPunctuator(",")) return first;
+
+    const elements: Identifier[] = [first];
+    while (this.matchPunctuator(",")) {
+      const id = this.parseIdentifier();
+      if (id) elements.push(id);
+      else break;
+    }
+    const span = this.spanFrom(
+      elements[0]?.span,
+      elements[elements.length - 1]?.span,
+    );
+    return { kind: "TupleBinding", span, elements };
+  }
+
   private parseType(): TypeNode | null {
     return this.parseUnionType();
   }
@@ -1472,7 +1508,10 @@ export class Parser {
     forcedType?: LiteralType,
   ): LiteralExpression {
     let literalType: LiteralType = forcedType ?? "Integer";
-    let value: string | number | boolean | null = token.value ?? token.lexeme;
+    let value: string =
+      token.kind === "String"
+        ? this.unescapeStringLiteral(token.lexeme)
+        : token.lexeme;
 
     if (!forcedType && token.kind === "Number") {
       if (
@@ -1489,34 +1528,53 @@ export class Parser {
     if (token.kind === "Keyword") {
       if (token.lexeme === "true" || token.lexeme === "false") {
         literalType = "Boolean";
-        value = token.lexeme === "true";
       }
       if (token.lexeme === "null") {
         literalType = "Null";
-        value = null;
       }
       if (token.lexeme === "NaN") {
         literalType = "Float";
-        value = Number.NaN;
       }
       if (token.lexeme === "Infinity") {
         literalType = "Float";
-        value = Number.POSITIVE_INFINITY;
       }
     }
 
     if (token.kind === "String") {
       literalType = "String";
-      value = token.value ?? "";
+    }
+    if (token.kind === "Number") {
+      value = token.lexeme.replace(/_/g, "");
     }
 
     return {
       kind: "LiteralExpression",
       span: token.span,
       literalType,
-      raw: token.lexeme,
       value,
     };
+  }
+
+  private unescapeStringLiteral(lexeme: string): string {
+    if (lexeme.length < 2) return lexeme;
+    const inner = lexeme.slice(1, -1);
+    let out = "";
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+      if (ch !== "\\") {
+        out += ch;
+        continue;
+      }
+      const next = inner[i + 1] ?? "";
+      if (next === "n") out += "\n";
+      else if (next === "t") out += "\t";
+      else if (next === "r") out += "\r";
+      else if (next === '"') out += '"';
+      else if (next === "\\") out += "\\";
+      else out += next;
+      i++;
+    }
+    return out;
   }
 
   private stringLiteralFromToken(token: Token): StringLiteralExpression {
@@ -1524,7 +1582,7 @@ export class Parser {
     return {
       ...literal,
       literalType: "String",
-      value: String(literal.value ?? ""),
+      value: literal.value,
     };
   }
 
@@ -1681,11 +1739,11 @@ export class Parser {
   }
 
   private previousSpan(): Span {
-    return this.previous()?.span ?? this.currentSpan();
+    return this.previous()?.span ?? this.emptySpan();
   }
 
   private currentSpan(): Span {
-    return this.peek()?.span ?? this.emptySpan();
+    return this.peek()?.span ?? this.previousSpan();
   }
 
   private isAtEnd(): boolean {

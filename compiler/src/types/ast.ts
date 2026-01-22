@@ -103,10 +103,17 @@ export type ParameterNode =
 export interface VariableDeclaration extends Node {
   kind: "VariableDeclaration";
   declarationKind: "let" | "const";
-  name: Identifier;
+  name: BindingPattern;
   typeAnnotation?: TypeNode;
   initializer?: Expression;
   isPublic: boolean;
+}
+
+export type BindingPattern = Identifier | TupleBinding;
+
+export interface TupleBinding extends Node {
+  kind: "TupleBinding";
+  elements: Identifier[];
 }
 
 export interface TypeAliasDeclaration extends Node {
@@ -262,8 +269,7 @@ export type Expression =
 export interface LiteralExpression extends Node {
   kind: "LiteralExpression";
   literalType: LiteralType;
-  raw: string;
-  value: string | number | boolean | null;
+  value: string;
 }
 
 export interface IdentifierExpression extends Node {

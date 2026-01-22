@@ -76,10 +76,13 @@ describe("lexer", () => {
 
   test("NaN and Infinity literals", () => {
     const tokens = tokensOf("NaN Infinity");
-    assert.deepEqual(tokens.map((t) => [t.kind, t.lexeme]), [
-      ["Keyword", "NaN"],
-      ["Keyword", "Infinity"],
-    ]);
+    assert.deepEqual(
+      tokens.map((t) => [t.kind, t.lexeme]),
+      [
+        ["Keyword", "NaN"],
+        ["Keyword", "Infinity"],
+      ],
+    );
   });
 
   test("hex and binary", () => {
@@ -94,7 +97,7 @@ describe("lexer", () => {
     const tokens = tokensOf('"hi\\n\\t\\"\\\\"');
     assert.equal(tokens.length, 1);
     assert.equal(tokens[0].kind, "String");
-    assert.equal(tokens[0].value, 'hi\n\t"\\');
+    assert.equal(tokens[0].lexeme, '"hi\\n\\t\\"\\\\"');
   });
 
   test("multiline strings", () => {
@@ -102,7 +105,7 @@ describe("lexer", () => {
     const tokens = tokensOf(source);
     assert.equal(tokens.length, 1);
     assert.equal(tokens[0].kind, "String");
-    assert.equal(tokens[0].value, "line1\nline2");
+    assert.equal(tokens[0].lexeme, source);
   });
 
   test("comments", () => {

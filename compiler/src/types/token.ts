@@ -16,7 +16,6 @@ export interface Token {
   kind: TokenKind;
   lexeme: string;
   span: Span;
-  value?: string;
   keyword?: Keyword;
   operator?: Operator;
   punctuator?: Punctuator;

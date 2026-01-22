@@ -186,6 +186,15 @@ fn pair(): (i32, i32) { return 1, 2; }
     assert.equal(program.body[0].kind, "FunctionDeclaration");
   });
 
+  test("tuple destructuring in let", () => {
+    const program = parseOk(`
+fn pair(): (i32, i32) { return 1, 2; }
+let x, y = pair();
+let (a, b) = pair();
+`);
+    assert.equal(program.body.length, 3);
+  });
+
   test("match patterns", () => {
     const program = parseOk(`
 match 50 { 1 => {}, x => {}, _ => {} }
