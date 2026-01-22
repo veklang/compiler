@@ -19,12 +19,21 @@ describe("parser", () => {
 import io from "std:io";
 import { add, pi } from "./math";
 pub default 3.14;
+pub default add, sub, mul, div;
+pub default *;
 `);
     assert.deepEqual(getProgramBodyKinds(program), [
       "ImportDeclaration",
       "ImportDeclaration",
       "ExportDefaultDeclaration",
+      "ExportDefaultDeclaration",
+      "ExportDefaultDeclaration",
     ]);
+  });
+
+  test("default export list requires identifiers", () => {
+    const result = parse("pub default add, 123;");
+    expectDiagnostics(result.parseDiagnostics, ["PAR070", "PAR020"]);
   });
 
   test("let/const declarations", () => {

@@ -185,6 +185,45 @@ export class Parser {
 
   private parseExportDefault(): ExportDefaultDeclaration {
     const start = this.previousSpan() ?? this.currentSpan();
+    if (this.matchOperator("*")) {
+      this.expectSemicolon();
+      return {
+        kind: "ExportDefaultDeclaration",
+        span: this.spanFrom(start, this.previousSpan()),
+        exportAll: true,
+      };
+    }
+
+    if (this.peek()?.kind === "Identifier") {
+      const startIndex = this.current;
+      const symbols: Identifier[] = [];
+      const first = this.parseIdentifier();
+      if (first) symbols.push(first);
+      let sawComma = false;
+      while (this.matchPunctuator(",")) {
+        sawComma = true;
+        if (!this.checkIdentifierStart()) {
+          this.report(
+            "Default export list must contain only identifiers.",
+            this.currentSpan(),
+            "PAR070",
+          );
+          break;
+        }
+        const symbol = this.parseIdentifier();
+        if (symbol) symbols.push(symbol);
+      }
+      if (sawComma) {
+        this.expectSemicolon();
+        return {
+          kind: "ExportDefaultDeclaration",
+          span: this.spanFrom(start, symbols[symbols.length - 1]?.span ?? start),
+          symbols,
+        };
+      }
+      this.current = startIndex;
+    }
+
     const expression = this.parseExpression();
     this.expectSemicolon();
 
@@ -1846,6 +1885,10 @@ export class Parser {
       next?.kind === "Operator" &&
       next.operator === "="
     );
+  }
+
+  private checkIdentifierStart(): boolean {
+    return this.peek()?.kind === "Identifier";
   }
 
   private withStructLiteral<T>(enabled: boolean, fn: () => T): T {

@@ -54,7 +54,9 @@ export interface ImportDeclaration extends Node {
 
 export interface ExportDefaultDeclaration extends Node {
   kind: "ExportDefaultDeclaration";
-  expression: Expression;
+  expression?: Expression;
+  symbols?: Identifier[];
+  exportAll?: boolean;
 }
 
 export interface FunctionDeclaration extends Node {
