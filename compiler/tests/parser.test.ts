@@ -124,7 +124,7 @@ fn main() {
   test("struct and enum", () => {
     const program = parseOk(`
 struct Stuff { num: i32, str: string }
-enum Color { Red, Green, Blue }
+enum Result<T, E> { Ok(T), Err(E) }
 `);
     assert.deepEqual(getProgramBodyKinds(program), [
       "StructDeclaration",
@@ -252,22 +252,27 @@ fn main() {
     const program = parseOk(`
 import io from "std:io";
 
-fn might_fail(flag: bool): (i32, string | null) {
+enum Result<T, E> {
+  Ok(T),
+  Err(E),
+}
+
+fn might_fail(flag: bool): Result<i32, string> {
   if flag {
-    return 42, null;
+    return Ok(42);
   } else {
-    return 0, "bad flag";
+    return Err("bad flag");
   }
 }
 
 fn main() {
-  let result = might_fail(false);
-  match result {
-    _ => io.eprint("done\\n"),
+  match might_fail(false) {
+    Ok(v)  => io.print("value: " + v + "\\n"),
+    Err(e) => io.eprint("error: " + e + "\\n"),
   }
 }
 `);
-    assert.equal(program.body.length, 3);
+    assert.equal(program.body.length, 4);
   });
 
   test("oop sample program", () => {

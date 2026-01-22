@@ -12,6 +12,7 @@ import type {
   ClassMember,
   ClassMethod,
   EnumDeclaration,
+  EnumPattern,
   EnumVariant,
   ExportDefaultDeclaration,
   Expression,
@@ -314,10 +315,25 @@ export class Parser {
     const variants: EnumVariant[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
       const variantName = this.parseIdentifier();
+      let payload: TypeNode[] | undefined;
+      if (this.matchPunctuator("(")) {
+        payload = [];
+        if (!this.checkPunctuator(")")) {
+          do {
+            const type = this.parseType();
+            if (type) payload.push(type);
+          } while (this.matchPunctuator(","));
+        }
+        this.expectPunctuator(")");
+      }
       const variant: EnumVariant = {
         kind: "EnumVariant",
-        span: this.spanFrom(variantName?.span, variantName?.span),
+        span: this.spanFrom(
+          variantName?.span,
+          payload?.[payload.length - 1]?.span ?? variantName?.span,
+        ),
         name: variantName ?? this.placeholderIdentifier(this.currentSpan()),
+        payload,
       };
       variants.push(variant);
       if (!this.matchPunctuator(",")) break;
@@ -589,6 +605,21 @@ export class Parser {
 
     if (token.kind === "Identifier") {
       const name = this.identifierFromToken(token);
+      if (this.matchPunctuator("(")) {
+        let binding: Identifier | undefined;
+        if (!this.checkPunctuator(")")) {
+          binding =
+            this.parseIdentifier() ??
+            this.placeholderIdentifier(this.currentSpan());
+        }
+        const end = this.expectPunctuator(")");
+        return {
+          kind: "EnumPattern",
+          span: this.spanFrom(token.span, end?.span ?? token.span),
+          name,
+          binding,
+        } satisfies EnumPattern;
+      }
       return {
         kind: "IdentifierPattern",
         span: token.span,

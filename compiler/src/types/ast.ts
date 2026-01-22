@@ -148,6 +148,7 @@ export interface EnumDeclaration extends Node {
 export interface EnumVariant extends Node {
   kind: "EnumVariant";
   name: Identifier;
+  payload?: TypeNode[];
 }
 
 export interface ClassDeclaration extends Node {
@@ -221,7 +222,11 @@ export interface MatchArm extends Node {
   body: BlockStatement | Expression;
 }
 
-export type Pattern = IdentifierPattern | LiteralPattern | WildcardPattern;
+export type Pattern =
+  | IdentifierPattern
+  | LiteralPattern
+  | WildcardPattern
+  | EnumPattern;
 
 export interface IdentifierPattern extends Node {
   kind: "IdentifierPattern";
@@ -235,6 +240,12 @@ export interface LiteralPattern extends Node {
 
 export interface WildcardPattern extends Node {
   kind: "WildcardPattern";
+}
+
+export interface EnumPattern extends Node {
+  kind: "EnumPattern";
+  name: Identifier;
+  binding?: Identifier;
 }
 
 export interface BreakStatement extends Node {
