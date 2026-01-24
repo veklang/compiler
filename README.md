@@ -43,7 +43,8 @@
 
 &nbsp; 🟨 **Lexer**\
 &nbsp; 🟨 **Parser**\
-&nbsp; ⬛ **Emitter**
+&nbsp; 🟨 **Semantic Checker/Static Analysis**\
+&nbsp; ⬛ **Codegen/Emitter**
 
 ---
 
