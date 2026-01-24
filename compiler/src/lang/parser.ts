@@ -1011,19 +1011,45 @@ export class Parser {
 
     if (!this.checkPunctuator("}")) {
       do {
-        const key =
-          this.parseExpression() ??
-          this.placeholderExpression(this.currentSpan());
-        this.expectPunctuator(":");
-        const value =
-          this.parseExpression() ??
-          this.placeholderExpression(this.currentSpan());
-        entries.push({
-          kind: "MapEntry",
-          span: this.spanFrom(key.span, value.span),
-          key,
-          value,
-        });
+        if (
+          this.checkIdentifierStart() &&
+          (this.peek(1)?.lexeme === "," || this.peek(1)?.lexeme === "}")
+        ) {
+          const name =
+            this.parseIdentifier() ??
+            this.placeholderIdentifier(this.currentSpan());
+          const key: LiteralExpression = {
+            kind: "LiteralExpression",
+            span: name.span,
+            literalType: "String",
+            value: name.name,
+          };
+          const value: IdentifierExpression = {
+            kind: "IdentifierExpression",
+            span: name.span,
+            name: name.name,
+          };
+          entries.push({
+            kind: "MapEntry",
+            span: this.spanFrom(key.span, value.span),
+            key,
+            value,
+          });
+        } else {
+          const key =
+            this.parseExpression() ??
+            this.placeholderExpression(this.currentSpan());
+          this.expectPunctuator(":");
+          const value =
+            this.parseExpression() ??
+            this.placeholderExpression(this.currentSpan());
+          entries.push({
+            kind: "MapEntry",
+            span: this.spanFrom(key.span, value.span),
+            key,
+            value,
+          });
+        }
       } while (this.matchPunctuator(","));
     }
 
@@ -1047,10 +1073,18 @@ export class Parser {
         const fieldName =
           this.parseIdentifier() ??
           this.placeholderIdentifier(this.currentSpan());
-        this.expectPunctuator(":");
-        const value =
-          this.parseExpression() ??
-          this.placeholderExpression(this.currentSpan());
+        let value: Expression;
+        if (this.matchPunctuator(":")) {
+          value =
+            this.parseExpression() ??
+            this.placeholderExpression(this.currentSpan());
+        } else {
+          value = {
+            kind: "IdentifierExpression",
+            span: fieldName.span,
+            name: fieldName.name,
+          };
+        }
         fields.push({
           kind: "StructLiteralField",
           span: this.spanFrom(fieldName.span, value.span),

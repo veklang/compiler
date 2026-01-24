@@ -47,6 +47,24 @@ s.num = 2;
     expectDiagnostics(result.checkDiagnostics, ["E2101"]);
   });
 
+  test("no implicit string coercion", () => {
+    const result = check(`
+fn main() {
+  let x = "hi" + 1;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
+  test("explicit cast for mixed numeric types", () => {
+    checkOk(`
+fn main() {
+  let x: i32 = 1;
+  let y: f32 = x as f32;
+}
+`);
+  });
+
   test("cannot infer type without annotation", () => {
     const result = check("let x;");
     expectDiagnostics(result.checkDiagnostics, ["E2102"]);
@@ -63,6 +81,22 @@ struct Stuff { num: i32, str: string }
 let s = Stuff { num: 1 };
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2103"]);
+  });
+
+  test("struct literal shorthand", () => {
+    checkOk(`
+struct Stuff { num: i32, str: string }
+let num = 1;
+let str = "hi";
+let s = Stuff { num, str };
+`);
+  });
+
+  test("map literal shorthand", () => {
+    checkOk(`
+let role = "admin";
+let meta = { role };
+`);
   });
 
   test("struct literal unknown field", () => {

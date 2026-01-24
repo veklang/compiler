@@ -198,9 +198,14 @@ f(a=1, a=2);
 let a = [1, 2, 3];
 let t = (6, 9);
 let m = { "hi": "mom" };
+let name = "sam";
+let m2 = { name };
+let num = 69;
+let str = "lol";
 let s = Stuff { num: 69, str: "lol" };
+let s2 = Stuff { num, str };
 `);
-    assert.equal(program.body.length, 4);
+    assert.equal(program.body.length, 9);
   });
 
   test("return tuple literals", () => {

@@ -1419,6 +1419,13 @@ export class Checker {
 
     if (op === "+") {
       if (this.isStringType(left) || this.isStringType(right)) {
+        if (!this.isStringType(left) || !this.isStringType(right)) {
+          this.report(
+            "String concatenation requires both operands to be string.",
+            node.span,
+            "E2101",
+          );
+        }
         return this.primitive("string");
       }
     }
@@ -1941,8 +1948,15 @@ export class Checker {
   }
 
   private checkCastExpression(node: CastExpression, scope: Scope): Type {
-    this.checkExpression(node.expression, scope);
-    return this.resolveType(node.type, scope);
+    const from = this.checkExpression(node.expression, scope);
+    const to = this.resolveType(node.type, scope);
+
+    if (from.kind === "Primitive" && to.kind === "Primitive") return to;
+    if (from.kind === "Named" && to.kind === "Named" && from.name === to.name)
+      return to;
+
+    this.report("Invalid cast.", node.span, "E2105");
+    return to;
   }
 }
 
