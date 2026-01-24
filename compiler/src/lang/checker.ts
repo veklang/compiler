@@ -63,6 +63,8 @@ interface Symbol {
   type?: Type;
   params?: ParamInfo[];
   isConst?: boolean;
+  isMutable?: boolean;
+  isParam?: boolean;
   isPublic?: boolean;
   parentEnum?: Symbol;
   payloadTypes?: Type[];
@@ -754,6 +756,7 @@ export class Checker {
           hasDefault: !!param.defaultValue,
           isVariadic: false,
           isKwVariadic: false,
+          isMutable: param.isMutable,
           span: param.span,
         });
         this.declareValue(
@@ -784,6 +787,7 @@ export class Checker {
           hasDefault: false,
           isVariadic: true,
           isKwVariadic: false,
+          isMutable: false,
           span: param.span,
         });
         continue;
@@ -804,6 +808,7 @@ export class Checker {
           hasDefault: false,
           isVariadic: false,
           isKwVariadic: true,
+          isMutable: false,
           span: param.span,
         });
       }
@@ -820,6 +825,8 @@ export class Checker {
           node: this.program,
           type: param.type,
           isConst: false,
+          isMutable: param.isMutable,
+          isParam: true,
         },
         scope,
       );
@@ -884,10 +891,39 @@ export class Checker {
     const typeScope = this.createScope(scope);
     this.bindTypeParams(node.typeParams, typeScope);
     symbol.type = this.namedType(node.name.name, symbol, undefined);
+    if (node.extendsType) {
+      const base = this.resolveType(node.extendsType, typeScope);
+      if (!(base.kind === "Named" && base.symbol?.kind === "Class")) {
+        this.report(
+          "Class extends must reference a class type.",
+          node.extendsType.span,
+          "E2801",
+        );
+      }
+    }
+    if (node.implementsTypes) {
+      for (const impl of node.implementsTypes) {
+        const implType = this.resolveType(impl, typeScope);
+        if (!(implType.kind === "Named" && implType.symbol?.kind === "Class")) {
+          this.report(
+            "Class implements must reference a class type.",
+            impl.span,
+            "E2802",
+          );
+        }
+      }
+    }
     for (const member of node.members) {
       if (member.kind === "ClassField")
         this.resolveType(member.type, typeScope);
       if (member.kind === "ClassMethod") {
+        if (member.isAbstract && !node.isAbstract) {
+          this.report(
+            "Abstract method declared in non-abstract class.",
+            member.span,
+            "E2803",
+          );
+        }
         const params = this.resolveParameters(member.params, typeScope);
         const returnType = member.returnType
           ? this.resolveType(member.returnType, typeScope)
@@ -1202,6 +1238,13 @@ export class Checker {
       return { kind: "TypeParam", name: symbol.name, aliasable: false };
     }
     if (symbol.kind === "Alias") {
+      if (node.typeArgs && node.typeArgs.length > 0) {
+        this.report(
+          `Type argument count mismatch for '${name}'.`,
+          node.span,
+          "E2005",
+        );
+      }
       if (this.resolvingAliases.has(name)) {
         if (!this.reportedAliasCycles.has(name)) {
           this.report(`Cyclic type alias '${name}'.`, node.span, "E2004");
@@ -1219,7 +1262,35 @@ export class Checker {
       return resolved;
     }
     const typeArgs = node.typeArgs?.map((t) => this.resolveType(t, scope));
+    const expected = this.expectedTypeArgs(symbol, name);
+    const provided = typeArgs?.length ?? 0;
+    if (expected !== null && expected !== provided) {
+      this.report(
+        `Type argument count mismatch for '${name}'.`,
+        node.span,
+        "E2005",
+      );
+    }
     return this.namedType(name, symbol, typeArgs);
+  }
+
+  private expectedTypeArgs(symbol: Symbol, name: string): number | null {
+    if (name === "Array") return 1;
+    if (name === "Map") return 2;
+    if (symbol.kind === "Struct") {
+      const node = symbol.node as StructDeclaration;
+      return node.typeParams?.length ?? 0;
+    }
+    if (symbol.kind === "Enum") {
+      const node = symbol.node as EnumDeclaration;
+      return node.typeParams?.length ?? 0;
+    }
+    if (symbol.kind === "Class") {
+      const node = symbol.node as ClassDeclaration;
+      return node.typeParams?.length ?? 0;
+    }
+    if (symbol.kind === "Alias" || symbol.kind === "Type") return 0;
+    return null;
   }
 
   private bindTypeParams(
@@ -1476,6 +1547,9 @@ export class Checker {
       if (sym?.isConst) {
         this.report("Cannot assign to const binding.", node.span, "E2501");
       }
+      if (sym?.isParam && !sym.isMutable) {
+        this.report("Cannot assign to readonly parameter.", node.span, "E2503");
+      }
     }
 
     if (node.left.kind === "MemberExpression") {
@@ -1487,6 +1561,13 @@ export class Checker {
             "Cannot mutate through const binding.",
             node.span,
             "E2501",
+          );
+        }
+        if (sym?.isParam && !sym.isMutable) {
+          this.report(
+            "Cannot mutate through readonly parameter.",
+            node.span,
+            "E2503",
           );
         }
       }
@@ -1595,6 +1676,9 @@ export class Checker {
           if (!this.isAssignable(argType, nextParam.type)) {
             this.report("Argument type mismatch.", arg.span, "E2207");
           }
+          if (nextParam.isMutable) {
+            this.requireMutableArgument(arg.value, arg.span, scope);
+          }
           positionalProvided.add(nextParam.name);
           positionalIndex++;
         } else if (variadic) {
@@ -1634,6 +1718,9 @@ export class Checker {
         if (!this.isAssignable(argType, param.type)) {
           this.report("Argument type mismatch.", arg.span, "E2207");
         }
+        if (param.isMutable) {
+          this.requireMutableArgument(arg.value, arg.span, scope);
+        }
         continue;
       }
 
@@ -1650,6 +1737,9 @@ export class Checker {
             if (nextParam) {
               if (!this.isAssignable(elementType, nextParam.type)) {
                 this.report("Argument type mismatch.", arg.span, "E2207");
+              }
+              if (nextParam.isMutable) {
+                this.requireMutableArgument(element, element.span, scope);
               }
               positionalIndex++;
               positionalProvided.add(nextParam.name);
@@ -1708,6 +1798,9 @@ export class Checker {
               if (!this.isAssignable(valueType, param.type)) {
                 this.report("Argument type mismatch.", valueExpr.span, "E2207");
               }
+              if (param.isMutable) {
+                this.requireMutableArgument(valueExpr, valueExpr.span, scope);
+              }
             } else if (kwVariadic) {
               const valueType = this.checkExpression(valueExpr, scope);
               const kwType = this.mapValueType(kwVariadic.type);
@@ -1733,6 +1826,26 @@ export class Checker {
       if (!supplied && !param.hasDefault) {
         this.report(`Missing argument '${param.name}'.`, param.span, "E2207");
       }
+    }
+  }
+
+  private requireMutableArgument(expr: Expression, span: Span, scope: Scope) {
+    if (expr.kind !== "IdentifierExpression") {
+      this.report(
+        "Mut parameter requires a mutable identifier.",
+        span,
+        "E2204",
+      );
+      return;
+    }
+    const sym = this.lookupValue(expr.name, scope);
+    if (!sym) return;
+    if (sym.isConst || (sym.isParam && !sym.isMutable)) {
+      this.report(
+        "Mut parameter requires a mutable identifier.",
+        span,
+        "E2204",
+      );
     }
   }
 
@@ -1952,8 +2065,6 @@ export class Checker {
     const to = this.resolveType(node.type, scope);
 
     if (from.kind === "Primitive" && to.kind === "Primitive") return to;
-    if (from.kind === "Named" && to.kind === "Named" && from.name === to.name)
-      return to;
 
     this.report("Invalid cast.", node.span, "E2105");
     return to;
@@ -1967,5 +2078,6 @@ interface ParamInfo {
   hasDefault: boolean;
   isVariadic: boolean;
   isKwVariadic: boolean;
+  isMutable: boolean;
   span: Span;
 }

@@ -89,9 +89,14 @@ export class Parser {
     const body: Statement[] = [];
 
     while (!this.isAtEnd()) {
+      const before = this.current;
       const statement = this.parseStatement();
       if (statement) body.push(statement);
       else this.advance();
+      if (this.current === before) {
+        this.report("Parser made no progress.", this.currentSpan(), "E1099");
+        this.advance();
+      }
     }
 
     const program: Program = {
@@ -1402,6 +1407,11 @@ export class Parser {
       };
     }
 
+    let leadingMut = false;
+    if (this.checkKeyword("mut")) {
+      this.advance();
+      leadingMut = true;
+    }
     const name = this.parseIdentifier();
     if (!name) return null;
 
@@ -1414,7 +1424,11 @@ export class Parser {
     }
 
     this.expectPunctuator(":");
-    const isMutable = this.matchKeyword("mut");
+    const trailingMut = this.matchKeyword("mut");
+    if (leadingMut && trailingMut) {
+      this.report("Duplicate 'mut' on parameter.", name.span, "E1068");
+    }
+    const isMutable = leadingMut || trailingMut;
     const type = this.parseType() ?? this.placeholderType(name.span);
     let defaultValue: Expression | undefined;
     let hasDefault = false;

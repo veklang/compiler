@@ -65,6 +65,17 @@ fn main() {
 `);
   });
 
+  test("struct casts are not allowed by default", () => {
+    const result = check(`
+struct Stuff { num: i32 }
+fn main() {
+  let s = Stuff { num: 1 };
+  let t = s as Stuff;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2105"]);
+  });
+
   test("cannot infer type without annotation", () => {
     const result = check("let x;");
     expectDiagnostics(result.checkDiagnostics, ["E2102"]);
@@ -156,6 +167,38 @@ match Ok(1) { Ok(v) => {} }
     expectDiagnostics(result.checkDiagnostics, ["E2502"]);
   });
 
+  test("readonly parameter assignment", () => {
+    const result = check(`
+fn f(x: i32) {
+  x = 2;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2503"]);
+  });
+
+  test("readonly parameter member mutation", () => {
+    const result = check(`
+struct Stuff { num: i32 }
+fn f(s: Stuff) {
+  s.num = 2;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2503"]);
+  });
+
+  test("mut parameter requires mutable argument", () => {
+    const result = check(`
+fn bump(mut x: i32) {
+  x = 2;
+}
+fn main() {
+  const y: i32 = 1;
+  bump(y);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2204"]);
+  });
+
   test("logical not with truthy values", () => {
     checkOk('fn main() { let x = !0; let y = !""; let z = !null; }');
   });
@@ -176,6 +219,31 @@ type B = A;
 let x: A = 1;
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2004"]);
+  });
+
+  test("generic arity mismatch", () => {
+    const result = check(`
+struct Box<T> { value: T }
+let x: Box = Box { value: 1 };
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2005", "E2003"]);
+  });
+
+  test("class extends requires class type", () => {
+    const result = check(`
+struct Base { num: i32 }
+class Derived extends Base {}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2801"]);
+  });
+
+  test("abstract method in non-abstract class", () => {
+    const result = check(`
+class Bad {
+  abstract fn foo(): void;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2803"]);
   });
 
   test("all truthy/falsy conditions allowed", () => {
