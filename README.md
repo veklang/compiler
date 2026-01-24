@@ -41,7 +41,7 @@
 
 ## Compiler
 
-&nbsp; ✅ **Lexer**\
+&nbsp; 🟨 **Lexer**\
 &nbsp; 🟨 **Parser**\
 &nbsp; ⬛ **Emitter**
 
