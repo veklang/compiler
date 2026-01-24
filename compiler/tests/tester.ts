@@ -30,12 +30,12 @@ export const test = (name: string, fn: TestFn) => {
 };
 
 export const run = async () => {
-  logHeader("lexer + parser");
+  logHeader("lexer + parser + checker");
 
   const start = process.hrtime.bigint();
   let passed = 0;
   let failed = 0;
-  const suites = Array.from(suiteNames.values()).sort();
+  const suites = Array.from(suiteNames.values());
 
   for (const suite of suites) {
     logSuite(suite);

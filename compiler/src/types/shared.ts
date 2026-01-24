@@ -20,7 +20,7 @@ export const keywords = [
   "inline",
   "struct",
   "enum",
-  "alias",
+  "type",
   "class",
   "abstract",
   "extends",
@@ -64,6 +64,7 @@ export type Keyword = (typeof keywords)[number];
 export type Operator =
   | "+"
   | "-"
+  | "!"
   | "*"
   | "**"
   | "/"

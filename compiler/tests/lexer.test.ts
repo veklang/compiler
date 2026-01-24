@@ -32,12 +32,15 @@ describe("lexer", () => {
   });
 
   test("operators", () => {
-    const tokens = tokensOf("+ - * ** / % = == != is > >= < <= && || | => ->");
+    const tokens = tokensOf(
+      "+ - ! * ** / % = == != is > >= < <= && || | => ->",
+    );
     assert.deepEqual(
       tokens.map((t) => [t.kind, t.lexeme]),
       [
         ["Operator", "+"],
         ["Operator", "-"],
+        ["Operator", "!"],
         ["Operator", "*"],
         ["Operator", "**"],
         ["Operator", "/"],

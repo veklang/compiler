@@ -1,4 +1,5 @@
 import { strict as nodeAssert } from "node:assert";
+import { Checker } from "@/lang/checker";
 import { Lexer } from "@/lang/lexer";
 import { Parser } from "@/lang/parser";
 import type { Program } from "@/types/ast";
@@ -15,6 +16,14 @@ export const parse = (source: string) => {
   return { tokens, lexDiagnostics, program, parseDiagnostics };
 };
 
+export const check = (source: string) => {
+  const parsed = parse(source);
+  const { diagnostics: checkDiagnostics, types } = new Checker(
+    parsed.program,
+  ).checkProgram();
+  return { ...parsed, checkDiagnostics, types };
+};
+
 export const expectNoDiagnostics = (
   lexDiagnostics: Diagnostic[],
   parseDiagnostics: Diagnostic[],
@@ -25,6 +34,19 @@ export const expectNoDiagnostics = (
   ].join("\n");
   assert.equal(
     lexDiagnostics.length + parseDiagnostics.length,
+    0,
+    messages.length
+      ? `Unexpected diagnostics:\n${messages}`
+      : "Unexpected diagnostics",
+  );
+};
+
+export const expectNoCheckDiagnostics = (diagnostics: Diagnostic[]) => {
+  const messages = diagnostics
+    .map((d) => `DIAG ${d.code ?? ""} ${d.message}`)
+    .join("\n");
+  assert.equal(
+    diagnostics.length,
     0,
     messages.length
       ? `Unexpected diagnostics:\n${messages}`

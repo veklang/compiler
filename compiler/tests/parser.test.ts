@@ -53,7 +53,7 @@ const y: i32 = 20;
   });
 
   test("type alias with union", () => {
-    const program = parseOk("alias ID = i32 | string;");
+    const program = parseOk("type ID = i32 | string;");
     assert.equal(program.body[0].kind, "TypeAliasDeclaration");
   });
 
@@ -166,7 +166,7 @@ fn main(): void {
 
   test("expressions and precedence", () => {
     const program = parseOk(`
-let x = 1 + 2 * 3 == 7 || 4 < 5;
+let x = !false || 1 + 2 * 3 == 7 || 4 < 5;
 `);
     assert.equal(program.body[0].kind, "VariableDeclaration");
   });

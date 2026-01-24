@@ -125,7 +125,7 @@ export class Parser {
       return this.parseFunctionDeclaration(isPublic, false);
     if (this.checkKeyword("let") || this.checkKeyword("const"))
       return this.parseVariableDeclaration(isPublic);
-    if (this.checkKeyword("alias")) return this.parseTypeAlias(isPublic);
+    if (this.checkKeyword("type")) return this.parseTypeAlias(isPublic);
     if (this.checkKeyword("struct"))
       return this.parseStructDeclaration(isPublic);
     if (this.checkKeyword("enum")) return this.parseEnumDeclaration(isPublic);
@@ -298,7 +298,7 @@ export class Parser {
   }
 
   private parseTypeAlias(isPublic: boolean): TypeAliasDeclaration {
-    const start = this.expectKeyword("alias");
+    const start = this.expectKeyword("type");
     const name =
       this.parseIdentifier() ?? this.placeholderIdentifier(start?.span);
     this.expectOperator("=");
@@ -868,7 +868,11 @@ export class Parser {
   }
 
   private parseUnary(): Expression | null {
-    if (this.matchOperator("-") || this.matchOperator("+")) {
+    if (
+      this.matchOperator("-") ||
+      this.matchOperator("+") ||
+      this.matchOperator("!")
+    ) {
       const operatorToken = this.previous();
       const argument =
         this.parseUnary() ?? this.placeholderExpression(this.currentSpan());
