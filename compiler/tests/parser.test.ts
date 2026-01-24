@@ -152,6 +152,28 @@ abstract class Stuff extends Base implements IFoo, IBar {
     assert.equal(program.body[0].kind, "ClassDeclaration");
   });
 
+  test("static class modifiers", () => {
+    const program = parseOk(`
+static class Util {
+  static fn add(a: i32, b: i32): i32 { return a + b; }
+}
+static abstract class Bad {}
+abstract static class Worse {}
+`);
+    assert.equal(program.body[0].kind, "ClassDeclaration");
+    assert.equal(program.body[1].kind, "ClassDeclaration");
+    assert.equal(program.body[2].kind, "ClassDeclaration");
+    const util = program.body[0] as any;
+    const bad = program.body[1] as any;
+    const worse = program.body[2] as any;
+    assert.equal(util.isStatic, true);
+    assert.equal(util.isAbstract, false);
+    assert.equal(bad.isStatic, true);
+    assert.equal(bad.isAbstract, true);
+    assert.equal(worse.isStatic, true);
+    assert.equal(worse.isAbstract, true);
+  });
+
   test("control flow", () => {
     const program = parseOk(`
 fn main(): void {

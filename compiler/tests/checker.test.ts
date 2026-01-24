@@ -246,6 +246,13 @@ class Bad {
     expectDiagnostics(result.checkDiagnostics, ["E2803"]);
   });
 
+  test("static abstract class is invalid", () => {
+    const result = check(`
+static abstract class Bad {}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2804"]);
+  });
+
   test("all truthy/falsy conditions allowed", () => {
     checkOk(`
 fn main() {

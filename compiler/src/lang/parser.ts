@@ -134,10 +134,12 @@ export class Parser {
     if (this.checkKeyword("struct"))
       return this.parseStructDeclaration(isPublic);
     if (this.checkKeyword("enum")) return this.parseEnumDeclaration(isPublic);
-    if (this.checkKeyword("abstract"))
-      return this.parseClassDeclaration(isPublic, true);
-    if (this.checkKeyword("class"))
-      return this.parseClassDeclaration(isPublic, false);
+    if (
+      this.checkKeyword("abstract") ||
+      this.checkKeyword("static") ||
+      this.checkKeyword("class")
+    )
+      return this.parseClassDeclaration(isPublic);
     return null;
   }
 
@@ -398,14 +400,38 @@ export class Parser {
     };
   }
 
-  private parseClassDeclaration(
-    isPublic: boolean,
-    isAbstract: boolean,
-  ): ClassDeclaration {
-    const startSpan = isAbstract
-      ? this.expectKeyword("abstract")?.span
-      : this.currentSpan();
-    this.expectKeyword("class");
+  private parseClassDeclaration(isPublic: boolean): ClassDeclaration {
+    let isAbstract = false;
+    let isStatic = false;
+    let startSpan = this.currentSpan();
+    while (this.checkKeyword("abstract") || this.checkKeyword("static")) {
+      if (this.matchKeyword("abstract")) {
+        if (isAbstract)
+          this.report(
+            "Duplicate 'abstract' modifier.",
+            this.previousSpan(),
+            "E1018",
+          );
+        isAbstract = true;
+        startSpan = this.previousSpan();
+        continue;
+      }
+      if (this.matchKeyword("static")) {
+        if (isStatic)
+          this.report(
+            "Duplicate 'static' modifier.",
+            this.previousSpan(),
+            "E1019",
+          );
+        isStatic = true;
+        startSpan = this.previousSpan();
+      }
+    }
+    if (!this.checkKeyword("class")) {
+      this.report("Expected 'class'.", this.currentSpan(), "E1017");
+    }
+    const classToken = this.expectKeyword("class");
+    startSpan = classToken?.span ?? startSpan;
     const name =
       this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     const typeParams = this.parseTypeParams();
@@ -442,6 +468,7 @@ export class Parser {
       name,
       typeParams,
       isAbstract,
+      isStatic,
       isPublic,
       extendsType,
       implementsTypes,

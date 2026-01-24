@@ -891,6 +891,13 @@ export class Checker {
     const typeScope = this.createScope(scope);
     this.bindTypeParams(node.typeParams, typeScope);
     symbol.type = this.namedType(node.name.name, symbol, undefined);
+    if (node.isAbstract && node.isStatic) {
+      this.report(
+        "Class cannot be both static and abstract.",
+        node.span,
+        "E2804",
+      );
+    }
     if (node.extendsType) {
       const base = this.resolveType(node.extendsType, typeScope);
       if (!(base.kind === "Named" && base.symbol?.kind === "Class")) {

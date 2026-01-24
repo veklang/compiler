@@ -158,6 +158,7 @@ export interface ClassDeclaration extends Node {
   name: Identifier;
   typeParams?: TypeParameter[];
   isAbstract: boolean;
+  isStatic: boolean;
   isPublic: boolean;
   extendsType?: TypeNode;
   implementsTypes?: TypeNode[];
