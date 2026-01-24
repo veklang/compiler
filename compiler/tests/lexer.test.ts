@@ -100,6 +100,32 @@ describe("lexer", () => {
     assert.equal(tokens[0].lexeme, '"hi\\n\\t\\"\\\\"');
   });
 
+  test("unicode escapes", () => {
+    const tokens = tokensOf('"\\u{41}\\u{1f600}"');
+    assert.equal(tokens.length, 1);
+    assert.equal(tokens[0].kind, "String");
+  });
+
+  test("invalid escapes", () => {
+    const bad = lex('"\\q"');
+    expectDiagnostics(bad.diagnostics, ["E0004"]);
+  });
+
+  test("invalid unicode escape", () => {
+    const bad = lex('"\\u{0G}"');
+    expectDiagnostics(bad.diagnostics, ["E0004"]);
+  });
+
+  test("unicode escape out of range", () => {
+    const bad = lex('"\\u{110000}"');
+    expectDiagnostics(bad.diagnostics, ["E0004"]);
+  });
+
+  test("unicode escape surrogate", () => {
+    const bad = lex('"\\u{D800}"');
+    expectDiagnostics(bad.diagnostics, ["E0004"]);
+  });
+
   test("multiline strings", () => {
     const source = '"line1\nline2"';
     const tokens = tokensOf(source);
@@ -118,26 +144,26 @@ describe("lexer", () => {
 
   test("unterminated string", () => {
     const result = lex('"oops');
-    expectDiagnostics(result.diagnostics, ["LEX002"]);
+    expectDiagnostics(result.diagnostics, ["E0002"]);
   });
 
   test("unterminated block comment", () => {
     const result = lex("/* nope");
-    expectDiagnostics(result.diagnostics, ["LEX003"]);
+    expectDiagnostics(result.diagnostics, ["E0003"]);
   });
 
   test("invalid hex/binary/exponent", () => {
     const hex = lex("0x");
     const bin = lex("0b");
     const exp = lex("1e+");
-    expectDiagnostics(hex.diagnostics, ["LEX010"]);
-    expectDiagnostics(bin.diagnostics, ["LEX011"]);
-    expectDiagnostics(exp.diagnostics, ["LEX013"]);
+    expectDiagnostics(hex.diagnostics, ["E0010"]);
+    expectDiagnostics(bin.diagnostics, ["E0011"]);
+    expectDiagnostics(exp.diagnostics, ["E0013"]);
   });
 
   test("unexpected char", () => {
     const result = lex("@");
-    expectDiagnostics(result.diagnostics, ["LEX001"]);
+    expectDiagnostics(result.diagnostics, ["E0001"]);
   });
 
   test("full program tokenization", () => {

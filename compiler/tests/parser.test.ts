@@ -33,7 +33,7 @@ pub default *;
 
   test("default export list requires identifiers", () => {
     const result = parse("pub default add, 123;");
-    expectDiagnostics(result.parseDiagnostics, ["PAR070", "PAR020"]);
+    expectDiagnostics(result.parseDiagnostics, ["E1070", "E1020"]);
   });
 
   test("let/const declarations", () => {
@@ -49,7 +49,7 @@ const y: i32 = 20;
 
   test("const must have initializer", () => {
     const result = parse("const nope: i32;");
-    expectDiagnostics(result.parseDiagnostics, ["PAR011"]);
+    expectDiagnostics(result.parseDiagnostics, ["E1011"]);
   });
 
   test("type alias with union", () => {
@@ -104,30 +104,30 @@ fn main() {
 
   test("invalid default ordering", () => {
     const result = parse("fn bad(x: i32 = 1, y: i32) { return; }");
-    expectDiagnostics(result.parseDiagnostics, ["PAR062"]);
+    expectDiagnostics(result.parseDiagnostics, ["E1062"]);
   });
 
   test("default not allowed on mut", () => {
     const result = parse("fn bad(x: mut i32 = 1) { return; }");
-    expectDiagnostics(result.parseDiagnostics, ["PAR061"]);
+    expectDiagnostics(result.parseDiagnostics, ["E1061"]);
   });
 
   test("strict varargs/kwargs rules", () => {
     const dupVarargs = parse(
       "fn bad(*a: Array<i32>, *b: Array<i32>) { return; }",
     );
-    expectDiagnostics(dupVarargs.parseDiagnostics, ["PAR064"]);
+    expectDiagnostics(dupVarargs.parseDiagnostics, ["E1064"]);
 
     const dupKw = parse(
       "fn bad(**a: Map<string, i32>, **b: Map<string, i32>) { return; }",
     );
-    expectDiagnostics(dupKw.parseDiagnostics, ["PAR066"]);
+    expectDiagnostics(dupKw.parseDiagnostics, ["E1066"]);
 
     const afterKw = parse("fn bad(**a: Map<string, i32>, x: i32) { return; }");
-    expectDiagnostics(afterKw.parseDiagnostics, ["PAR067"]);
+    expectDiagnostics(afterKw.parseDiagnostics, ["E1067"]);
 
     const dupSep = parse("fn bad(*, *, x: i32) { return; }");
-    expectDiagnostics(dupSep.parseDiagnostics, ["PAR063"]);
+    expectDiagnostics(dupSep.parseDiagnostics, ["E1063"]);
   });
 
   test("struct and enum", () => {
@@ -178,6 +178,21 @@ let v = io.print("hi\\n", stream=io.stderr) as void;
     assert.equal(program.body[0].kind, "VariableDeclaration");
   });
 
+  test("string unescape supports unicode and null", () => {
+    const program = parseOk(`let s = "a\\u{41}\\0";`);
+    const decl = program.body[0] as any;
+    const literal = decl.initializer as any;
+    assert.equal(literal.value, "aA\0");
+  });
+
+  test("duplicate keyword args", () => {
+    const result = parse(`
+fn f(a: i32) { return; }
+f(a=1, a=2);
+`);
+    expectDiagnostics(result.parseDiagnostics, ["E1069"]);
+  });
+
   test("array, tuple, map, struct literals", () => {
     const program = parseOk(`
 let a = [1, 2, 3];
@@ -206,14 +221,24 @@ let (a, b) = pair();
 
   test("match patterns", () => {
     const program = parseOk(`
-match 50 { 1 => {}, x => {}, _ => {} }
+match 50 { 1 => {}, x => {}, _ => {}, Pair(a, b) => {} }
 `);
     assert.equal(program.body[0].kind, "MatchStatement");
   });
 
+  test("enum pattern bindings", () => {
+    const program = parseOk(`
+match Pair(1, 2) { Pair(a, b) => {} }
+`);
+    const match = program.body[0] as any;
+    const arm = match.arms[0];
+    assert.equal(arm.pattern.kind, "EnumPattern");
+    assert.equal(arm.pattern.bindings.length, 2);
+  });
+
   test("missing semicolon produces error", () => {
     const result = parse("let x = 1");
-    expectDiagnostics(result.parseDiagnostics, ["PAR020"]);
+    expectDiagnostics(result.parseDiagnostics, ["E1020"]);
   });
 
   test("full program sample (functions + io)", () => {
@@ -266,6 +291,10 @@ enum Result<T, E> {
   Err(E),
 }
 
+enum Pair<A, B> {
+  Pair(A, B),
+}
+
 fn might_fail(flag: bool): Result<i32, string> {
   if flag {
     return Ok(42);
@@ -279,9 +308,12 @@ fn main() {
     Ok(v)  => io.print("value: " + v + "\\n"),
     Err(e) => io.eprint("error: " + e + "\\n"),
   }
+  match Pair(1, 2) {
+    Pair(a, b) => io.print(a + b + "\\n"),
+  }
 }
 `);
-    assert.equal(program.body.length, 4);
+    assert.equal(program.body.length, 5);
   });
 
   test("oop sample program", () => {

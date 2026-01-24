@@ -132,7 +132,7 @@ export class Lexer {
         severity: "error",
         message: `Unexpected character '${bad}'.`,
         span: { start, end },
-        code: "LEX001",
+        code: "E0001",
       });
     }
 
@@ -158,7 +158,7 @@ export class Lexer {
           severity: "error",
           message: "Invalid hex literal.",
           span: { start, end },
-          code: "LEX010",
+          code: "E0010",
         });
       }
       this.tokens.push(this.makeToken("Number", lexeme, { start, end }));
@@ -183,7 +183,7 @@ export class Lexer {
           severity: "error",
           message: "Invalid binary literal.",
           span: { start, end },
-          code: "LEX011",
+          code: "E0011",
         });
       }
       this.tokens.push(this.makeToken("Number", lexeme, { start, end }));
@@ -210,7 +210,7 @@ export class Lexer {
           severity: "error",
           message: "Invalid exponent in numeric literal.",
           span: { start, end },
-          code: "LEX013",
+          code: "E0013",
         });
       }
     }
@@ -224,7 +224,7 @@ export class Lexer {
         severity: "error",
         message: "Invalid numeric literal.",
         span: { start, end },
-        code: "LEX012",
+        code: "E0012",
       });
     }
   }
@@ -245,7 +245,103 @@ export class Lexer {
       }
 
       if (ch === "\\") {
+        const escapeStart = this.position();
         this.advance();
+        const next = this.peek();
+
+        if (next === "u") {
+          this.advance();
+          if (this.peek() !== "{") {
+            const end = this.position();
+            this.diagnostics.push({
+              severity: "error",
+              message: "Invalid unicode escape in string literal.",
+              span: { start: escapeStart, end },
+              code: "E0004",
+            });
+            continue;
+          }
+
+          this.advance();
+          const digitsStart = this.position();
+          let sawDigit = false;
+          let invalidDigit = false;
+          let hexDigits = "";
+          while (!this.isAtEnd() && this.peek() !== "}") {
+            const digit = this.peek();
+            if (!this.isHexDigit(digit)) invalidDigit = true;
+            sawDigit = true;
+            hexDigits += digit;
+            this.advance();
+          }
+          if (this.isAtEnd() || this.peek() !== "}") {
+            const end = this.position();
+            this.diagnostics.push({
+              severity: "error",
+              message: "Unterminated unicode escape in string literal.",
+              span: { start: escapeStart, end },
+              code: "E0004",
+            });
+            continue;
+          }
+          if (!sawDigit || invalidDigit) {
+            const end = this.position();
+            this.diagnostics.push({
+              severity: "error",
+              message: "Invalid unicode escape in string literal.",
+              span: { start: digitsStart, end },
+              code: "E0004",
+            });
+          } else {
+            const codePoint = Number.parseInt(hexDigits, 16);
+            if (
+              Number.isNaN(codePoint) ||
+              codePoint > 0x10ffff ||
+              (codePoint >= 0xd800 && codePoint <= 0xdfff)
+            ) {
+              const end = this.position();
+              this.diagnostics.push({
+                severity: "error",
+                message: "Invalid unicode escape in string literal.",
+                span: { start: digitsStart, end },
+                code: "E0004",
+              });
+            }
+          }
+          this.advance();
+          continue;
+        }
+
+        if (
+          next === "n" ||
+          next === "r" ||
+          next === "t" ||
+          next === '"' ||
+          next === "\\" ||
+          next === "0"
+        ) {
+          this.advance();
+          continue;
+        }
+
+        if (this.isAtEnd()) {
+          const end = this.position();
+          this.diagnostics.push({
+            severity: "error",
+            message: "Unterminated string literal.",
+            span: { start, end },
+            code: "E0002",
+          });
+          return;
+        }
+
+        const end = this.position();
+        this.diagnostics.push({
+          severity: "error",
+          message: "Invalid escape sequence in string literal.",
+          span: { start: escapeStart, end },
+          code: "E0004",
+        });
         this.advance();
         continue;
       }
@@ -257,7 +353,7 @@ export class Lexer {
       severity: "error",
       message: "Unterminated string literal.",
       span: { start, end },
-      code: "LEX002",
+      code: "E0002",
     });
   }
 
@@ -304,7 +400,7 @@ export class Lexer {
       severity: "error",
       message: "Unterminated block comment.",
       span: { start: pos, end: pos },
-      code: "LEX003",
+      code: "E0003",
     });
   }
 

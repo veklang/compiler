@@ -20,8 +20,8 @@ export const expectNoDiagnostics = (
   parseDiagnostics: Diagnostic[],
 ) => {
   const messages = [
-    ...lexDiagnostics.map((d) => `LEX ${d.code ?? ""} ${d.message}`),
-    ...parseDiagnostics.map((d) => `PAR ${d.code ?? ""} ${d.message}`),
+    ...lexDiagnostics.map((d) => `DIAG ${d.code ?? ""} ${d.message}`),
+    ...parseDiagnostics.map((d) => `DIAG ${d.code ?? ""} ${d.message}`),
   ].join("\n");
   assert.equal(
     lexDiagnostics.length + parseDiagnostics.length,

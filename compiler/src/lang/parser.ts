@@ -206,7 +206,7 @@ export class Parser {
           this.report(
             "Default export list must contain only identifiers.",
             this.currentSpan(),
-            "PAR070",
+            "E1070",
           );
           break;
         }
@@ -217,7 +217,10 @@ export class Parser {
         this.expectSemicolon();
         return {
           kind: "ExportDefaultDeclaration",
-          span: this.spanFrom(start, symbols[symbols.length - 1]?.span ?? start),
+          span: this.spanFrom(
+            start,
+            symbols[symbols.length - 1]?.span ?? start,
+          ),
           symbols,
         };
       }
@@ -277,7 +280,7 @@ export class Parser {
       this.report(
         "Const declarations require an initializer.",
         name.span,
-        "PAR011",
+        "E1011",
       );
     }
 
@@ -455,7 +458,7 @@ export class Parser {
         name = this.identifierFromToken(nameToken);
       } else {
         if (nameToken)
-          this.report("Expected method name.", nameToken.span, "PAR016");
+          this.report("Expected method name.", nameToken.span, "E1016");
         name = this.placeholderIdentifier(nameToken?.span);
       }
       const params = this.parseParameterList();
@@ -645,18 +648,21 @@ export class Parser {
     if (token.kind === "Identifier") {
       const name = this.identifierFromToken(token);
       if (this.matchPunctuator("(")) {
-        let binding: Identifier | undefined;
+        const bindings: Identifier[] = [];
         if (!this.checkPunctuator(")")) {
-          binding =
-            this.parseIdentifier() ??
-            this.placeholderIdentifier(this.currentSpan());
+          do {
+            const binding =
+              this.parseIdentifier() ??
+              this.placeholderIdentifier(this.currentSpan());
+            bindings.push(binding);
+          } while (this.matchPunctuator(","));
         }
         const end = this.expectPunctuator(")");
         return {
           kind: "EnumPattern",
           span: this.spanFrom(token.span, end?.span ?? token.span),
           name,
-          binding,
+          bindings,
         } satisfies EnumPattern;
       }
       return {
@@ -676,7 +682,7 @@ export class Parser {
     }
 
     if (token.kind === "Operator" && token.lexeme === "=>") {
-      this.report("Unexpected '=>' outside match arm.", token.span, "PAR042");
+      this.report("Unexpected '=>' outside match arm.", token.span, "E1042");
       return this.placeholderPattern(token.span);
     }
 
@@ -696,12 +702,12 @@ export class Parser {
       this.report(
         `Unexpected keyword '${token.lexeme}' in pattern.`,
         token.span,
-        "PAR030",
+        "E1030",
       );
       return this.placeholderPattern(token.span);
     }
 
-    this.report("Invalid match pattern.", token.span, "PAR030");
+    this.report("Invalid match pattern.", token.span, "E1030");
     return this.placeholderPattern(token.span);
   }
 
@@ -961,11 +967,7 @@ export class Parser {
       ) {
         return this.literalFromToken(token);
       }
-      this.report(
-        `Unexpected keyword '${token.lexeme}'.`,
-        token.span,
-        "PAR040",
-      );
+      this.report(`Unexpected keyword '${token.lexeme}'.`, token.span, "E1040");
       return this.placeholderExpression(token.span);
     }
 
@@ -978,7 +980,7 @@ export class Parser {
       return identifier;
     }
 
-    this.report(`Unexpected token '${token.lexeme}'.`, token.span, "PAR041");
+    this.report(`Unexpected token '${token.lexeme}'.`, token.span, "E1041");
     return this.placeholderExpression(token.span);
   }
 
@@ -1111,6 +1113,7 @@ export class Parser {
     const args: Argument[] = [];
     let seenNamed = false;
     let seenKwSpread = false;
+    const seenNamedArgs = new Set<string>();
     if (!this.checkPunctuator(")")) {
       do {
         if (this.matchOperator("**")) {
@@ -1118,7 +1121,7 @@ export class Parser {
             this.report(
               "Multiple '**kwargs' arguments are not allowed.",
               this.previousSpan(),
-              "PAR068",
+              "E1068",
             );
           }
           const value =
@@ -1152,6 +1155,14 @@ export class Parser {
           const name =
             this.parseIdentifier() ??
             this.placeholderIdentifier(this.currentSpan());
+          if (seenNamedArgs.has(name.name)) {
+            this.report(
+              `Duplicate keyword argument '${name.name}'.`,
+              name.span,
+              "E1069",
+            );
+          }
+          seenNamedArgs.add(name.name);
           this.expectOperator("=");
           const value =
             this.parseExpression() ??
@@ -1171,7 +1182,7 @@ export class Parser {
           this.report(
             "Positional arguments cannot follow named arguments.",
             this.currentSpan(),
-            "PAR060",
+            "E1060",
           );
         }
 
@@ -1249,7 +1260,7 @@ export class Parser {
           this.report(
             "Multiple '*' separators or varargs are not allowed.",
             this.previousSpan(),
-            "PAR063",
+            "E1063",
           );
         }
         const sep: ParameterSeparator = {
@@ -1271,7 +1282,7 @@ export class Parser {
         this.report(
           "Multiple '*args' parameters are not allowed.",
           this.previousSpan(),
-          "PAR064",
+          "E1064",
         );
       }
 
@@ -1306,7 +1317,7 @@ export class Parser {
           this.report(
             "Multiple '**' separators or kwargs are not allowed.",
             this.previousSpan(),
-            "PAR065",
+            "E1065",
           );
         }
         const sep: ParameterSeparator = {
@@ -1328,7 +1339,7 @@ export class Parser {
         this.report(
           "Multiple '**kwargs' parameters are not allowed.",
           this.previousSpan(),
-          "PAR066",
+          "E1066",
         );
       }
 
@@ -1360,7 +1371,7 @@ export class Parser {
       this.report(
         "No parameters allowed after '**kwargs'.",
         name.span,
-        "PAR067",
+        "E1067",
       );
     }
 
@@ -1375,7 +1386,7 @@ export class Parser {
         this.report(
           "Default values are not allowed for mut parameters.",
           name.span,
-          "PAR061",
+          "E1061",
         );
       }
       defaultValue =
@@ -1388,7 +1399,7 @@ export class Parser {
       this.report(
         "Required parameters cannot follow default parameters.",
         name.span,
-        "PAR062",
+        "E1062",
       );
     }
 
@@ -1532,7 +1543,7 @@ export class Parser {
       } satisfies NamedType;
     }
 
-    this.report("Expected type.", token.span, "PAR050");
+    this.report("Expected type.", token.span, "E1050");
     return this.placeholderType(token.span);
   }
 
@@ -1561,7 +1572,7 @@ export class Parser {
     const token = this.advance();
     if (!token) return null;
     if (token.kind === "Identifier") return this.identifierFromToken(token);
-    this.report("Expected identifier.", token.span, "PAR001");
+    this.report("Expected identifier.", token.span, "E1001");
     return this.placeholderIdentifier(token.span);
   }
 
@@ -1639,9 +1650,33 @@ export class Parser {
       if (next === "n") out += "\n";
       else if (next === "t") out += "\t";
       else if (next === "r") out += "\r";
+      else if (next === "0") out += "\0";
       else if (next === '"') out += '"';
       else if (next === "\\") out += "\\";
-      else out += next;
+      else if (next === "u" && inner[i + 2] === "{") {
+        let j = i + 3;
+        let hex = "";
+        while (j < inner.length && inner[j] !== "}") {
+          hex += inner[j];
+          j++;
+        }
+        if (j < inner.length && inner[j] === "}" && hex.length > 0) {
+          const codePoint = Number.parseInt(hex, 16);
+          if (
+            !Number.isNaN(codePoint) &&
+            codePoint <= 0x10ffff &&
+            (codePoint < 0xd800 || codePoint > 0xdfff)
+          ) {
+            out += String.fromCodePoint(codePoint);
+            i = j;
+            continue;
+          } else {
+            out += "u";
+          }
+        } else {
+          out += "u";
+        }
+      } else out += next;
       i++;
     }
     return out;
@@ -1703,7 +1738,7 @@ export class Parser {
 
   private expectSemicolon() {
     if (!this.matchPunctuator(";")) {
-      this.report("Expected ';'.", this.currentSpan(), "PAR020");
+      this.report("Expected ';'.", this.currentSpan(), "E1020");
     }
   }
 
@@ -1713,7 +1748,7 @@ export class Parser {
       this.report(
         `Expected ${kind} token.`,
         token?.span ?? this.currentSpan(),
-        "PAR002",
+        "E1002",
       );
       return token ?? this.placeholderToken();
     }
@@ -1726,7 +1761,7 @@ export class Parser {
       this.report(
         `Expected keyword '${keyword}'.`,
         token?.span ?? this.currentSpan(),
-        "PAR003",
+        "E1003",
       );
       return token ?? null;
     }
@@ -1739,7 +1774,7 @@ export class Parser {
       this.report(
         `Expected operator '${operator}'.`,
         token?.span ?? this.currentSpan(),
-        "PAR004",
+        "E1004",
       );
       return token ?? null;
     }
@@ -1752,7 +1787,7 @@ export class Parser {
       this.report(
         `Expected '${punctuator}'.`,
         token?.span ?? this.currentSpan(),
-        "PAR005",
+        "E1005",
       );
       return token ?? null;
     }

@@ -247,7 +247,7 @@ export interface WildcardPattern extends Node {
 export interface EnumPattern extends Node {
   kind: "EnumPattern";
   name: Identifier;
-  binding?: Identifier;
+  bindings: Identifier[];
 }
 
 export interface BreakStatement extends Node {
