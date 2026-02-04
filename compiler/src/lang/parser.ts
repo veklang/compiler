@@ -169,11 +169,10 @@ export class Parser {
         if (!this.matchPunctuator(",")) break;
       }
       this.expectPunctuator("}");
-    } else {
+    } else
       defaultImport =
         this.parseIdentifier() ??
         this.placeholderIdentifier(this.currentSpan());
-    }
 
     this.expectKeyword("from");
     const sourceToken = this.expectKind("String");
@@ -283,13 +282,12 @@ export class Parser {
     if (this.matchOperator("="))
       initializer = this.parseExpression() ?? undefined;
 
-    if (declarationKind === "const" && !initializer) {
+    if (declarationKind === "const" && !initializer)
       this.report(
         "Const declarations require an initializer.",
         name.span,
         "E1011",
       );
-    }
 
     this.expectSemicolon();
 
@@ -427,9 +425,8 @@ export class Parser {
         startSpan = this.previousSpan();
       }
     }
-    if (!this.checkKeyword("class")) {
+    if (!this.checkKeyword("class"))
       this.report("Expected 'class'.", this.currentSpan(), "E1017");
-    }
     const classToken = this.expectKeyword("class");
     startSpan = classToken?.span ?? startSpan;
     const name =
@@ -439,9 +436,8 @@ export class Parser {
     let extendsType: TypeNode | undefined;
     let implementsTypes: TypeNode[] | undefined;
 
-    if (this.matchKeyword("extends")) {
+    if (this.matchKeyword("extends"))
       extendsType = this.parseType() ?? undefined;
-    }
 
     if (this.matchKeyword("implements")) {
       implementsTypes = [];
@@ -498,11 +494,8 @@ export class Parser {
         ? this.parseType()
         : undefined;
       let body: BlockStatement | null = null;
-      if (modifiers.isAbstract) {
-        this.expectSemicolon();
-      } else {
-        body = this.parseBlockStatement();
-      }
+      if (modifiers.isAbstract) this.expectSemicolon();
+      else body = this.parseBlockStatement();
 
       return {
         kind: "ClassMethod",
@@ -1000,9 +993,8 @@ export class Parser {
         token.lexeme === "null" ||
         token.lexeme === "NaN" ||
         token.lexeme === "Infinity"
-      ) {
+      )
         return this.literalFromToken(token);
-      }
       this.report(`Unexpected keyword '${token.lexeme}'.`, token.span, "E1040");
       return this.placeholderExpression(token.span);
     }
@@ -1187,13 +1179,12 @@ export class Parser {
     if (!this.checkPunctuator(")")) {
       do {
         if (this.matchOperator("**")) {
-          if (seenKwSpread) {
+          if (seenKwSpread)
             this.report(
               "Multiple '**kwargs' arguments are not allowed.",
               this.previousSpan(),
               "E1068",
             );
-          }
           const value =
             this.parseExpression() ??
             this.placeholderExpression(this.currentSpan());
@@ -1248,13 +1239,12 @@ export class Parser {
           continue;
         }
 
-        if (seenNamed) {
+        if (seenNamed)
           this.report(
             "Positional arguments cannot follow named arguments.",
             this.currentSpan(),
             "E1060",
           );
-        }
 
         const value = this.parseExpression();
         if (value) {
@@ -1326,13 +1316,12 @@ export class Parser {
           context.seenSeparator ||
           context.seenVariadic ||
           context.seenKwVariadic
-        ) {
+        )
           this.report(
             "Multiple '*' separators or varargs are not allowed.",
             this.previousSpan(),
             "E1063",
           );
-        }
         const sep: ParameterSeparator = {
           kind: "ParameterSeparator",
           span: this.previousSpan(),
@@ -1348,13 +1337,12 @@ export class Parser {
         };
       }
 
-      if (context.seenVariadic) {
+      if (context.seenVariadic)
         this.report(
           "Multiple '*args' parameters are not allowed.",
           this.previousSpan(),
           "E1064",
         );
-      }
 
       const name =
         this.parseIdentifier() ??
@@ -1383,13 +1371,12 @@ export class Parser {
           context.seenSeparator ||
           context.seenVariadic ||
           context.seenKwVariadic
-        ) {
+        )
           this.report(
             "Multiple '**' separators or kwargs are not allowed.",
             this.previousSpan(),
             "E1065",
           );
-        }
         const sep: ParameterSeparator = {
           kind: "ParameterSeparator",
           span: this.previousSpan(),
@@ -1405,13 +1392,12 @@ export class Parser {
         };
       }
 
-      if (context.seenKwVariadic) {
+      if (context.seenKwVariadic)
         this.report(
           "Multiple '**kwargs' parameters are not allowed.",
           this.previousSpan(),
           "E1066",
         );
-      }
 
       const name =
         this.parseIdentifier() ??
@@ -1442,45 +1428,41 @@ export class Parser {
     const name = this.parseIdentifier();
     if (!name) return null;
 
-    if (context.seenKwVariadic) {
+    if (context.seenKwVariadic)
       this.report(
         "No parameters allowed after '**kwargs'.",
         name.span,
         "E1067",
       );
-    }
 
     this.expectPunctuator(":");
     const trailingMut = this.matchKeyword("mut");
-    if (leadingMut && trailingMut) {
+    if (leadingMut && trailingMut)
       this.report("Duplicate 'mut' on parameter.", name.span, "E1068");
-    }
     const isMutable = leadingMut || trailingMut;
     const type = this.parseType() ?? this.placeholderType(name.span);
     let defaultValue: Expression | undefined;
     let hasDefault = false;
 
     if (this.matchOperator("=")) {
-      if (isMutable) {
+      if (isMutable)
         this.report(
           "Default values are not allowed for mut parameters.",
           name.span,
           "E1061",
         );
-      }
       defaultValue =
         this.parseExpression() ??
         this.placeholderExpression(this.currentSpan());
       hasDefault = true;
     }
 
-    if (!hasDefault && context.seenDefault) {
+    if (!hasDefault && context.seenDefault)
       this.report(
         "Required parameters cannot follow default parameters.",
         name.span,
         "E1062",
       );
-    }
 
     const node: Parameter = {
       kind: "Parameter",
@@ -1680,32 +1662,19 @@ export class Parser {
         token.lexeme.includes("E")
       ) {
         literalType = "Float";
-      } else {
-        literalType = "Integer";
-      }
+      } else literalType = "Integer";
     }
 
     if (token.kind === "Keyword") {
-      if (token.lexeme === "true" || token.lexeme === "false") {
+      if (token.lexeme === "true" || token.lexeme === "false")
         literalType = "Boolean";
-      }
-      if (token.lexeme === "null") {
-        literalType = "Null";
-      }
-      if (token.lexeme === "NaN") {
-        literalType = "Float";
-      }
-      if (token.lexeme === "Infinity") {
-        literalType = "Float";
-      }
+      if (token.lexeme === "null") literalType = "Null";
+      if (token.lexeme === "NaN") literalType = "Float";
+      if (token.lexeme === "Infinity") literalType = "Float";
     }
 
-    if (token.kind === "String") {
-      literalType = "String";
-    }
-    if (token.kind === "Number") {
-      value = token.lexeme.replace(/_/g, "");
-    }
+    if (token.kind === "String") literalType = "String";
+    if (token.kind === "Number") value = token.lexeme.replace(/_/g, "");
 
     return {
       kind: "LiteralExpression",
@@ -1749,12 +1718,8 @@ export class Parser {
             out += String.fromCodePoint(codePoint);
             i = j;
             continue;
-          } else {
-            out += "u";
-          }
-        } else {
-          out += "u";
-        }
+          } else out += "u";
+        } else out += "u";
       } else out += next;
       i++;
     }

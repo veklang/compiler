@@ -417,9 +417,8 @@ export class Lexer {
   }
 
   private matchOperator(): Operator | null {
-    for (const candidate of operatorCandidates) {
+    for (const candidate of operatorCandidates)
       if (this.source.startsWith(candidate, this.index)) return candidate;
-    }
     return null;
   }
 
@@ -430,9 +429,7 @@ export class Lexer {
     if (ch === "\n") {
       this.line++;
       this.column = 1;
-    } else {
-      this.column++;
-    }
+    } else this.column++;
     return ch;
   }
 

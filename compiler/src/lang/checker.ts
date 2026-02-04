@@ -594,21 +594,19 @@ export class Checker {
       ? this.checkExpression(node.initializer, scope, declaredType)
       : undefined;
 
-    if (node.declarationKind === "const" && !node.initializer) {
+    if (node.declarationKind === "const" && !node.initializer)
       this.report(
         "Const declarations require an initializer.",
         node.span,
         "E2106",
       );
-    }
 
-    if (!declaredType && !initType) {
+    if (!declaredType && !initType)
       this.report(
         "Cannot infer type without annotation or initializer.",
         node.span,
         "E2102",
       );
-    }
 
     const finalType = declaredType ?? initType ?? this.errorType();
 
@@ -848,9 +846,7 @@ export class Checker {
     const typeScope = this.createScope(scope);
     this.bindTypeParams(node.typeParams, typeScope);
     symbol.type = this.namedType(node.name.name, symbol, undefined);
-    for (const field of node.fields) {
-      this.resolveType(field.type, typeScope);
-    }
+    for (const field of node.fields) this.resolveType(field.type, typeScope);
   }
 
   private checkEnumDeclaration(node: EnumDeclaration, scope: Scope) {
@@ -905,9 +901,8 @@ export class Checker {
       if (base.kind === "Named" && base.symbol?.kind === "Class") {
         const baseNode = base.symbol.node as ClassDeclaration;
         const baseRequired = this.collectAbstractMethods(baseNode, scope);
-        for (const [name, sig] of baseRequired.entries()) {
+        for (const [name, sig] of baseRequired.entries())
           if (!required.has(name)) required.set(name, sig);
-        }
       }
     }
     return required;
@@ -947,13 +942,12 @@ export class Checker {
     const typeScope = this.createScope(scope);
     this.bindTypeParams(node.typeParams, typeScope);
     symbol.type = this.namedType(node.name.name, symbol, undefined);
-    if (node.isAbstract && node.isStatic) {
+    if (node.isAbstract && node.isStatic)
       this.report(
         "Class cannot be both static and abstract.",
         node.span,
         "E2804",
       );
-    }
     if (node.extendsType) {
       const base = this.resolveType(node.extendsType, typeScope);
       if (!(base.kind === "Named" && base.symbol?.kind === "Class")) {
@@ -1004,13 +998,12 @@ export class Checker {
       if (member.kind === "ClassField")
         this.resolveType(member.type, typeScope);
       if (member.kind === "ClassMethod") {
-        if (member.isAbstract && !node.isAbstract) {
+        if (member.isAbstract && !node.isAbstract)
           this.report(
             "Abstract method declared in non-abstract class.",
             member.span,
             "E2803",
           );
-        }
         const params = this.resolveParameters(member.params, typeScope);
         const returnType = member.returnType
           ? this.resolveType(member.returnType, typeScope)
@@ -1042,12 +1035,11 @@ export class Checker {
           const returns: Type[] = [];
           this.checkBlockStatement(member.body, bodyScope, returns);
           this.currentFunction = prev;
-          if (!member.returnType) {
+          if (!member.returnType)
             methodType.returnType =
               returns.length === 0
                 ? this.primitive("void")
                 : this.makeUnion(returns);
-          }
         }
       }
     }
@@ -1083,9 +1075,8 @@ export class Checker {
     const functionType = this.currentFunction.type;
     if (!functionType || functionType.kind !== "Function") return;
     if (!node.value) {
-      if (!this.isAssignable(this.primitive("void"), functionType.returnType)) {
+      if (!this.isAssignable(this.primitive("void"), functionType.returnType))
         this.report("Return type mismatch.", node.span, "E2302");
-      }
       return;
     }
     const valueType = this.checkExpression(
@@ -1093,9 +1084,8 @@ export class Checker {
       scope,
       functionType.returnType,
     );
-    if (!this.isAssignable(valueType, functionType.returnType)) {
+    if (!this.isAssignable(valueType, functionType.returnType))
       this.report("Return type mismatch.", node.span, "E2302");
-    }
   }
 
   private checkIfStatement(node: IfStatement, scope: Scope) {
@@ -1112,11 +1102,9 @@ export class Checker {
 
     this.checkBlockStatement(node.thenBranch, thenScope);
     if (node.elseBranch) {
-      if (node.elseBranch.kind === "IfStatement") {
+      if (node.elseBranch.kind === "IfStatement")
         this.checkIfStatement(node.elseBranch, elseScope);
-      } else {
-        this.checkBlockStatement(node.elseBranch, elseScope);
-      }
+      else this.checkBlockStatement(node.elseBranch, elseScope);
     }
   }
 
@@ -1256,9 +1244,8 @@ export class Checker {
     }
     if (pattern.kind === "LiteralPattern") {
       const litType = this.checkExpression(pattern.literal, scope);
-      if (!this.isAssignable(litType, exprType)) {
+      if (!this.isAssignable(litType, exprType))
         this.report("Pattern type mismatch.", pattern.span, "E2602");
-      }
       return true;
     }
     if (pattern.kind === "WildcardPattern") return true;
@@ -1276,9 +1263,8 @@ export class Checker {
     }
     seenVariants.add(enumPattern.name.name);
     const payloadTypes = variantSymbol.payloadTypes ?? [];
-    if (payloadTypes.length !== enumPattern.bindings.length) {
+    if (payloadTypes.length !== enumPattern.bindings.length)
       this.report("Enum payload arity mismatch.", enumPattern.span, "E2601");
-    }
     for (let i = 0; i < enumPattern.bindings.length; i++) {
       const binding = enumPattern.bindings[i];
       const type =
@@ -1338,9 +1324,8 @@ export class Checker {
 
   private resolveNamedType(node: NamedType, scope: Scope): Type {
     const name = node.name.name;
-    if (primitiveNames.includes(name as PrimitiveName)) {
+    if (primitiveNames.includes(name as PrimitiveName))
       return this.primitive(name as PrimitiveName);
-    }
     const symbol = this.lookupTypeSymbol(name, scope);
     if (!symbol) {
       this.report(`Unknown type '${name}'.`, node.span, "E2003");
@@ -1360,9 +1345,8 @@ export class Checker {
       if (this.resolvingAliases.has(name)) {
         if (!this.reportedAliasCycles.has(name)) {
           this.report(`Cyclic type alias '${name}'.`, node.span, "E2004");
-          for (const alias of this.resolvingAliases) {
+          for (const alias of this.resolvingAliases)
             this.reportedAliasCycles.add(alias);
-          }
         }
         return this.errorType();
       }
@@ -1479,15 +1463,11 @@ export class Checker {
     if (node.literalType === "Integer") {
       type = this.pickNumericType(expected, "int");
       this.checkIntegerLiteral(node, type);
-    } else if (node.literalType === "Float") {
+    } else if (node.literalType === "Float")
       type = this.pickNumericType(expected, "float");
-    } else if (node.literalType === "Boolean") {
-      type = this.primitive("bool");
-    } else if (node.literalType === "String") {
-      type = this.primitive("string");
-    } else {
-      type = this.primitive("null");
-    }
+    else if (node.literalType === "Boolean") type = this.primitive("bool");
+    else if (node.literalType === "String") type = this.primitive("string");
+    else type = this.primitive("null");
     this.types.set(node, type);
     return type;
   }
@@ -1514,27 +1494,23 @@ export class Checker {
     const value = node.value.replace(/_/g, "");
     let bigintValue: bigint;
     try {
-      if (value.startsWith("0x") || value.startsWith("0X")) {
+      if (value.startsWith("0x") || value.startsWith("0X"))
         bigintValue = BigInt(value);
-      } else if (value.startsWith("0b") || value.startsWith("0B")) {
+      else if (value.startsWith("0b") || value.startsWith("0B"))
         bigintValue = BigInt(value);
-      } else {
-        bigintValue = BigInt(value);
-      }
+      else bigintValue = BigInt(value);
     } catch {
       return;
     }
     const [min, max] = this.intRange(target.name);
-    if (bigintValue < min || bigintValue > max) {
+    if (bigintValue < min || bigintValue > max)
       this.report("Integer literal out of range.", node.span, "E2401");
-    }
   }
 
   private intRange(name: PrimitiveName): [bigint, bigint] {
     const bits = Number(name.slice(1));
-    if (name.startsWith("u")) {
+    if (name.startsWith("u"))
       return [BigInt(0), (BigInt(1) << BigInt(bits)) - BigInt(1)];
-    }
     const max = (BigInt(1) << BigInt(bits - 1)) - BigInt(1);
     const min = -(BigInt(1) << BigInt(bits - 1));
     return [min, max];
@@ -1577,9 +1553,8 @@ export class Checker {
     }
 
     if (["==", "!="].includes(op)) {
-      if (!this.isAssignable(left, right) && !this.isAssignable(right, left)) {
+      if (!this.isAssignable(left, right) && !this.isAssignable(right, left))
         this.report("Incompatible operands for equality.", node.span, "E2101");
-      }
       return this.primitive("bool");
     }
 
@@ -1637,9 +1612,7 @@ export class Checker {
 
   private checkUnary(node: UnaryExpression, scope: Scope): Type {
     const arg = this.checkExpression(node.argument, scope);
-    if (node.operator === "!") {
-      return this.primitive("bool");
-    }
+    if (node.operator === "!") return this.primitive("bool");
     if (!this.isNumericType(arg)) {
       this.report(
         "Unary operator requires numeric operand.",
@@ -1656,70 +1629,58 @@ export class Checker {
 
     if (node.left.kind === "IdentifierExpression") {
       const sym = this.lookupValue(node.left.name, scope);
-      if (sym?.isConst) {
+      if (sym?.isConst)
         this.report("Cannot assign to const binding.", node.span, "E2501");
-      }
-      if (sym?.isParam && !sym.isMutable) {
+      if (sym?.isParam && !sym.isMutable)
         this.report("Cannot assign to readonly parameter.", node.span, "E2503");
-      }
     }
 
     if (node.left.kind === "MemberExpression") {
       const base = node.left.object;
       if (base.kind === "IdentifierExpression") {
         const sym = this.lookupValue(base.name, scope);
-        if (sym?.isConst) {
+        if (sym?.isConst)
           this.report(
             "Cannot mutate through const binding.",
             node.span,
             "E2501",
           );
-        }
-        if (sym?.isParam && !sym.isMutable) {
+        if (sym?.isParam && !sym.isMutable)
           this.report(
             "Cannot mutate through readonly parameter.",
             node.span,
             "E2503",
           );
-        }
       }
     }
 
-    if (!this.isAssignable(rightType, leftType)) {
+    if (!this.isAssignable(rightType, leftType))
       this.report("Type mismatch in assignment.", node.span, "E2101");
-    }
     return leftType;
   }
 
   private checkCall(node: CallExpression, scope: Scope): Type {
     const calleeType = this.checkExpression(node.callee, scope);
-    if (calleeType.kind !== "Function") {
-      return this.errorType();
-    }
+    if (calleeType.kind !== "Function") return this.errorType();
 
     if (node.callee.kind === "IdentifierExpression") {
       const sym = this.lookupValue(node.callee.name, scope);
       if (sym?.isClassConstructor && sym.parentClass?.node) {
         const classNode = sym.parentClass.node as ClassDeclaration;
-        if (classNode.isStatic) {
+        if (classNode.isStatic)
           this.report("Cannot instantiate a static class.", node.span, "E2805");
-        }
-        if (classNode.isAbstract) {
+        if (classNode.isAbstract)
           this.report(
             "Cannot instantiate an abstract class.",
             node.span,
             "E2808",
           );
-        }
       }
     }
 
     const paramInfo = this.lookupParamInfo(node.callee, scope);
-    if (paramInfo) {
-      this.checkArgumentsWithInfo(node.args, paramInfo, scope);
-    } else {
-      this.checkArgumentsByType(node.args, calleeType.params, scope);
-    }
+    if (paramInfo) this.checkArgumentsWithInfo(node.args, paramInfo, scope);
+    else this.checkArgumentsByType(node.args, calleeType.params, scope);
     return calleeType.returnType;
   }
 
@@ -1738,9 +1699,8 @@ export class Checker {
         const member = classNode.members.find(
           (m) => m.name.name === callee.property.name,
         );
-        if (member && member.kind === "ClassMethod") {
+        if (member && member.kind === "ClassMethod")
           return this.resolveParameters(member.params, scope);
-        }
       }
     }
     return null;
@@ -1760,15 +1720,12 @@ export class Checker {
         }
         const paramType = params[position];
         const argType = this.checkExpression(arg.value, scope, paramType);
-        if (!this.isAssignable(argType, paramType)) {
+        if (!this.isAssignable(argType, paramType))
           this.report("Argument type mismatch.", arg.span, "E2207");
-        }
         position++;
         continue;
       }
-      if (arg.kind === "SpreadArgument") {
-        this.checkExpression(arg.value, scope);
-      }
+      if (arg.kind === "SpreadArgument") this.checkExpression(arg.value, scope);
     }
   }
 
@@ -1785,9 +1742,7 @@ export class Checker {
     const kwVariadic = params.find((p) => p.isKwVariadic);
     const positionalProvided = new Set<string>();
 
-    for (const param of params) {
-      paramByName.set(param.name, param);
-    }
+    for (const param of params) paramByName.set(param.name, param);
 
     for (const arg of args) {
       if (arg.kind === "PositionalArgument") {
@@ -1802,17 +1757,14 @@ export class Checker {
             scope,
             nextParam.type,
           );
-          if (!this.isAssignable(argType, nextParam.type)) {
+          if (!this.isAssignable(argType, nextParam.type))
             this.report("Argument type mismatch.", arg.span, "E2207");
-          }
-          if (nextParam.isMutable) {
+          if (nextParam.isMutable)
             this.requireMutableArgument(arg.value, arg.span, scope);
-          }
           positionalProvided.add(nextParam.name);
           positionalIndex++;
-        } else if (variadic) {
+        } else if (variadic)
           this.checkVariadicArg(arg.value, variadic.type, scope);
-        }
         continue;
       }
 
@@ -1831,9 +1783,8 @@ export class Checker {
           if (kwVariadic) {
             const valueType = this.checkExpression(arg.value, scope);
             const kwType = this.mapValueType(kwVariadic.type);
-            if (kwType && !this.isAssignable(valueType, kwType)) {
+            if (kwType && !this.isAssignable(valueType, kwType))
               this.report("Argument type mismatch.", arg.span, "E2207");
-            }
           } else {
             this.report(
               `Unknown keyword argument '${name}'.`,
@@ -1844,12 +1795,10 @@ export class Checker {
           continue;
         }
         const argType = this.checkExpression(arg.value, scope, param.type);
-        if (!this.isAssignable(argType, param.type)) {
+        if (!this.isAssignable(argType, param.type))
           this.report("Argument type mismatch.", arg.span, "E2207");
-        }
-        if (param.isMutable) {
+        if (param.isMutable)
           this.requireMutableArgument(arg.value, arg.span, scope);
-        }
         continue;
       }
 
@@ -1864,33 +1813,28 @@ export class Checker {
             }
             const elementType = this.checkExpression(element, scope);
             if (nextParam) {
-              if (!this.isAssignable(elementType, nextParam.type)) {
+              if (!this.isAssignable(elementType, nextParam.type))
                 this.report("Argument type mismatch.", arg.span, "E2207");
-              }
-              if (nextParam.isMutable) {
+              if (nextParam.isMutable)
                 this.requireMutableArgument(element, element.span, scope);
-              }
               positionalIndex++;
               positionalProvided.add(nextParam.name);
-            } else if (variadic) {
+            } else if (variadic)
               this.checkVariadicArg(element, variadic.type, scope);
-            }
           }
         } else if (this.isArrayLike(argType)) {
-          if (!variadic) {
+          if (!variadic)
             this.report(
               "Spread argument requires variadic parameter.",
               arg.span,
               "E2206",
             );
-          }
-        } else {
+        } else
           this.report(
             "Spread argument must be an array or tuple.",
             arg.span,
             "E2206",
           );
-        }
         continue;
       }
 
@@ -1904,9 +1848,8 @@ export class Checker {
           const { entries, hasNonString } = this.extractStringEntries(
             arg.value,
           );
-          if (hasNonString) {
+          if (hasNonString)
             this.report("Kw-spread keys must be strings.", arg.span, "E2206");
-          }
           for (const [key, valueExpr] of entries.entries()) {
             if (provided.has(key) || namedFromSpread.has(key)) {
               this.report(
@@ -1924,18 +1867,15 @@ export class Checker {
                 scope,
                 param.type,
               );
-              if (!this.isAssignable(valueType, param.type)) {
+              if (!this.isAssignable(valueType, param.type))
                 this.report("Argument type mismatch.", valueExpr.span, "E2207");
-              }
-              if (param.isMutable) {
+              if (param.isMutable)
                 this.requireMutableArgument(valueExpr, valueExpr.span, scope);
-              }
             } else if (kwVariadic) {
               const valueType = this.checkExpression(valueExpr, scope);
               const kwType = this.mapValueType(kwVariadic.type);
-              if (kwType && !this.isAssignable(valueType, kwType)) {
+              if (kwType && !this.isAssignable(valueType, kwType))
                 this.report("Argument type mismatch.", valueExpr.span, "E2207");
-              }
             } else {
               this.report(
                 `Unknown keyword argument '${key}'.`,
@@ -1996,22 +1936,19 @@ export class Checker {
     const elementType = this.arrayElementType(variadicType);
     if (!elementType) return;
     const argType = this.checkExpression(expr, scope, elementType);
-    if (!this.isAssignable(argType, elementType)) {
+    if (!this.isAssignable(argType, elementType))
       this.report("Argument type mismatch.", expr.span, "E2207");
-    }
   }
 
   private arrayElementType(type: Type): Type | null {
-    if (type.kind === "Named" && type.name === "Array" && type.typeArgs?.[0]) {
+    if (type.kind === "Named" && type.name === "Array" && type.typeArgs?.[0])
       return type.typeArgs[0];
-    }
     return null;
   }
 
   private mapValueType(type: Type): Type | null {
-    if (type.kind === "Named" && type.name === "Map" && type.typeArgs?.[1]) {
+    if (type.kind === "Named" && type.name === "Map" && type.typeArgs?.[1])
       return type.typeArgs[1];
-    }
     return null;
   }
 
@@ -2025,11 +1962,9 @@ export class Checker {
       if (
         entry.key.kind === "LiteralExpression" &&
         entry.key.literalType === "String"
-      ) {
+      )
         entries.set(entry.key.value, entry.value);
-      } else {
-        hasNonString = true;
-      }
+      else hasNonString = true;
     }
     return { entries, hasNonString };
   }
@@ -2148,9 +2083,8 @@ export class Checker {
       }
       const targetType = this.resolveType(target.type, scope);
       const valueType = this.checkExpression(field.value, scope, targetType);
-      if (!this.isAssignable(valueType, targetType)) {
+      if (!this.isAssignable(valueType, targetType))
         this.report("Struct field type mismatch.", field.span, "E2101");
-      }
     }
     for (const field of structNode.fields) {
       if (!provided.has(field.name.name)) {
@@ -2182,10 +2116,9 @@ export class Checker {
     this.declareParameters(params, bodyScope);
     const returns: Type[] = [];
     this.checkBlockStatement(node.body, bodyScope, returns);
-    if (!node.returnType) {
+    if (!node.returnType)
       fnType.returnType =
         returns.length === 0 ? this.primitive("void") : this.makeUnion(returns);
-    }
     return fnType;
   }
 
