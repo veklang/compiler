@@ -7,6 +7,7 @@ import type {
   CallExpression,
   CastExpression,
   ClassDeclaration,
+  ClassMethod,
   EnumDeclaration,
   EnumPattern,
   Expression,
@@ -66,6 +67,8 @@ interface Symbol {
   isMutable?: boolean;
   isParam?: boolean;
   isPublic?: boolean;
+  isClassConstructor?: boolean;
+  parentClass?: Symbol;
   parentEnum?: Symbol;
   payloadTypes?: Type[];
 }
@@ -885,6 +888,59 @@ export class Checker {
     };
   }
 
+  private collectAbstractMethods(
+    node: ClassDeclaration,
+    scope: Scope,
+  ): Map<string, FunctionRefType> {
+    const required = new Map<string, FunctionRefType>();
+    const ownMethods = node.members.filter(
+      (m) => m.kind === "ClassMethod",
+    ) as ClassMethod[];
+    for (const method of ownMethods) {
+      if (!method.isAbstract) continue;
+      required.set(method.name.name, this.methodSignature(method, scope));
+    }
+    if (node.extendsType) {
+      const base = this.resolveType(node.extendsType, scope);
+      if (base.kind === "Named" && base.symbol?.kind === "Class") {
+        const baseNode = base.symbol.node as ClassDeclaration;
+        const baseRequired = this.collectAbstractMethods(baseNode, scope);
+        for (const [name, sig] of baseRequired.entries()) {
+          if (!required.has(name)) required.set(name, sig);
+        }
+      }
+    }
+    return required;
+  }
+
+  private collectConcreteMethods(
+    node: ClassDeclaration,
+    scope: Scope,
+  ): Map<string, FunctionRefType> {
+    const implemented = new Map<string, FunctionRefType>();
+    const ownMethods = node.members.filter(
+      (m) => m.kind === "ClassMethod",
+    ) as ClassMethod[];
+    for (const method of ownMethods) {
+      if (method.isAbstract) continue;
+      implemented.set(method.name.name, this.methodSignature(method, scope));
+    }
+    return implemented;
+  }
+
+  private methodSignature(method: ClassMethod, scope: Scope): FunctionRefType {
+    const params = this.resolveParameters(method.params, scope);
+    const returnType = method.returnType
+      ? this.resolveType(method.returnType, scope)
+      : this.unknownType();
+    return {
+      kind: "Function",
+      params: params.map((p) => p.type),
+      returnType,
+      aliasable: false,
+    };
+  }
+
   private checkClassDeclaration(node: ClassDeclaration, scope: Scope) {
     const symbol = this.lookupTypeSymbol(node.name.name, scope);
     if (!symbol) return;
@@ -906,6 +962,30 @@ export class Checker {
           node.extendsType.span,
           "E2801",
         );
+      } else {
+        const baseNode = base.symbol.node as ClassDeclaration;
+        const required = this.collectAbstractMethods(baseNode, scope);
+        const implemented = this.collectConcreteMethods(node, scope);
+        for (const [name, baseSig] of required.entries()) {
+          const implSig = implemented.get(name);
+          if (!implSig) {
+            if (!node.isAbstract) {
+              this.report(
+                `Missing implementation for abstract method '${name}'.`,
+                node.span,
+                "E2806",
+              );
+            }
+            continue;
+          }
+          if (!this.typeEquals(implSig, baseSig)) {
+            this.report(
+              `Override of '${name}' does not match base signature.`,
+              node.span,
+              "E2807",
+            );
+          }
+        }
       }
     }
     if (node.implementsTypes) {
@@ -971,6 +1051,31 @@ export class Checker {
         }
       }
     }
+
+    const ctor = node.members.find(
+      (m) => m.kind === "ClassMethod" && m.name.name === "constructor",
+    ) as ClassMethod | undefined;
+    const ctorParams = ctor
+      ? this.resolveParameters(ctor.params, typeScope)
+      : [];
+    const ctorType: FunctionRefType = {
+      kind: "Function",
+      params: ctorParams.map((p) => p.type),
+      returnType: symbol.type ?? this.unknownType(),
+      aliasable: false,
+    };
+    this.declareValue(
+      {
+        kind: "Function",
+        name: node.name.name,
+        node,
+        type: ctorType,
+        params: ctorParams,
+        isClassConstructor: true,
+        parentClass: symbol,
+      },
+      scope,
+    );
   }
 
   private checkReturnStatement(node: ReturnStatement, scope: Scope) {
@@ -1590,6 +1695,23 @@ export class Checker {
     const calleeType = this.checkExpression(node.callee, scope);
     if (calleeType.kind !== "Function") {
       return this.errorType();
+    }
+
+    if (node.callee.kind === "IdentifierExpression") {
+      const sym = this.lookupValue(node.callee.name, scope);
+      if (sym?.isClassConstructor && sym.parentClass?.node) {
+        const classNode = sym.parentClass.node as ClassDeclaration;
+        if (classNode.isStatic) {
+          this.report("Cannot instantiate a static class.", node.span, "E2805");
+        }
+        if (classNode.isAbstract) {
+          this.report(
+            "Cannot instantiate an abstract class.",
+            node.span,
+            "E2808",
+          );
+        }
+      }
     }
 
     const paramInfo = this.lookupParamInfo(node.callee, scope);

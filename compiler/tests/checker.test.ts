@@ -253,6 +253,62 @@ static abstract class Bad {}
     expectDiagnostics(result.checkDiagnostics, ["E2804"]);
   });
 
+  test("class instantiation uses constructor params", () => {
+    const result = check(`
+class Stuff {
+  fn constructor(v: i32) { return; }
+}
+fn main() {
+  let s = Stuff();
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
+  });
+
+  test("static class cannot be instantiated", () => {
+    const result = check(`
+static class Util {}
+fn main() {
+  let u = Util();
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2805"]);
+  });
+
+  test("cannot instantiate abstract class", () => {
+    const result = check(`
+abstract class Base {
+  abstract fn get(): i32;
+}
+fn main() {
+  let b = Base();
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2808"]);
+  });
+
+  test("missing abstract override is error", () => {
+    const result = check(`
+abstract class Base {
+  abstract fn get(): i32;
+}
+class Child extends Base {}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2806"]);
+  });
+
+  test("abstract override signature mismatch", () => {
+    const result = check(`
+abstract class Base {
+  abstract fn get(): i32;
+}
+class Child extends Base {
+  fn get(): f32 { return 0.0; }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2807"]);
+  });
+
   test("all truthy/falsy conditions allowed", () => {
     checkOk(`
 fn main() {
