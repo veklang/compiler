@@ -15,6 +15,8 @@ import type {
   FunctionType,
   Identifier,
   IdentifierExpression,
+  ImplDeclaration,
+  ImplMethod,
   IfStatement,
   ImportDeclaration,
   LiteralExpression,
@@ -30,6 +32,8 @@ import type {
   Statement,
   StructDeclaration,
   StructLiteralExpression,
+  TraitDeclaration,
+  TraitMethodSignature,
   TupleBinding,
   TupleLiteralExpression,
   TupleType,
@@ -49,6 +53,7 @@ type SymbolKind =
   | "Function"
   | "Type"
   | "Struct"
+  | "Trait"
   | "Enum"
   | "Alias"
   | "Variant"
@@ -181,6 +186,8 @@ export class Checker {
   private currentFunction: Symbol | null = null;
   private resolvingAliases = new Set<string>();
   private reportedAliasCycles = new Set<string>();
+  private traitMethods = new Map<string, Map<string, ResolvedMethod>>();
+  private implMethods = new Map<string, Map<string, ResolvedMethod>>();
 
   constructor(private program: Program) {
     this.currentScope = this.createScope();
@@ -445,6 +452,17 @@ export class Checker {
           scope,
         );
 
+      if (statement.kind === "TraitDeclaration")
+        this.declareType(
+          {
+            kind: "Trait",
+            name: statement.name.name,
+            node: statement,
+            isPublic: statement.isPublic,
+          },
+          scope,
+        );
+
       if (statement.kind === "EnumDeclaration")
         this.declareType(
           {
@@ -492,6 +510,12 @@ export class Checker {
         return;
       case "StructDeclaration":
         this.checkStructDeclaration(statement, scope);
+        return;
+      case "TraitDeclaration":
+        this.checkTraitDeclaration(statement, scope);
+        return;
+      case "ImplDeclaration":
+        this.checkImplDeclaration(statement, scope);
         return;
       case "EnumDeclaration":
         this.checkEnumDeclaration(statement, scope);
@@ -830,6 +854,116 @@ export class Checker {
     for (const field of node.fields) this.resolveType(field.type, typeScope);
   }
 
+  private checkTraitDeclaration(node: TraitDeclaration, scope: Scope) {
+    const symbol = this.lookupTypeSymbol(node.name.name, scope);
+    if (!symbol) return;
+    symbol.type = this.namedType(node.name.name, symbol, undefined);
+
+    const methods = new Map<string, ResolvedMethod>();
+    for (const method of node.methods) {
+      const resolved = this.resolveTraitMethodSignature(method, scope);
+      if (methods.has(method.name.name)) {
+        this.report(
+          `Duplicate trait method '${method.name.name}'.`,
+          method.span,
+          "E2002",
+        );
+        continue;
+      }
+      methods.set(method.name.name, resolved);
+    }
+    this.traitMethods.set(node.name.name, methods);
+  }
+
+  private checkImplDeclaration(node: ImplDeclaration, scope: Scope) {
+    const targetType = this.resolveType(node.target, scope);
+    if (targetType.kind !== "Named" || !targetType.symbol) {
+      this.report(
+        "Impl target must be a named type.",
+        node.target.span,
+        "E2810",
+      );
+      return;
+    }
+    if (targetType.symbol.kind !== "Struct") {
+      this.report(
+        "Only structs can be impl targets in this version.",
+        node.target.span,
+        "E2811",
+      );
+      return;
+    }
+
+    const methods = new Map<string, ResolvedMethod>();
+    for (const method of node.methods) {
+      if (methods.has(method.name.name)) {
+        this.report(
+          `Duplicate impl method '${method.name.name}'.`,
+          method.span,
+          "E2002",
+        );
+        continue;
+      }
+      methods.set(
+        method.name.name,
+        this.resolveImplMethod(method, targetType, scope),
+      );
+    }
+
+    if (node.trait) {
+      const traitType = this.resolveType(node.trait, scope);
+      if (traitType.kind !== "Named" || !traitType.symbol) {
+        this.report(
+          "Impl trait must be a named type.",
+          node.trait.span,
+          "E2812",
+        );
+      } else if (traitType.symbol.kind !== "Trait") {
+        this.report(
+          "Impl trait must reference a trait.",
+          node.trait.span,
+          "E2812",
+        );
+      } else {
+        const required = this.ensureTraitMethods(traitType.symbol, scope);
+        for (const [name, traitMethod] of required) {
+          const implMethod = methods.get(name);
+          if (!implMethod) {
+            this.report(`Missing trait method '${name}'.`, node.span, "E2814");
+            continue;
+          }
+          if (!this.typeEquals(implMethod.callType, traitMethod.callType)) {
+            this.report(
+              `Trait method signature mismatch for '${name}'.`,
+              implMethod.node.span,
+              "E2815",
+            );
+          }
+        }
+      }
+    }
+
+    const targetMethods =
+      this.implMethods.get(targetType.name) ??
+      new Map<string, ResolvedMethod>();
+    for (const [name, method] of methods) targetMethods.set(name, method);
+    this.implMethods.set(targetType.name, targetMethods);
+  }
+
+  private ensureTraitMethods(symbol: Symbol, scope: Scope) {
+    const cached = this.traitMethods.get(symbol.name);
+    if (cached) return cached;
+    const node = symbol.node as TraitDeclaration;
+    const methods = new Map<string, ResolvedMethod>();
+    for (const method of node.methods)
+      methods.set(
+        method.name.name,
+        this.resolveTraitMethodSignature(method, scope),
+      );
+    this.traitMethods.set(symbol.name, methods);
+    return methods;
+  }
+
   private checkEnumDeclaration(node: EnumDeclaration, scope: Scope) {
     const symbol = this.lookupTypeSymbol(node.name.name, scope);
     if (!symbol) return;
@@ -862,6 +996,106 @@ export class Checker {
       params: payloadTypes,
       returnType: this.namedType(enumSymbol.name, enumSymbol, undefined),
       aliasable: false,
+    };
+  }
+
+  private resolveTraitMethodSignature(
+    method: TraitMethodSignature,
+    scope: Scope,
+  ): ResolvedMethod {
+    const params = this.resolveParameters(method.params, scope);
+    const returnType = method.returnType
+      ? this.resolveType(method.returnType, scope)
+      : this.unknownType();
+
+    let receiverMutable = false;
+    const callParams = [...params];
+    if (params.length > 0 && params[0].name === "self") {
+      receiverMutable = params[0].isMutable;
+      callParams.shift();
+    } else
+      this.report(
+        "Trait methods must start with a 'self' parameter.",
+        method.span,
+        "E2813",
+      );
+
+    const callType: FunctionRefType = {
+      kind: "Function",
+      params: callParams.map((p) => p.type),
+      returnType,
+      aliasable: false,
+    };
+    return {
+      node: method,
+      callType,
+      params: callParams,
+      receiverMutable,
+    };
+  }
+
+  private resolveImplMethod(
+    method: ImplMethod,
+    targetType: NamedRefType,
+    scope: Scope,
+  ): ResolvedMethod {
+    const params = this.resolveParameters(method.params, scope);
+    const returnType = method.returnType
+      ? this.resolveType(method.returnType, scope)
+      : this.unknownType();
+
+    let receiverMutable = false;
+    const callParams = [...params];
+    if (params.length > 0 && params[0].name === "self") {
+      const selfParam = params[0];
+      receiverMutable = selfParam.isMutable;
+      if (!this.isAssignable(targetType, selfParam.type)) {
+        this.report(
+          "First 'self' parameter must be the impl target type.",
+          method.params[0]?.span ?? method.span,
+          "E2813",
+        );
+      }
+      callParams.shift();
+    } else
+      this.report(
+        "Impl methods must start with a 'self' parameter.",
+        method.span,
+        "E2813",
+      );
+
+    const callType: FunctionRefType = {
+      kind: "Function",
+      params: callParams.map((p) => p.type),
+      returnType,
+      aliasable: false,
+    };
+
+    const methodSymbol: Symbol = {
+      kind: "Function",
+      name: method.name.name,
+      node: method,
+      type: callType,
+      params: callParams,
+    };
+
+    const bodyScope = this.createScope(scope);
+    this.declareParameters(params, bodyScope);
+    const prevFunction = this.currentFunction;
+    this.currentFunction = methodSymbol;
+    const returns: Type[] = [];
+    this.checkBlockStatement(method.body, bodyScope, returns);
+    this.currentFunction = prevFunction;
+
+    if (!method.returnType)
+      callType.returnType =
+        returns.length === 0 ? this.primitive("void") : this.makeUnion(returns);
+
+    return {
+      node: method,
+      callType,
+      params: callParams,
+      receiverMutable,
     };
   }
 
@@ -1176,7 +1410,12 @@ export class Checker {
       const node = symbol.node as EnumDeclaration;
       return node.typeParams?.length ?? 0;
     }
-    if (symbol.kind === "Alias" || symbol.kind === "Type") return 0;
+    if (
+      symbol.kind === "Alias" ||
+      symbol.kind === "Type" ||
+      symbol.kind === "Trait"
+    )
+      return 0;
     return null;
   }
 
@@ -1453,6 +1692,16 @@ export class Checker {
     const calleeType = this.checkExpression(node.callee, scope);
     if (calleeType.kind !== "Function") return this.errorType();
 
+    if (node.callee.kind === "MemberExpression") {
+      const method = this.lookupImplMethod(node.callee, scope);
+      if (method?.receiverMutable)
+        this.requireMutableArgument(
+          node.callee.object,
+          node.callee.span,
+          scope,
+        );
+    }
+
     const paramInfo = this.lookupParamInfo(node.callee, scope);
     if (paramInfo) this.checkArgumentsWithInfo(node.args, paramInfo, scope);
     else this.checkArgumentsByType(node.args, calleeType.params, scope);
@@ -1467,7 +1716,20 @@ export class Checker {
       const sym = this.lookupValue(callee.name, scope);
       if (sym?.params) return sym.params;
     }
+    if (callee.kind === "MemberExpression")
+      return this.lookupImplMethod(callee, scope)?.params ?? null;
     return null;
+  }
+
+  private lookupImplMethod(
+    member: MemberExpression,
+    scope: Scope,
+  ): ResolvedMethod | null {
+    const objectType = this.checkExpression(member.object, scope);
+    if (objectType.kind !== "Named") return null;
+    const methods = this.implMethods.get(objectType.name);
+    if (!methods) return null;
+    return methods.get(member.property.name) ?? null;
   }
 
   private checkArgumentsByType(args: Argument[], params: Type[], scope: Scope) {
@@ -1741,15 +2003,15 @@ export class Checker {
         const field = structNode.fields.find(
           (f) => f.name.name === node.property.name,
         );
-        if (!field) {
-          this.report(
-            `Unknown struct field '${node.property.name}'.`,
-            node.property.span,
-            "E2104",
-          );
-          return this.errorType();
-        }
-        return this.resolveType(field.type, scope);
+        if (field) return this.resolveType(field.type, scope);
+        const method = this.lookupImplMethod(node, scope);
+        if (method) return method.callType;
+        this.report(
+          `Unknown struct field '${node.property.name}'.`,
+          node.property.span,
+          "E2104",
+        );
+        return this.errorType();
       }
     }
     return this.unknownType();
@@ -1878,4 +2140,11 @@ interface ParamInfo {
   isKwVariadic: boolean;
   isMutable: boolean;
   span: Span;
+}
+
+interface ResolvedMethod {
+  node: Node;
+  callType: FunctionRefType;
+  params: ParamInfo[];
+  receiverMutable: boolean;
 }

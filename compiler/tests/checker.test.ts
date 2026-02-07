@@ -135,6 +135,66 @@ let v = s.bad;
     expectDiagnostics(result.checkDiagnostics, ["E2104"]);
   });
 
+  test("impl method call", () => {
+    checkOk(`
+struct User { id: i32, name: string }
+impl User {
+  fn display_name(self: User): string { return self.name; }
+}
+fn main() {
+  let u = User { id: 1, name: "sam" };
+  let s = u.display_name();
+}
+`);
+  });
+
+  test("trait impl missing method", () => {
+    const result = check(`
+struct User { id: i32 }
+trait Printable {
+  fn print(self: User): void;
+  fn id(self: User): i32;
+}
+impl Printable for User {
+  fn print(self: User): void { return; }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2814"]);
+  });
+
+  test("trait impl signature mismatch", () => {
+    const result = check(`
+struct User { id: i32 }
+trait Printable {
+  fn id(self: User): i32;
+}
+impl Printable for User {
+  fn id(self: User): f32 { return 1.0; }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2815"]);
+  });
+
+  test("impl method requires self parameter", () => {
+    const result = check(`
+struct User { id: i32 }
+impl User {
+  fn nope(x: i32): i32 { return x; }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2813"]);
+  });
+
+  test("only structs can be impl targets", () => {
+    const result = check(`
+enum Value { A }
+impl Value {
+  fn bad(self: Value): i32 { return 1; }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2811"]);
+  });
+
   test("enum pattern arity mismatch", () => {
     const result = check(`
 enum Pair<A, B> { Pair(A, B) }

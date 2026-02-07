@@ -19,6 +19,8 @@ export const keywords = [
   "fn",
   "inline",
   "struct",
+  "impl",
+  "trait",
   "enum",
   "type",
   // Reserved/frozen OOP words (not active syntax)

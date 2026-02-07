@@ -149,6 +149,30 @@ enum Result<T, E> { Ok(T), Err(E) }
     ]);
   });
 
+  test("trait and impl declarations", () => {
+    const program = parseOk(`
+struct User { id: i32, name: string }
+
+trait Printable {
+  fn print(self: User): void;
+}
+
+impl User {
+  fn display_name(self: User): string { return self.name; }
+}
+
+impl Printable for User {
+  fn print(self: User): void { io.print(self.name + "\\n"); }
+}
+`);
+    assert.deepEqual(getProgramBodyKinds(program), [
+      "StructDeclaration",
+      "TraitDeclaration",
+      "ImplDeclaration",
+      "ImplDeclaration",
+    ]);
+  });
+
   test("control flow", () => {
     const program = parseOk(`
 fn main(): void {

@@ -18,6 +18,8 @@ export type Statement =
   | VariableDeclaration
   | TypeAliasDeclaration
   | StructDeclaration
+  | TraitDeclaration
+  | ImplDeclaration
   | EnumDeclaration
   | ReturnStatement
   | IfStatement
@@ -150,6 +152,36 @@ export interface EnumVariant extends Node {
   kind: "EnumVariant";
   name: Identifier;
   payload?: TypeNode[];
+}
+
+export interface TraitDeclaration extends Node {
+  kind: "TraitDeclaration";
+  name: Identifier;
+  methods: TraitMethodSignature[];
+  isPublic: boolean;
+}
+
+export interface TraitMethodSignature extends Node {
+  kind: "TraitMethodSignature";
+  name: Identifier;
+  params: ParameterNode[];
+  returnType?: TypeNode;
+}
+
+export interface ImplDeclaration extends Node {
+  kind: "ImplDeclaration";
+  target: NamedType;
+  trait?: NamedType;
+  methods: ImplMethod[];
+  isPublic: boolean;
+}
+
+export interface ImplMethod extends Node {
+  kind: "ImplMethod";
+  name: Identifier;
+  params: ParameterNode[];
+  returnType?: TypeNode;
+  body: BlockStatement;
 }
 
 export interface ReturnStatement extends Node {

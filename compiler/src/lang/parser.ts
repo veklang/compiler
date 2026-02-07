@@ -21,6 +21,8 @@ import type {
   IdentifierExpression,
   IdentifierPattern,
   IfStatement,
+  ImplDeclaration,
+  ImplMethod,
   ImportDeclaration,
   KwSpreadArgument,
   KwVariadicParameter,
@@ -48,6 +50,8 @@ import type {
   StructField,
   StructLiteralExpression,
   StructLiteralField,
+  TraitDeclaration,
+  TraitMethodSignature,
   TupleBinding,
   TupleLiteralExpression,
   TupleType,
@@ -129,6 +133,8 @@ export class Parser {
     if (this.checkKeyword("type")) return this.parseTypeAlias(isPublic);
     if (this.checkKeyword("struct"))
       return this.parseStructDeclaration(isPublic);
+    if (this.checkKeyword("trait")) return this.parseTraitDeclaration(isPublic);
+    if (this.checkKeyword("impl")) return this.parseImplDeclaration(isPublic);
     if (this.checkKeyword("enum")) return this.parseEnumDeclaration(isPublic);
     return null;
   }
@@ -384,6 +390,98 @@ export class Parser {
       name,
       typeParams,
       variants,
+      isPublic,
+    };
+  }
+
+  private parseTraitDeclaration(isPublic: boolean): TraitDeclaration {
+    const start = this.expectKeyword("trait");
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(start?.span);
+    this.expectPunctuator("{");
+
+    const methods: TraitMethodSignature[] = [];
+    while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      const methodStart = this.expectKeyword("fn");
+      const methodName =
+        this.parseIdentifier() ??
+        this.placeholderIdentifier(methodStart?.span ?? this.currentSpan());
+      const params = this.parseParameterList();
+      const returnType = this.matchPunctuator(":")
+        ? this.parseType()
+        : undefined;
+      this.expectSemicolon();
+      methods.push({
+        kind: "TraitMethodSignature",
+        span: this.spanFrom(
+          methodStart?.span,
+          returnType?.span ?? methodName.span,
+        ),
+        name: methodName,
+        params,
+        returnType: returnType ?? undefined,
+      });
+    }
+
+    const end = this.expectPunctuator("}");
+    return {
+      kind: "TraitDeclaration",
+      span: this.spanFrom(start?.span, end?.span ?? name.span),
+      name,
+      methods,
+      isPublic,
+    };
+  }
+
+  private parseImplDeclaration(isPublic: boolean): ImplDeclaration {
+    const start = this.expectKeyword("impl");
+    const firstType = this.parsePrimaryType();
+
+    let trait: NamedType | undefined;
+    let target: NamedType;
+    if (firstType?.kind === "NamedType" && this.matchKeyword("for")) {
+      trait = firstType;
+      const targetType = this.parsePrimaryType();
+      target =
+        targetType?.kind === "NamedType"
+          ? targetType
+          : this.placeholderNamedType(this.currentSpan());
+    } else {
+      target =
+        firstType?.kind === "NamedType"
+          ? firstType
+          : this.placeholderNamedType(this.currentSpan());
+    }
+
+    this.expectPunctuator("{");
+    const methods: ImplMethod[] = [];
+    while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      const methodStart = this.expectKeyword("fn");
+      const methodName =
+        this.parseIdentifier() ??
+        this.placeholderIdentifier(methodStart?.span ?? this.currentSpan());
+      const params = this.parseParameterList();
+      const returnType = this.matchPunctuator(":")
+        ? this.parseType()
+        : undefined;
+      const body = this.parseBlockStatement();
+      methods.push({
+        kind: "ImplMethod",
+        span: this.spanFrom(methodStart?.span, body.span),
+        name: methodName,
+        params,
+        returnType: returnType ?? undefined,
+        body,
+      });
+    }
+    const end = this.expectPunctuator("}");
+
+    return {
+      kind: "ImplDeclaration",
+      span: this.spanFrom(start?.span, end?.span ?? target.span),
+      target,
+      trait,
+      methods,
       isPublic,
     };
   }
@@ -1768,6 +1866,14 @@ export class Parser {
       span: safeSpan,
       name: { kind: "Identifier", span: safeSpan, name: "<error>" },
     } satisfies NamedType;
+  }
+
+  private placeholderNamedType(span?: Span): NamedType {
+    return {
+      kind: "NamedType",
+      span: span ?? this.emptySpan(),
+      name: this.placeholderIdentifier(span),
+    };
   }
 
   private placeholderPattern(span?: Span): Pattern {
