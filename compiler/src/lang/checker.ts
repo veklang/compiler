@@ -6,8 +6,6 @@ import type {
   BlockStatement,
   CallExpression,
   CastExpression,
-  ClassDeclaration,
-  ClassMethod,
   EnumDeclaration,
   EnumPattern,
   Expression,
@@ -52,7 +50,6 @@ type SymbolKind =
   | "Type"
   | "Struct"
   | "Enum"
-  | "Class"
   | "Alias"
   | "Variant"
   | "TypeParam";
@@ -67,8 +64,6 @@ interface Symbol {
   isMutable?: boolean;
   isParam?: boolean;
   isPublic?: boolean;
-  isClassConstructor?: boolean;
-  parentClass?: Symbol;
   parentEnum?: Symbol;
   payloadTypes?: Type[];
 }
@@ -461,17 +456,6 @@ export class Checker {
           scope,
         );
 
-      if (statement.kind === "ClassDeclaration")
-        this.declareType(
-          {
-            kind: "Class",
-            name: statement.name.name,
-            node: statement,
-            isPublic: statement.isPublic,
-          },
-          scope,
-        );
-
       if (statement.kind === "TypeAliasDeclaration")
         this.declareType(
           {
@@ -511,9 +495,6 @@ export class Checker {
         return;
       case "EnumDeclaration":
         this.checkEnumDeclaration(statement, scope);
-        return;
-      case "ClassDeclaration":
-        this.checkClassDeclaration(statement, scope);
         return;
       case "ReturnStatement":
         this.checkReturnStatement(statement, scope);
@@ -884,192 +865,6 @@ export class Checker {
     };
   }
 
-  private collectAbstractMethods(
-    node: ClassDeclaration,
-    scope: Scope,
-  ): Map<string, FunctionRefType> {
-    const required = new Map<string, FunctionRefType>();
-    const ownMethods = node.members.filter(
-      (m) => m.kind === "ClassMethod",
-    ) as ClassMethod[];
-    for (const method of ownMethods) {
-      if (!method.isAbstract) continue;
-      required.set(method.name.name, this.methodSignature(method, scope));
-    }
-    if (node.extendsType) {
-      const base = this.resolveType(node.extendsType, scope);
-      if (base.kind === "Named" && base.symbol?.kind === "Class") {
-        const baseNode = base.symbol.node as ClassDeclaration;
-        const baseRequired = this.collectAbstractMethods(baseNode, scope);
-        for (const [name, sig] of baseRequired.entries())
-          if (!required.has(name)) required.set(name, sig);
-      }
-    }
-    return required;
-  }
-
-  private collectConcreteMethods(
-    node: ClassDeclaration,
-    scope: Scope,
-  ): Map<string, FunctionRefType> {
-    const implemented = new Map<string, FunctionRefType>();
-    const ownMethods = node.members.filter(
-      (m) => m.kind === "ClassMethod",
-    ) as ClassMethod[];
-    for (const method of ownMethods) {
-      if (method.isAbstract) continue;
-      implemented.set(method.name.name, this.methodSignature(method, scope));
-    }
-    return implemented;
-  }
-
-  private methodSignature(method: ClassMethod, scope: Scope): FunctionRefType {
-    const params = this.resolveParameters(method.params, scope);
-    const returnType = method.returnType
-      ? this.resolveType(method.returnType, scope)
-      : this.unknownType();
-    return {
-      kind: "Function",
-      params: params.map((p) => p.type),
-      returnType,
-      aliasable: false,
-    };
-  }
-
-  private checkClassDeclaration(node: ClassDeclaration, scope: Scope) {
-    const symbol = this.lookupTypeSymbol(node.name.name, scope);
-    if (!symbol) return;
-    const typeScope = this.createScope(scope);
-    this.bindTypeParams(node.typeParams, typeScope);
-    symbol.type = this.namedType(node.name.name, symbol, undefined);
-    if (node.isAbstract && node.isStatic)
-      this.report(
-        "Class cannot be both static and abstract.",
-        node.span,
-        "E2804",
-      );
-    if (node.extendsType) {
-      const base = this.resolveType(node.extendsType, typeScope);
-      if (!(base.kind === "Named" && base.symbol?.kind === "Class")) {
-        this.report(
-          "Class extends must reference a class type.",
-          node.extendsType.span,
-          "E2801",
-        );
-      } else {
-        const baseNode = base.symbol.node as ClassDeclaration;
-        const required = this.collectAbstractMethods(baseNode, scope);
-        const implemented = this.collectConcreteMethods(node, scope);
-        for (const [name, baseSig] of required.entries()) {
-          const implSig = implemented.get(name);
-          if (!implSig) {
-            if (!node.isAbstract) {
-              this.report(
-                `Missing implementation for abstract method '${name}'.`,
-                node.span,
-                "E2806",
-              );
-            }
-            continue;
-          }
-          if (!this.typeEquals(implSig, baseSig)) {
-            this.report(
-              `Override of '${name}' does not match base signature.`,
-              node.span,
-              "E2807",
-            );
-          }
-        }
-      }
-    }
-    if (node.implementsTypes) {
-      for (const impl of node.implementsTypes) {
-        const implType = this.resolveType(impl, typeScope);
-        if (!(implType.kind === "Named" && implType.symbol?.kind === "Class")) {
-          this.report(
-            "Class implements must reference a class type.",
-            impl.span,
-            "E2802",
-          );
-        }
-      }
-    }
-    for (const member of node.members) {
-      if (member.kind === "ClassField")
-        this.resolveType(member.type, typeScope);
-      if (member.kind === "ClassMethod") {
-        if (member.isAbstract && !node.isAbstract)
-          this.report(
-            "Abstract method declared in non-abstract class.",
-            member.span,
-            "E2803",
-          );
-        const params = this.resolveParameters(member.params, typeScope);
-        const returnType = member.returnType
-          ? this.resolveType(member.returnType, typeScope)
-          : this.unknownType();
-        const methodType: FunctionRefType = {
-          kind: "Function",
-          params: params.map((p) => p.type),
-          returnType,
-          aliasable: false,
-        };
-        const methodSymbol: Symbol = {
-          kind: "Function",
-          name: member.name.name,
-          node: member,
-          type: methodType,
-          params,
-        };
-        const bodyScope = this.createScope(typeScope);
-        this.declareParameters(params, bodyScope);
-        bodyScope.values.set("this", {
-          kind: "Value",
-          name: "this",
-          node: member,
-          type: symbol.type ?? this.unknownType(),
-        });
-        if (member.body) {
-          const prev = this.currentFunction;
-          this.currentFunction = methodSymbol;
-          const returns: Type[] = [];
-          this.checkBlockStatement(member.body, bodyScope, returns);
-          this.currentFunction = prev;
-          if (!member.returnType)
-            methodType.returnType =
-              returns.length === 0
-                ? this.primitive("void")
-                : this.makeUnion(returns);
-        }
-      }
-    }
-
-    const ctor = node.members.find(
-      (m) => m.kind === "ClassMethod" && m.name.name === "constructor",
-    ) as ClassMethod | undefined;
-    const ctorParams = ctor
-      ? this.resolveParameters(ctor.params, typeScope)
-      : [];
-    const ctorType: FunctionRefType = {
-      kind: "Function",
-      params: ctorParams.map((p) => p.type),
-      returnType: symbol.type ?? this.unknownType(),
-      aliasable: false,
-    };
-    this.declareValue(
-      {
-        kind: "Function",
-        name: node.name.name,
-        node,
-        type: ctorType,
-        params: ctorParams,
-        isClassConstructor: true,
-        parentClass: symbol,
-      },
-      scope,
-    );
-  }
-
   private checkReturnStatement(node: ReturnStatement, scope: Scope) {
     if (!this.currentFunction) return;
     const functionType = this.currentFunction.type;
@@ -1381,10 +1176,6 @@ export class Checker {
       const node = symbol.node as EnumDeclaration;
       return node.typeParams?.length ?? 0;
     }
-    if (symbol.kind === "Class") {
-      const node = symbol.node as ClassDeclaration;
-      return node.typeParams?.length ?? 0;
-    }
     if (symbol.kind === "Alias" || symbol.kind === "Type") return 0;
     return null;
   }
@@ -1415,7 +1206,6 @@ export class Checker {
   ): NamedRefType {
     let aliasable = false;
     if (name === "Array" || name === "Map") aliasable = true;
-    if (symbol.kind === "Class") aliasable = true;
     return { kind: "Named", name, symbol, typeArgs, aliasable };
   }
 
@@ -1663,21 +1453,6 @@ export class Checker {
     const calleeType = this.checkExpression(node.callee, scope);
     if (calleeType.kind !== "Function") return this.errorType();
 
-    if (node.callee.kind === "IdentifierExpression") {
-      const sym = this.lookupValue(node.callee.name, scope);
-      if (sym?.isClassConstructor && sym.parentClass?.node) {
-        const classNode = sym.parentClass.node as ClassDeclaration;
-        if (classNode.isStatic)
-          this.report("Cannot instantiate a static class.", node.span, "E2805");
-        if (classNode.isAbstract)
-          this.report(
-            "Cannot instantiate an abstract class.",
-            node.span,
-            "E2808",
-          );
-      }
-    }
-
     const paramInfo = this.lookupParamInfo(node.callee, scope);
     if (paramInfo) this.checkArgumentsWithInfo(node.args, paramInfo, scope);
     else this.checkArgumentsByType(node.args, calleeType.params, scope);
@@ -1691,17 +1466,6 @@ export class Checker {
     if (callee.kind === "IdentifierExpression") {
       const sym = this.lookupValue(callee.name, scope);
       if (sym?.params) return sym.params;
-    }
-    if (callee.kind === "MemberExpression") {
-      const objectType = this.checkExpression(callee.object, scope);
-      if (objectType.kind === "Named" && objectType.symbol?.kind === "Class") {
-        const classNode = objectType.symbol.node as ClassDeclaration;
-        const member = classNode.members.find(
-          (m) => m.name.name === callee.property.name,
-        );
-        if (member && member.kind === "ClassMethod")
-          return this.resolveParameters(member.params, scope);
-      }
     }
     return null;
   }
@@ -1986,34 +1750,6 @@ export class Checker {
           return this.errorType();
         }
         return this.resolveType(field.type, scope);
-      }
-      if (objectType.symbol.kind === "Class") {
-        const classNode = objectType.symbol.node as ClassDeclaration;
-        const member = classNode.members.find(
-          (m) => m.name.name === node.property.name,
-        );
-        if (!member) {
-          this.report(
-            `Unknown class member '${node.property.name}'.`,
-            node.property.span,
-            "E2104",
-          );
-          return this.errorType();
-        }
-        if (member.kind === "ClassField")
-          return this.resolveType(member.type, scope);
-        if (member.kind === "ClassMethod") {
-          const params = this.resolveParameters(member.params, scope);
-          const returnType = member.returnType
-            ? this.resolveType(member.returnType, scope)
-            : this.unknownType();
-          return {
-            kind: "Function",
-            params: params.map((p) => p.type),
-            returnType,
-            aliasable: false,
-          };
-        }
       }
     }
     return this.unknownType();

@@ -19,7 +19,6 @@ export type Statement =
   | TypeAliasDeclaration
   | StructDeclaration
   | EnumDeclaration
-  | ClassDeclaration
   | ReturnStatement
   | IfStatement
   | WhileStatement
@@ -151,41 +150,6 @@ export interface EnumVariant extends Node {
   kind: "EnumVariant";
   name: Identifier;
   payload?: TypeNode[];
-}
-
-export interface ClassDeclaration extends Node {
-  kind: "ClassDeclaration";
-  name: Identifier;
-  typeParams?: TypeParameter[];
-  isAbstract: boolean;
-  isStatic: boolean;
-  isPublic: boolean;
-  extendsType?: TypeNode;
-  implementsTypes?: TypeNode[];
-  members: ClassMember[];
-}
-
-export type ClassMember = ClassField | ClassMethod;
-
-export interface ClassField extends Node {
-  kind: "ClassField";
-  name: Identifier;
-  type: TypeNode;
-  isPublic: boolean;
-  isStatic: boolean;
-}
-
-export interface ClassMethod extends Node {
-  kind: "ClassMethod";
-  name: Identifier;
-  params: ParameterNode[];
-  returnType?: TypeNode;
-  body: BlockStatement | null;
-  isPublic: boolean;
-  isStatic: boolean;
-  isGetter: boolean;
-  isSetter: boolean;
-  isAbstract: boolean;
 }
 
 export interface ReturnStatement extends Node {

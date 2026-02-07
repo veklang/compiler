@@ -57,6 +57,14 @@ const y: i32 = 20;
     assert.equal(program.body[0].kind, "TypeAliasDeclaration");
   });
 
+  test("frozen oop keywords are reserved", () => {
+    const result = parse(`
+let class = 1;
+let static = 2;
+`);
+    expectDiagnostics(result.parseDiagnostics, ["E1001", "E1001"]);
+  });
+
   test("function declarations", () => {
     const program = parseOk(`
 inline fn add(x: i32, y: i32): i32 { return x + y; }
@@ -139,39 +147,6 @@ enum Result<T, E> { Ok(T), Err(E) }
       "StructDeclaration",
       "EnumDeclaration",
     ]);
-  });
-
-  test("class declaration", () => {
-    const program = parseOk(`
-abstract class Stuff extends Base implements IFoo, IBar {
-  pub static value: i32;
-  pub fn constructor(v: i32) { return; }
-  abstract fn get(): i32;
-}
-`);
-    assert.equal(program.body[0].kind, "ClassDeclaration");
-  });
-
-  test("static class modifiers", () => {
-    const program = parseOk(`
-static class Util {
-  static fn add(a: i32, b: i32): i32 { return a + b; }
-}
-static abstract class Bad {}
-abstract static class Worse {}
-`);
-    assert.equal(program.body[0].kind, "ClassDeclaration");
-    assert.equal(program.body[1].kind, "ClassDeclaration");
-    assert.equal(program.body[2].kind, "ClassDeclaration");
-    const util = program.body[0] as any;
-    const bad = program.body[1] as any;
-    const worse = program.body[2] as any;
-    assert.equal(util.isStatic, true);
-    assert.equal(util.isAbstract, false);
-    assert.equal(bad.isStatic, true);
-    assert.equal(bad.isAbstract, true);
-    assert.equal(worse.isStatic, true);
-    assert.equal(worse.isAbstract, true);
   });
 
   test("control flow", () => {
@@ -341,22 +316,5 @@ fn main() {
 }
 `);
     assert.equal(program.body.length, 5);
-  });
-
-  test("oop sample program", () => {
-    const program = parseOk(`
-class Stuff {
-  value: i32;
-
-  pub fn constructor(v: i32) {
-    return;
-  }
-
-  pub fn get_value(): i32 {
-    return this.value;
-  }
-}
-`);
-    assert.equal(program.body.length, 1);
   });
 });

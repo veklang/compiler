@@ -21,6 +21,7 @@ export const keywords = [
   "struct",
   "enum",
   "type",
+  // Reserved/frozen OOP words (not active syntax)
   "class",
   "abstract",
   "extends",

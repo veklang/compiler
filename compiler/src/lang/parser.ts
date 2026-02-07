@@ -7,10 +7,6 @@ import type {
   BlockStatement,
   CallExpression,
   CastExpression,
-  ClassDeclaration,
-  ClassField,
-  ClassMember,
-  ClassMethod,
   EnumDeclaration,
   EnumPattern,
   EnumVariant,
@@ -134,12 +130,6 @@ export class Parser {
     if (this.checkKeyword("struct"))
       return this.parseStructDeclaration(isPublic);
     if (this.checkKeyword("enum")) return this.parseEnumDeclaration(isPublic);
-    if (
-      this.checkKeyword("abstract") ||
-      this.checkKeyword("static") ||
-      this.checkKeyword("class")
-    )
-      return this.parseClassDeclaration(isPublic);
     return null;
   }
 
@@ -396,139 +386,6 @@ export class Parser {
       variants,
       isPublic,
     };
-  }
-
-  private parseClassDeclaration(isPublic: boolean): ClassDeclaration {
-    let isAbstract = false;
-    let isStatic = false;
-    let startSpan = this.currentSpan();
-    while (this.checkKeyword("abstract") || this.checkKeyword("static")) {
-      if (this.matchKeyword("abstract")) {
-        if (isAbstract)
-          this.report(
-            "Duplicate 'abstract' modifier.",
-            this.previousSpan(),
-            "E1018",
-          );
-        isAbstract = true;
-        startSpan = this.previousSpan();
-        continue;
-      }
-      if (this.matchKeyword("static")) {
-        if (isStatic)
-          this.report(
-            "Duplicate 'static' modifier.",
-            this.previousSpan(),
-            "E1019",
-          );
-        isStatic = true;
-        startSpan = this.previousSpan();
-      }
-    }
-    if (!this.checkKeyword("class"))
-      this.report("Expected 'class'.", this.currentSpan(), "E1017");
-    const classToken = this.expectKeyword("class");
-    startSpan = classToken?.span ?? startSpan;
-    const name =
-      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
-    const typeParams = this.parseTypeParams();
-
-    let extendsType: TypeNode | undefined;
-    let implementsTypes: TypeNode[] | undefined;
-
-    if (this.matchKeyword("extends"))
-      extendsType = this.parseType() ?? undefined;
-
-    if (this.matchKeyword("implements")) {
-      implementsTypes = [];
-      do {
-        const type = this.parseType();
-        if (type) implementsTypes.push(type);
-      } while (this.matchPunctuator(","));
-    }
-
-    this.expectPunctuator("{");
-    const members: ClassMember[] = [];
-
-    while (!this.isAtEnd() && !this.checkPunctuator("}")) {
-      const member = this.parseClassMember();
-      if (member) members.push(member);
-      else this.advance();
-    }
-
-    const end = this.expectPunctuator("}");
-
-    return {
-      kind: "ClassDeclaration",
-      span: this.spanFrom(startSpan, end?.span ?? name.span),
-      name,
-      typeParams,
-      isAbstract,
-      isStatic,
-      isPublic,
-      extendsType,
-      implementsTypes,
-      members,
-    };
-  }
-
-  private parseClassMember(): ClassMember | null {
-    const modifiers = this.parseClassMemberModifiers();
-
-    if (this.checkKeyword("fn")) {
-      const start = this.expectKeyword("fn");
-      const nameToken = this.advance();
-      let name: Identifier;
-      if (
-        nameToken &&
-        (nameToken.kind === "Identifier" || nameToken.kind === "Keyword")
-      ) {
-        name = this.identifierFromToken(nameToken);
-      } else {
-        if (nameToken)
-          this.report("Expected method name.", nameToken.span, "E1016");
-        name = this.placeholderIdentifier(nameToken?.span);
-      }
-      const params = this.parseParameterList();
-      const returnType = this.matchPunctuator(":")
-        ? this.parseType()
-        : undefined;
-      let body: BlockStatement | null = null;
-      if (modifiers.isAbstract) this.expectSemicolon();
-      else body = this.parseBlockStatement();
-
-      return {
-        kind: "ClassMethod",
-        span: this.spanFrom(
-          start?.span,
-          body?.span ?? returnType?.span ?? name.span,
-        ),
-        name,
-        params,
-        returnType: returnType ?? undefined,
-        body,
-        isPublic: modifiers.isPublic,
-        isStatic: modifiers.isStatic,
-        isGetter: modifiers.isGetter,
-        isSetter: modifiers.isSetter,
-        isAbstract: modifiers.isAbstract,
-      } satisfies ClassMethod;
-    }
-
-    const fieldName = this.parseIdentifier();
-    if (!fieldName) return null;
-    this.expectPunctuator(":");
-    const type = this.parseType() ?? this.placeholderType(fieldName.span);
-    this.expectSemicolon();
-
-    return {
-      kind: "ClassField",
-      span: this.spanFrom(fieldName.span, type.span),
-      name: fieldName,
-      type,
-      isPublic: modifiers.isPublic,
-      isStatic: modifiers.isStatic,
-    } satisfies ClassField;
   }
 
   private parseReturnStatement(): ReturnStatement {
@@ -1747,37 +1604,6 @@ export class Parser {
       left,
       right,
     };
-  }
-
-  private parseClassMemberModifiers() {
-    let isPublic = false;
-    let isStatic = false;
-    let isGetter = false;
-    let isSetter = false;
-    let isAbstract = false;
-
-    let progressed = true;
-    while (progressed) {
-      progressed = false;
-      if (this.matchKeyword("pub")) {
-        isPublic = true;
-        progressed = true;
-      } else if (this.matchKeyword("static")) {
-        isStatic = true;
-        progressed = true;
-      } else if (this.matchKeyword("getter")) {
-        isGetter = true;
-        progressed = true;
-      } else if (this.matchKeyword("setter")) {
-        isSetter = true;
-        progressed = true;
-      } else if (this.matchKeyword("abstract")) {
-        isAbstract = true;
-        progressed = true;
-      }
-    }
-
-    return { isPublic, isStatic, isGetter, isSetter, isAbstract };
   }
 
   private expectSemicolon() {
