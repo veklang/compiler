@@ -1446,7 +1446,26 @@ export class Parser {
       do {
         const name = this.parseIdentifier();
         if (name) {
-          params.push({ kind: "TypeParameter", span: name.span, name });
+          let bounds: NamedType[] | undefined;
+          if (this.matchPunctuator(":")) {
+            bounds = [];
+            do {
+              const bound = this.parsePrimaryType();
+              if (bound?.kind === "NamedType") bounds.push(bound);
+              else
+                this.report(
+                  "Type parameter bounds must be named traits.",
+                  this.currentSpan(),
+                  "E1051",
+                );
+            } while (this.matchOperator("+"));
+          }
+          params.push({
+            kind: "TypeParameter",
+            span: this.spanFrom(name.span, bounds?.[bounds.length - 1]?.span),
+            name,
+            bounds,
+          });
         }
       } while (this.matchPunctuator(","));
     }

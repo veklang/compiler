@@ -401,6 +401,7 @@ export type TypeNode = NamedType | UnionType | TupleType | FunctionType;
 export interface TypeParameter extends Node {
   kind: "TypeParameter";
   name: Identifier;
+  bounds?: NamedType[];
 }
 
 export interface NamedType extends Node {

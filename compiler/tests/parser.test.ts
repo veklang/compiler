@@ -76,6 +76,21 @@ fn main(): void { return; }
     ]);
   });
 
+  test("generic bounds in declarations", () => {
+    const program = parseOk(`
+trait Printable { fn print(self: User): void; }
+struct User { id: i32 }
+struct Box<T: Printable> { value: T }
+fn log<T: Printable>(x: T): void { x.print(); }
+`);
+    assert.deepEqual(getProgramBodyKinds(program), [
+      "TraitDeclaration",
+      "StructDeclaration",
+      "StructDeclaration",
+      "FunctionDeclaration",
+    ]);
+  });
+
   test("function expressions", () => {
     const program = parseOk(`
 let g = fn(x: i32, y: i32): i32 { return x + y; };

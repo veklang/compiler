@@ -136,6 +136,7 @@ interface FunctionRefType extends BaseType {
 interface TypeParamType extends BaseType {
   kind: "TypeParam";
   name: string;
+  bounds?: string[];
 }
 
 interface ErrorType extends BaseType {
@@ -151,6 +152,7 @@ interface Scope {
   values: Map<string, Symbol>;
   types: Map<string, Symbol>;
   overrides: Map<string, Type>;
+  typeParamBounds: Map<string, NamedRefType[]>;
 }
 
 export interface CheckResult {
@@ -188,6 +190,7 @@ export class Checker {
   private reportedAliasCycles = new Set<string>();
   private traitMethods = new Map<string, Map<string, ResolvedMethod>>();
   private implMethods = new Map<string, Map<string, ResolvedMethod>>();
+  private implTraits = new Map<string, Set<string>>();
 
   constructor(private program: Program) {
     this.currentScope = this.createScope();
@@ -226,6 +229,7 @@ export class Checker {
       values: new Map(),
       types: new Map(),
       overrides: new Map(),
+      typeParamBounds: new Map(),
     };
   }
 
@@ -295,6 +299,7 @@ export class Checker {
     if (this.isError(from) || this.isError(to)) return true;
     if (this.isUnknown(from) || this.isUnknown(to)) return true;
     if (this.typeEquals(from, to)) return true;
+    if (to.kind === "TypeParam") return true;
 
     if (from.kind === "Named" && to.kind === "Named")
       if (from.name === to.name && (!from.typeArgs || !to.typeArgs))
@@ -622,6 +627,8 @@ export class Checker {
     ) {
       this.report("Type mismatch in variable initializer.", node.span, "E2101");
     }
+    if (declaredType && initType)
+      this.enforceTypeParamBounds(initType, declaredType, scope, node.span);
 
     this.bindPattern(
       node.name,
@@ -925,6 +932,17 @@ export class Checker {
           "E2812",
         );
       } else {
+        const existingTraits =
+          this.implTraits.get(targetType.name) ?? new Set<string>();
+        if (existingTraits.has(traitType.name))
+          this.report(
+            `Duplicate impl for trait '${traitType.name}' on '${targetType.name}'.`,
+            node.span,
+            "E2817",
+          );
+        existingTraits.add(traitType.name);
+        this.implTraits.set(targetType.name, existingTraits);
+
         const required = this.ensureTraitMethods(traitType.symbol, scope);
         for (const [name, traitMethod] of required) {
           const implMethod = methods.get(name);
@@ -946,7 +964,15 @@ export class Checker {
     const targetMethods =
       this.implMethods.get(targetType.name) ??
       new Map<string, ResolvedMethod>();
-    for (const [name, method] of methods) targetMethods.set(name, method);
+    for (const [name, method] of methods) {
+      if (targetMethods.has(name))
+        this.report(
+          `Duplicate impl method '${name}' for '${targetType.name}'.`,
+          method.node.span,
+          "E2818",
+        );
+      targetMethods.set(name, method);
+    }
     this.implMethods.set(targetType.name, targetMethods);
   }
 
@@ -1361,7 +1387,14 @@ export class Checker {
       return this.errorType();
     }
     if (symbol.kind === "TypeParam") {
-      return { kind: "TypeParam", name: symbol.name, aliasable: false };
+      return {
+        kind: "TypeParam",
+        name: symbol.name,
+        bounds: this.lookupTypeParamBounds(symbol.name, scope).map(
+          (b) => b.name,
+        ),
+        aliasable: false,
+      };
     }
     if (symbol.kind === "Alias") {
       if (node.typeArgs && node.typeArgs.length > 0) {
@@ -1396,7 +1429,44 @@ export class Checker {
         "E2005",
       );
     }
+    if (typeArgs && typeArgs.length > 0) {
+      const params = this.typeParamsForSymbol(symbol);
+      for (let i = 0; i < Math.min(params.length, typeArgs.length); i++) {
+        const bounds = params[i].bounds ?? [];
+        for (const bound of bounds)
+          if (!this.typeSatisfiesTrait(typeArgs[i], bound.name.name, scope))
+            this.report(
+              `Type argument does not satisfy trait bound '${bound.name.name}'.`,
+              node.span,
+              "E2816",
+            );
+      }
+    }
     return this.namedType(name, symbol, typeArgs);
+  }
+
+  private typeParamsForSymbol(symbol: Symbol): TypeParameter[] {
+    if (symbol.kind === "Struct")
+      return (symbol.node as StructDeclaration).typeParams ?? [];
+    if (symbol.kind === "Enum")
+      return (symbol.node as EnumDeclaration).typeParams ?? [];
+    if (symbol.kind === "Trait") return [];
+    if (symbol.kind === "Alias") return [];
+    return [];
+  }
+
+  private typeSatisfiesTrait(
+    type: Type,
+    traitName: string,
+    scope: Scope,
+  ): boolean {
+    if (type.kind === "TypeParam") {
+      const bounds = this.lookupTypeParamBounds(type.name, scope);
+      return bounds.some((b) => b.name === traitName);
+    }
+    if (type.kind !== "Named") return false;
+    const implemented = this.implTraits.get(type.name);
+    return implemented?.has(traitName) ?? false;
   }
 
   private expectedTypeArgs(symbol: Symbol, name: string): number | null {
@@ -1435,7 +1505,39 @@ export class Checker {
         name,
         node: param,
       });
+      const bounds: NamedRefType[] = [];
+      for (const bound of param.bounds ?? []) {
+        const boundSymbol = this.lookupTypeSymbol(bound.name.name, scope);
+        if (!boundSymbol) {
+          this.report(
+            `Unknown trait '${bound.name.name}'.`,
+            bound.span,
+            "E2812",
+          );
+          continue;
+        }
+        if (boundSymbol.kind !== "Trait") {
+          this.report(
+            `Type bound '${bound.name.name}' must be a trait.`,
+            bound.span,
+            "E2812",
+          );
+          continue;
+        }
+        bounds.push(this.namedType(bound.name.name, boundSymbol, undefined));
+      }
+      scope.typeParamBounds.set(name, bounds);
     }
+  }
+
+  private lookupTypeParamBounds(name: string, scope: Scope): NamedRefType[] {
+    let current: Scope | undefined = scope;
+    while (current) {
+      const bounds = current.typeParamBounds.get(name);
+      if (bounds) return bounds;
+      current = current.parent;
+    }
+    return [];
   }
 
   private namedType(
@@ -1475,7 +1577,7 @@ export class Checker {
       case "MapLiteralExpression":
         return this.checkMapLiteral(node, scope);
       case "StructLiteralExpression":
-        return this.checkStructLiteral(node, scope);
+        return this.checkStructLiteral(node, scope, expected);
       case "GroupingExpression":
         return this.checkExpression(node.expression, scope, expected);
       case "FunctionExpression":
@@ -1685,6 +1787,7 @@ export class Checker {
 
     if (!this.isAssignable(rightType, leftType))
       this.report("Type mismatch in assignment.", node.span, "E2101");
+    this.enforceTypeParamBounds(rightType, leftType, scope, node.span);
     return leftType;
   }
 
@@ -1748,6 +1851,7 @@ export class Checker {
         const argType = this.checkExpression(arg.value, scope, paramType);
         if (!this.isAssignable(argType, paramType))
           this.report("Argument type mismatch.", arg.span, "E2207");
+        this.enforceTypeParamBounds(argType, paramType, scope, arg.span);
         position++;
         continue;
       }
@@ -1785,6 +1889,7 @@ export class Checker {
           );
           if (!this.isAssignable(argType, nextParam.type))
             this.report("Argument type mismatch.", arg.span, "E2207");
+          this.enforceTypeParamBounds(argType, nextParam.type, scope, arg.span);
           if (nextParam.isMutable)
             this.requireMutableArgument(arg.value, arg.span, scope);
           positionalProvided.add(nextParam.name);
@@ -1823,6 +1928,7 @@ export class Checker {
         const argType = this.checkExpression(arg.value, scope, param.type);
         if (!this.isAssignable(argType, param.type))
           this.report("Argument type mismatch.", arg.span, "E2207");
+        this.enforceTypeParamBounds(argType, param.type, scope, arg.span);
         if (param.isMutable)
           this.requireMutableArgument(arg.value, arg.span, scope);
         continue;
@@ -1895,6 +2001,12 @@ export class Checker {
               );
               if (!this.isAssignable(valueType, param.type))
                 this.report("Argument type mismatch.", valueExpr.span, "E2207");
+              this.enforceTypeParamBounds(
+                valueType,
+                param.type,
+                scope,
+                valueExpr.span,
+              );
               if (param.isMutable)
                 this.requireMutableArgument(valueExpr, valueExpr.span, scope);
             } else if (kwVariadic) {
@@ -1964,6 +2076,27 @@ export class Checker {
     const argType = this.checkExpression(expr, scope, elementType);
     if (!this.isAssignable(argType, elementType))
       this.report("Argument type mismatch.", expr.span, "E2207");
+    this.enforceTypeParamBounds(argType, elementType, scope, expr.span);
+  }
+
+  private enforceTypeParamBounds(
+    from: Type,
+    to: Type,
+    scope: Scope,
+    span: Span,
+  ) {
+    if (to.kind !== "TypeParam") return;
+    const boundNames =
+      to.bounds && to.bounds.length > 0
+        ? to.bounds
+        : this.lookupTypeParamBounds(to.name, scope).map((b) => b.name);
+    for (const boundName of boundNames)
+      if (!this.typeSatisfiesTrait(from, boundName, scope))
+        this.report(
+          `Type does not satisfy trait bound '${boundName}'.`,
+          span,
+          "E2816",
+        );
   }
 
   private arrayElementType(type: Type): Type | null {
@@ -1997,6 +2130,32 @@ export class Checker {
 
   private checkMember(node: MemberExpression, scope: Scope): Type {
     const objectType = this.checkExpression(node.object, scope);
+    if (objectType.kind === "TypeParam") {
+      const bounds = this.lookupTypeParamBounds(objectType.name, scope);
+      const candidates: ResolvedMethod[] = [];
+      for (const bound of bounds) {
+        const traitSymbol = this.lookupTypeSymbol(bound.name, scope);
+        if (!traitSymbol || traitSymbol.kind !== "Trait") continue;
+        const methods = this.ensureTraitMethods(traitSymbol, scope);
+        const method = methods.get(node.property.name);
+        if (method) candidates.push(method);
+      }
+      if (candidates.length === 1) return candidates[0].callType;
+      if (candidates.length > 1) {
+        this.report(
+          `Ambiguous trait method '${node.property.name}' for bounded type parameter.`,
+          node.property.span,
+          "E2819",
+        );
+        return this.errorType();
+      }
+      this.report(
+        `Unknown member '${node.property.name}' on bounded type parameter.`,
+        node.property.span,
+        "E2104",
+      );
+      return this.errorType();
+    }
     if (objectType.kind === "Named" && objectType.symbol) {
       if (objectType.symbol.kind === "Struct") {
         const structNode = objectType.symbol.node as StructDeclaration;
@@ -2057,6 +2216,7 @@ export class Checker {
   private checkStructLiteral(
     node: StructLiteralExpression,
     scope: Scope,
+    expected?: Type,
   ): Type {
     const structName = node.name.name;
     const symbol = this.lookupTypeSymbol(structName, scope);
@@ -2065,6 +2225,23 @@ export class Checker {
       return this.errorType();
     }
     const structNode = symbol.node as StructDeclaration;
+    const typeParamBindings = new Map<string, Type>();
+    if (
+      expected?.kind === "Named" &&
+      expected.name === structName &&
+      expected.typeArgs &&
+      structNode.typeParams
+    ) {
+      for (
+        let i = 0;
+        i < Math.min(structNode.typeParams.length, expected.typeArgs.length);
+        i++
+      )
+        typeParamBindings.set(
+          structNode.typeParams[i].name.name,
+          expected.typeArgs[i],
+        );
+    }
     const provided = new Set<string>();
     for (const field of node.fields) {
       provided.add(field.name.name);
@@ -2079,10 +2256,15 @@ export class Checker {
         );
         continue;
       }
-      const targetType = this.resolveType(target.type, scope);
+      const targetType = this.resolveTypeWithBindings(
+        target.type,
+        scope,
+        typeParamBindings,
+      );
       const valueType = this.checkExpression(field.value, scope, targetType);
       if (!this.isAssignable(valueType, targetType))
         this.report("Struct field type mismatch.", field.span, "E2101");
+      this.enforceTypeParamBounds(valueType, targetType, scope, field.span);
     }
     for (const field of structNode.fields) {
       if (!provided.has(field.name.name)) {
@@ -2093,7 +2275,54 @@ export class Checker {
         );
       }
     }
+    if (expected?.kind === "Named" && expected.name === structName)
+      return expected;
     return this.namedType(structName, symbol, undefined);
+  }
+
+  private substituteTypeParams(type: Type, bindings: Map<string, Type>): Type {
+    if (type.kind === "TypeParam") return bindings.get(type.name) ?? type;
+    if (type.kind === "Union")
+      return this.makeUnion(
+        type.types.map((t) => this.substituteTypeParams(t, bindings)),
+      );
+    if (type.kind === "Tuple")
+      return {
+        kind: "Tuple",
+        elements: type.elements.map((t) =>
+          this.substituteTypeParams(t, bindings),
+        ),
+        aliasable: false,
+      };
+    if (type.kind === "Function")
+      return {
+        kind: "Function",
+        params: type.params.map((t) => this.substituteTypeParams(t, bindings)),
+        returnType: this.substituteTypeParams(type.returnType, bindings),
+        aliasable: false,
+      };
+    if (type.kind === "Named" && type.typeArgs)
+      return {
+        ...type,
+        typeArgs: type.typeArgs.map((t) =>
+          this.substituteTypeParams(t, bindings),
+        ),
+      };
+    return type;
+  }
+
+  private resolveTypeWithBindings(
+    node: TypeNode,
+    scope: Scope,
+    bindings: Map<string, Type>,
+  ): Type {
+    if (node.kind === "NamedType") {
+      const name = node.name.name;
+      const bound = bindings.get(name);
+      if (bound) return bound;
+    }
+    const resolved = this.resolveType(node, scope);
+    return this.substituteTypeParams(resolved, bindings);
   }
 
   private checkFunctionExpression(

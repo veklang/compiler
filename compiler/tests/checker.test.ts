@@ -195,6 +195,68 @@ impl Value {
     expectDiagnostics(result.checkDiagnostics, ["E2811"]);
   });
 
+  test("generic trait bound satisfied", () => {
+    checkOk(`
+struct User { id: i32, name: string }
+trait Printable { fn print(self: User): void; }
+impl Printable for User {
+  fn print(self: User): void { return; }
+}
+fn log<T: Printable>(x: T): void {
+  x.print();
+}
+fn main() {
+  let u = User { id: 1, name: "sam" };
+  log(u);
+}
+`);
+  });
+
+  test("generic trait bound violation in call", () => {
+    const result = check(`
+struct User { id: i32 }
+struct Raw { id: i32 }
+trait Printable { fn print(self: User): void; }
+impl Printable for User {
+  fn print(self: User): void { return; }
+}
+fn log<T: Printable>(x: T): void { return; }
+fn main() {
+  let r = Raw { id: 1 };
+  log(r);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("generic trait bound violation in type argument", () => {
+    const result = check(`
+struct User { id: i32 }
+struct Raw { id: i32 }
+trait Printable { fn print(self: User): void; }
+impl Printable for User {
+  fn print(self: User): void { return; }
+}
+struct Box<T: Printable> { value: T }
+let b: Box<Raw> = Box { value: Raw { id: 1 } };
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("duplicate trait impl pair is rejected", () => {
+    const result = check(`
+struct User { id: i32 }
+trait Printable { fn print(self: User): void; }
+impl Printable for User {
+  fn print(self: User): void { return; }
+}
+impl Printable for User {
+  fn print(self: User): void { return; }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2817", "E2818"]);
+  });
+
   test("enum pattern arity mismatch", () => {
     const result = check(`
 enum Pair<A, B> { Pair(A, B) }
