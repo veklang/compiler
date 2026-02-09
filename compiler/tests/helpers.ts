@@ -1,7 +1,7 @@
 import { strict as nodeAssert } from "node:assert";
-import { Checker } from "@/lang/checker";
-import { Lexer } from "@/lang/lexer";
-import { Parser } from "@/lang/parser";
+import { Checker } from "@/core/checker";
+import { Lexer } from "@/core/lexer";
+import { Parser } from "@/core/parser";
 import type { Program } from "@/types/ast";
 import type { Diagnostic } from "@/types/diagnostic";
 import type { Token } from "@/types/token";

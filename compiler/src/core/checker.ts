@@ -15,9 +15,9 @@ import type {
   FunctionType,
   Identifier,
   IdentifierExpression,
+  IfStatement,
   ImplDeclaration,
   ImplMethod,
-  IfStatement,
   ImportDeclaration,
   LiteralExpression,
   MapLiteralExpression,
@@ -257,8 +257,12 @@ export class Checker {
     return type.kind === "Error";
   }
 
-  private isUnknown(type: Type) {
-    return type.kind === "Unknown" || type.kind === "TypeParam";
+  private isUnknown(type: Type): type is UnknownType {
+    return type.kind === "Unknown";
+  }
+
+  private isUnknownLike(type: Type) {
+    return this.isUnknown(type) || type.kind === "TypeParam";
   }
 
   private typeEquals(a: Type, b: Type): boolean {
@@ -297,9 +301,8 @@ export class Checker {
 
   private isAssignable(from: Type, to: Type): boolean {
     if (this.isError(from) || this.isError(to)) return true;
-    if (this.isUnknown(from) || this.isUnknown(to)) return true;
+    if (this.isUnknownLike(from) || this.isUnknownLike(to)) return true;
     if (this.typeEquals(from, to)) return true;
-    if (to.kind === "TypeParam") return true;
 
     if (from.kind === "Named" && to.kind === "Named")
       if (from.name === to.name && (!from.typeArgs || !to.typeArgs))

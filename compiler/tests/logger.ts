@@ -37,7 +37,7 @@ export const logSummary = (
   ms: number,
 ) => {
   const color = failed === 0 ? colors.green : colors.red;
-  console.log("\n" + "-".repeat(60));
+  console.log(`\n${"-".repeat(60)}`);
   console.log(
     `${color}${passed}/${total} passing${colors.reset} ${colors.dim}(${failed} failing, ${ms.toFixed(2)}ms)${colors.reset}`,
   );

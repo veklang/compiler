@@ -1,7 +1,7 @@
 import { inspect } from "node:util";
-import { Checker } from "@/lang/checker";
-import { Lexer } from "@/lang/lexer";
-import { Parser } from "@/lang/parser";
+import { Checker } from "@/core/checker";
+import { Lexer } from "@/core/lexer";
+import { Parser } from "@/core/parser";
 
 const source = `
 import io from "std:io";
