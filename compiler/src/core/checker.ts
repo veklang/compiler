@@ -1246,6 +1246,7 @@ export class Checker {
     const seenVariants = new Set<string>();
     let hasWildcard = false;
     let hasPatternError = false;
+    const seenFiniteLiterals = new Set<string>();
 
     for (const arm of node.arms) {
       const armScope = this.createScope(scope);
@@ -1255,6 +1256,7 @@ export class Checker {
         enumSymbol,
         armScope,
         seenVariants,
+        seenFiniteLiterals,
       );
       if (!ok) hasPatternError = true;
       if (arm.pattern.kind === "WildcardPattern") hasWildcard = true;
@@ -1275,6 +1277,19 @@ export class Checker {
         );
       }
     }
+
+    if (!enumSymbol && !hasWildcard && !hasPatternError) {
+      const domain = this.finiteLiteralDomain(exprType);
+      if (domain) {
+        const missing = domain.filter((label) => !seenFiniteLiterals.has(label));
+        if (missing.length > 0)
+          this.warn(
+            `Match is not exhaustive; missing ${missing.join(", ")}.`,
+            node.span,
+            "W2601",
+          );
+      }
+    }
   }
 
   private extractEnumSymbol(type: Type): Symbol | undefined {
@@ -1284,7 +1299,8 @@ export class Checker {
       const enums = type.types
         .map((t) => this.extractEnumSymbol(t))
         .filter(Boolean) as Symbol[];
-      if (enums.length === 1) return enums[0];
+      const unique = new Set<Symbol>(enums);
+      if (unique.size === 1) return enums[0];
     }
     return undefined;
   }
@@ -1295,6 +1311,7 @@ export class Checker {
     enumSymbol: Symbol | undefined,
     scope: Scope,
     seenVariants: Set<string>,
+    seenFiniteLiterals: Set<string>,
   ): boolean {
     if (pattern.kind === "IdentifierPattern") {
       this.declareValue(
@@ -1312,12 +1329,21 @@ export class Checker {
       const litType = this.checkExpression(pattern.literal, scope);
       if (!this.isAssignable(litType, exprType))
         this.report("Pattern type mismatch.", pattern.span, "E2602");
+      const label = this.literalPatternLabel(pattern);
+      if (label) seenFiniteLiterals.add(label);
       return true;
     }
     if (pattern.kind === "WildcardPattern") return true;
 
     const enumPattern = pattern as EnumPattern;
-    if (!enumSymbol) return false;
+    if (!enumSymbol) {
+      this.report(
+        "Enum pattern used with non-enum match target.",
+        enumPattern.span,
+        "E2604",
+      );
+      return false;
+    }
     const variantSymbol = this.lookupValue(enumPattern.name.name, scope);
     if (!variantSymbol || variantSymbol.parentEnum !== enumSymbol) {
       this.report(
@@ -1328,7 +1354,11 @@ export class Checker {
       return false;
     }
     seenVariants.add(enumPattern.name.name);
-    const payloadTypes = variantSymbol.payloadTypes ?? [];
+    const payloadTypes = this.resolveVariantPayloadTypes(
+      variantSymbol,
+      enumSymbol,
+      exprType,
+    );
     if (payloadTypes.length !== enumPattern.bindings.length)
       this.report("Enum payload arity mismatch.", enumPattern.span, "E2601");
     for (let i = 0; i < enumPattern.bindings.length; i++) {
@@ -1346,6 +1376,69 @@ export class Checker {
       );
     }
     return true;
+  }
+
+  private resolveVariantPayloadTypes(
+    variantSymbol: Symbol,
+    enumSymbol: Symbol,
+    exprType: Type,
+  ): Type[] {
+    const basePayload = variantSymbol.payloadTypes ?? [];
+    if (basePayload.length === 0) return basePayload;
+
+    const enumNode = enumSymbol.node as EnumDeclaration;
+    const paramNames = (enumNode.typeParams ?? []).map((p) => p.name.name);
+    if (paramNames.length === 0) return basePayload;
+
+    const applyBindings = (typeArgs: Type[]) => {
+      const bindings = new Map<string, Type>();
+      for (let i = 0; i < Math.min(paramNames.length, typeArgs.length); i++)
+        bindings.set(paramNames[i], typeArgs[i]);
+      return basePayload.map((type) => this.substituteTypeParams(type, bindings));
+    };
+
+    if (exprType.kind === "Named" && exprType.symbol === enumSymbol)
+      return applyBindings(exprType.typeArgs ?? []);
+
+    if (exprType.kind === "Union") {
+      const candidates = exprType.types
+        .filter(
+          (type): type is NamedRefType =>
+            type.kind === "Named" && type.symbol === enumSymbol,
+        )
+        .map((type) => applyBindings(type.typeArgs ?? []));
+      if (candidates.length === 0) return basePayload;
+      const merged: Type[] = [];
+      for (let i = 0; i < basePayload.length; i++)
+        merged.push(this.makeUnion(candidates.map((c) => c[i])));
+      return merged;
+    }
+
+    return basePayload;
+  }
+
+  private finiteLiteralDomain(type: Type): string[] | null {
+    if (type.kind === "Primitive") {
+      if (type.name === "bool") return ["true", "false"];
+      if (type.name === "null") return ["null"];
+      return null;
+    }
+    if (type.kind !== "Union") return null;
+    const domain = new Set<string>();
+    for (const member of type.types) {
+      const sub = this.finiteLiteralDomain(member);
+      if (!sub) return null;
+      for (const label of sub) domain.add(label);
+    }
+    return Array.from(domain.values());
+  }
+
+  private literalPatternLabel(pattern: Extract<Pattern, { kind: "LiteralPattern" }>) {
+    const literal = pattern.literal;
+    if (literal.literalType === "Boolean")
+      return literal.value === "true" ? "true" : "false";
+    if (literal.literalType === "Null") return "null";
+    return null;
   }
 
   private checkBlockStatement(

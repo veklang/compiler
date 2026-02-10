@@ -304,6 +304,61 @@ match Ok(1) { Ok(v) => {} }
     );
   });
 
+  test("non-exhaustive finite literal match warns", () => {
+    const result = check(`
+match true {
+  true => {},
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2601"),
+      true,
+    );
+  });
+
+  test("exhaustive finite literal match does not warn", () => {
+    const result = check(`
+match true {
+  true => {},
+  false => {},
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2601"),
+      false,
+    );
+  });
+
+  test("enum payload binding types specialize from matched generic enum type", () => {
+    checkOk(`
+enum Result<T, E> { Ok(T), Err(E) }
+fn use_i32(x: i32): void { return; }
+fn use_string(x: string): void { return; }
+fn main() {
+  let r: Result<i32, string> = Ok(1);
+  match r {
+    Ok(v) => use_i32(v),
+    Err(e) => use_string(e),
+  }
+}
+`);
+  });
+
+  test("enum payload binding from unioned generic enum instances is union-typed", () => {
+    const result = check(`
+enum Result<T, E> { Ok(T), Err(E) }
+fn use_i32(x: i32): void { return; }
+fn main() {
+  let r: Result<i32, string> | Result<string, i32> = Ok(1);
+  match r {
+    Ok(v) => use_i32(v),
+    Err(e) => {},
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
+  });
+
   test("is operator requires aliasable types", () => {
     const result = check("let x = 1 is 2;");
     expectDiagnostics(result.checkDiagnostics, ["E2502"]);
