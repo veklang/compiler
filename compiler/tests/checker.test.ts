@@ -257,6 +257,26 @@ impl Printable for User {
     expectDiagnostics(result.checkDiagnostics, ["E2817", "E2818"]);
   });
 
+  test("generic function type argument inference", () => {
+    checkOk(`
+fn id<T>(x: T): T { return x; }
+fn main() {
+  let x: i32 = id(1);
+  let y: string = id("ok");
+}
+`);
+  });
+
+  test("generic function inference failure on unused type param", () => {
+    const result = check(`
+fn keep_i32<T>(x: i32): i32 { return x; }
+fn main() {
+  let x = keep_i32(1);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2820"]);
+  });
+
   test("enum pattern arity mismatch", () => {
     const result = check(`
 enum Pair<A, B> { Pair(A, B) }

@@ -65,6 +65,8 @@ interface Symbol {
   node: Node;
   type?: Type;
   params?: ParamInfo[];
+  typeParams?: string[];
+  typeParamBounds?: Map<string, string[]>;
   isConst?: boolean;
   isMutable?: boolean;
   isParam?: boolean;
@@ -681,7 +683,7 @@ export class Checker {
       return;
     }
 
-    for (const element of tuple.elements) {
+    for (const element of tuple.elements)
       this.declareValue(
         {
           kind: "Value",
@@ -692,7 +694,6 @@ export class Checker {
         },
         scope,
       );
-    }
     this.report(
       "Tuple binding requires a matching tuple type.",
       pattern.span,
@@ -721,6 +722,13 @@ export class Checker {
       node,
       type: fnType,
       params,
+      typeParams: (node.typeParams ?? []).map((p) => p.name.name),
+      typeParamBounds: new Map(
+        (node.typeParams ?? []).map((p) => [
+          p.name.name,
+          (p.bounds ?? []).map((b) => b.name.name),
+        ]),
+      ),
       isPublic: node.isPublic,
     };
 
@@ -1797,6 +1805,7 @@ export class Checker {
   private checkCall(node: CallExpression, scope: Scope): Type {
     const calleeType = this.checkExpression(node.callee, scope);
     if (calleeType.kind !== "Function") return this.errorType();
+    let concreteCalleeType: FunctionRefType = calleeType;
 
     if (node.callee.kind === "MemberExpression") {
       const method = this.lookupImplMethod(node.callee, scope);
@@ -1808,10 +1817,148 @@ export class Checker {
         );
     }
 
-    const paramInfo = this.lookupParamInfo(node.callee, scope);
+    let paramInfo = this.lookupParamInfo(node.callee, scope);
+    if (node.callee.kind === "IdentifierExpression") {
+      const calleeSym = this.lookupValue(node.callee.name, scope);
+      if (calleeSym?.kind === "Function" && calleeSym.type?.kind === "Function")
+        if ((calleeSym.typeParams?.length ?? 0) > 0) {
+          const inference = this.inferFunctionTypeArgs(
+            node.args,
+            calleeSym,
+            scope,
+            paramInfo,
+          );
+          const bindings = inference.bindings;
+          concreteCalleeType = this.substituteTypeParams(
+            calleeSym.type,
+            bindings,
+          ) as FunctionRefType;
+          if (paramInfo)
+            paramInfo = paramInfo.map((param) => ({
+              ...param,
+              type: this.substituteTypeParams(param.type, bindings),
+            }));
+        }
+    }
+
     if (paramInfo) this.checkArgumentsWithInfo(node.args, paramInfo, scope);
-    else this.checkArgumentsByType(node.args, calleeType.params, scope);
-    return calleeType.returnType;
+    else this.checkArgumentsByType(node.args, concreteCalleeType.params, scope);
+    return concreteCalleeType.returnType;
+  }
+
+  private inferFunctionTypeArgs(
+    args: Argument[],
+    fnSymbol: Symbol,
+    scope: Scope,
+    paramInfo: ParamInfo[] | null,
+  ): { bindings: Map<string, Type> } {
+    const bindings = new Map<string, Type>();
+    const typeParamNames = fnSymbol.typeParams ?? [];
+    const typeParamBounds =
+      fnSymbol.typeParamBounds ?? new Map<string, string[]>();
+
+    const addBinding = (name: string, type: Type, span: Span) => {
+      const existing = bindings.get(name);
+      if (!existing) {
+        bindings.set(name, type);
+        return;
+      }
+      if (this.typeEquals(existing, type)) return;
+      if (this.isAssignable(type, existing)) return;
+      if (this.isAssignable(existing, type)) {
+        bindings.set(name, type);
+        return;
+      }
+      this.report(
+        `Conflicting inferences for type parameter '${name}'.`,
+        span,
+        "E2821",
+      );
+    };
+
+    const inferFrom = (paramType: Type, argType: Type, span: Span): void => {
+      if (paramType.kind === "TypeParam") {
+        addBinding(paramType.name, argType, span);
+        return;
+      }
+      if (paramType.kind === "Named" && argType.kind === "Named") {
+        if (paramType.name !== argType.name) return;
+        const paramArgs = paramType.typeArgs ?? [];
+        const argArgs = argType.typeArgs ?? [];
+        for (let i = 0; i < Math.min(paramArgs.length, argArgs.length); i++)
+          inferFrom(paramArgs[i], argArgs[i], span);
+        return;
+      }
+      if (paramType.kind === "Tuple" && argType.kind === "Tuple")
+        for (
+          let i = 0;
+          i < Math.min(paramType.elements.length, argType.elements.length);
+          i++
+        )
+          inferFrom(paramType.elements[i], argType.elements[i], span);
+    };
+
+    if (paramInfo) {
+      const paramsByName = new Map<string, ParamInfo>();
+      for (const param of paramInfo) paramsByName.set(param.name, param);
+      let positionalIndex = 0;
+
+      for (const arg of args) {
+        if (arg.kind === "PositionalArgument") {
+          const nextParam = this.nextPositionalParam(
+            paramInfo,
+            positionalIndex,
+          );
+          if (!nextParam) continue;
+          const argType = this.checkExpression(
+            arg.value,
+            scope,
+            nextParam.type,
+          );
+          inferFrom(nextParam.type, argType, arg.span);
+          positionalIndex++;
+          continue;
+        }
+        if (arg.kind === "NamedArgument") {
+          const param = paramsByName.get(arg.name.name);
+          if (!param) continue;
+          const argType = this.checkExpression(arg.value, scope, param.type);
+          inferFrom(param.type, argType, arg.span);
+        }
+      }
+    } else if (fnSymbol.type?.kind === "Function") {
+      const params = fnSymbol.type.params;
+      let idx = 0;
+      for (const arg of args) {
+        if (arg.kind !== "PositionalArgument") continue;
+        if (idx >= params.length) break;
+        const argType = this.checkExpression(arg.value, scope, params[idx]);
+        inferFrom(params[idx], argType, arg.span);
+        idx++;
+      }
+    }
+
+    for (const typeParamName of typeParamNames) {
+      const inferred = bindings.get(typeParamName);
+      if (!inferred) {
+        this.report(
+          `Cannot infer type argument for '${typeParamName}'.`,
+          fnSymbol.node.span,
+          "E2820",
+        );
+        continue;
+      }
+      const bounds = typeParamBounds.get(typeParamName) ?? [];
+      for (const bound of bounds)
+        if (!this.typeSatisfiesTrait(inferred, bound, scope))
+          this.report(
+            `Type does not satisfy trait bound '${bound}'.`,
+            fnSymbol.node.span,
+            "E2816",
+          );
+    }
+
+    return { bindings };
   }
 
   private lookupParamInfo(
