@@ -274,7 +274,29 @@ match Pair(1, 2) { Pair(a, b) => {} }
     const match = program.body[0] as any;
     const arm = match.arms[0];
     assert.equal(arm.pattern.kind, "EnumPattern");
-    assert.equal(arm.pattern.bindings.length, 2);
+    assert.equal(arm.pattern.args.length, 2);
+  });
+
+  test("nested enum patterns", () => {
+    const program = parseOk(`
+match Ok(Err(1)) { Ok(Err(v)) => {} }
+`);
+    const match = program.body[0] as any;
+    const arm = match.arms[0];
+    assert.equal(arm.pattern.kind, "EnumPattern");
+    assert.equal(arm.pattern.args[0].kind, "EnumPattern");
+  });
+
+  test("tuple and struct patterns", () => {
+    const program = parseOk(`
+struct User { id: i32, name: string }
+match (1, User { id: 1, name: "a" }) {
+  (x, User { id, name: n }) => {}
+}
+`);
+    const match = program.body[1] as any;
+    const arm = match.arms[0];
+    assert.equal(arm.pattern.kind, "TuplePattern");
   });
 
   test("missing semicolon produces error", () => {

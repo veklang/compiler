@@ -225,7 +225,9 @@ export type Pattern =
   | IdentifierPattern
   | LiteralPattern
   | WildcardPattern
-  | EnumPattern;
+  | EnumPattern
+  | TuplePattern
+  | StructPattern;
 
 export interface IdentifierPattern extends Node {
   kind: "IdentifierPattern";
@@ -244,7 +246,24 @@ export interface WildcardPattern extends Node {
 export interface EnumPattern extends Node {
   kind: "EnumPattern";
   name: Identifier;
-  bindings: Identifier[];
+  args: Pattern[];
+}
+
+export interface TuplePattern extends Node {
+  kind: "TuplePattern";
+  elements: Pattern[];
+}
+
+export interface StructPattern extends Node {
+  kind: "StructPattern";
+  name: Identifier;
+  fields: StructPatternField[];
+}
+
+export interface StructPatternField extends Node {
+  kind: "StructPatternField";
+  name: Identifier;
+  pattern: Pattern;
 }
 
 export interface BreakStatement extends Node {

@@ -50,10 +50,13 @@ import type {
   StructField,
   StructLiteralExpression,
   StructLiteralField,
+  StructPattern,
+  StructPatternField,
   TraitDeclaration,
   TraitMethodSignature,
   TupleBinding,
   TupleLiteralExpression,
+  TuplePattern,
   TupleType,
   TypeAliasDeclaration,
   TypeNode,
@@ -617,33 +620,60 @@ export class Parser {
   private parsePattern(): Pattern {
     const token = this.advance();
     if (!token) return this.placeholderPattern(this.currentSpan());
+    return this.parsePatternFromToken(token);
+  }
 
-    if (token.kind === "Identifier" && token.lexeme === "_") {
+  private parsePatternFromToken(token: Token): Pattern {
+    if (token.kind === "Identifier" && token.lexeme === "_")
       return {
         kind: "WildcardPattern",
         span: token.span,
       } satisfies WildcardPattern;
-    }
 
     if (token.kind === "Identifier") {
       const name = this.identifierFromToken(token);
       if (this.matchPunctuator("(")) {
-        const bindings: Identifier[] = [];
-        if (!this.checkPunctuator(")")) {
-          do {
-            const binding =
-              this.parseIdentifier() ??
-              this.placeholderIdentifier(this.currentSpan());
-            bindings.push(binding);
-          } while (this.matchPunctuator(","));
-        }
+        const args = this.parsePatternList(")");
         const end = this.expectPunctuator(")");
         return {
           kind: "EnumPattern",
           span: this.spanFrom(token.span, end?.span ?? token.span),
           name,
-          bindings,
+          args,
         } satisfies EnumPattern;
+      }
+      if (this.matchPunctuator("{")) {
+        const fields: StructPatternField[] = [];
+        if (!this.checkPunctuator("}")) {
+          do {
+            const fieldName =
+              this.parseIdentifier() ??
+              this.placeholderIdentifier(this.currentSpan());
+            let fieldPattern: Pattern;
+            if (this.matchPunctuator(":")) {
+              fieldPattern = this.parsePattern();
+            } else {
+              fieldPattern = {
+                kind: "IdentifierPattern",
+                span: fieldName.span,
+                name: fieldName,
+              } satisfies IdentifierPattern;
+            }
+            fields.push({
+              kind: "StructPatternField",
+              span: this.spanFrom(fieldName.span, fieldPattern.span),
+              name: fieldName,
+              pattern: fieldPattern,
+            });
+          } while (this.matchPunctuator(","));
+        }
+        const end = this.expectPunctuator("}");
+        return {
+          kind: "StructPattern",
+          span: this.spanFrom(token.span, end?.span ?? token.span),
+          name,
+          fields,
+        } satisfies StructPattern;
       }
       return {
         kind: "IdentifierPattern",
@@ -687,8 +717,27 @@ export class Parser {
       return this.placeholderPattern(token.span);
     }
 
+    if (token.kind === "Punctuator" && token.lexeme === "(") {
+      const elements = this.parsePatternList(")");
+      const end = this.expectPunctuator(")");
+      return {
+        kind: "TuplePattern",
+        span: this.spanFrom(token.span, end?.span ?? token.span),
+        elements,
+      } satisfies TuplePattern;
+    }
+
     this.report("Invalid match pattern.", token.span, "E1030");
     return this.placeholderPattern(token.span);
+  }
+
+  private parsePatternList(terminator: ")" | "}"): Pattern[] {
+    const patterns: Pattern[] = [];
+    if (!this.checkPunctuator(terminator))
+      do {
+        patterns.push(this.parsePattern());
+      } while (this.matchPunctuator(","));
+    return patterns;
   }
 
   private parseBreakStatement(): Statement {

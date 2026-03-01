@@ -31,11 +31,13 @@ import type {
   ReturnStatement,
   Statement,
   StructDeclaration,
+  StructPattern,
   StructLiteralExpression,
   TraitDeclaration,
   TraitMethodSignature,
   TupleBinding,
   TupleLiteralExpression,
+  TuplePattern,
   TupleType,
   TypeAliasDeclaration,
   TypeNode,
@@ -1247,8 +1249,16 @@ export class Checker {
     let hasWildcard = false;
     let hasPatternError = false;
     const seenFiniteLiterals = new Set<string>();
+    const priorPatterns: Pattern[] = [];
 
     for (const arm of node.arms) {
+      if (priorPatterns.some((prior) => this.patternCovers(prior, arm.pattern)))
+        this.warn(
+          "Match arm is shadowed by an earlier arm.",
+          arm.span,
+          "W2602",
+        );
+
       const armScope = this.createScope(scope);
       const ok = this.checkPattern(
         arm.pattern,
@@ -1263,6 +1273,7 @@ export class Checker {
       if (arm.body.kind === "BlockStatement")
         this.checkBlockStatement(arm.body, armScope);
       else this.checkExpression(arm.body, armScope);
+      priorPatterns.push(arm.pattern);
     }
 
     if (enumSymbol && !hasWildcard && !hasPatternError) {
@@ -1281,7 +1292,9 @@ export class Checker {
     if (!enumSymbol && !hasWildcard && !hasPatternError) {
       const domain = this.finiteLiteralDomain(exprType);
       if (domain) {
-        const missing = domain.filter((label) => !seenFiniteLiterals.has(label));
+        const missing = domain.filter(
+          (label) => !seenFiniteLiterals.has(label),
+        );
         if (missing.length > 0)
           this.warn(
             `Match is not exhaustive; missing ${missing.join(", ")}.`,
@@ -1335,6 +1348,72 @@ export class Checker {
     }
     if (pattern.kind === "WildcardPattern") return true;
 
+    if (pattern.kind === "TuplePattern") {
+      const tuplePattern = pattern as TuplePattern;
+      if (exprType.kind !== "Tuple") {
+        this.report("Pattern type mismatch.", pattern.span, "E2602");
+        return false;
+      }
+      if (tuplePattern.elements.length !== exprType.elements.length)
+        this.report("Tuple pattern arity mismatch.", pattern.span, "E2601");
+      for (let i = 0; i < tuplePattern.elements.length; i++) {
+        const elementPattern = tuplePattern.elements[i];
+        const elementType =
+          i < exprType.elements.length
+            ? exprType.elements[i]
+            : this.unknownType();
+        const nestedEnum = this.extractEnumSymbol(elementType);
+        const ok = this.checkPattern(
+          elementPattern,
+          elementType,
+          nestedEnum,
+          scope,
+          seenVariants,
+          seenFiniteLiterals,
+        );
+        if (!ok) return false;
+      }
+      return true;
+    }
+
+    if (pattern.kind === "StructPattern") {
+      const structPattern = pattern as StructPattern;
+      if (
+        exprType.kind !== "Named" ||
+        exprType.symbol?.kind !== "Struct" ||
+        exprType.name !== structPattern.name.name
+      ) {
+        this.report("Pattern type mismatch.", pattern.span, "E2602");
+        return false;
+      }
+      const structNode = exprType.symbol.node as StructDeclaration;
+      for (const fieldPattern of structPattern.fields) {
+        const field = structNode.fields.find(
+          (entry) => entry.name.name === fieldPattern.name.name,
+        );
+        if (!field) {
+          this.report(
+            `Unknown struct field '${fieldPattern.name.name}'.`,
+            fieldPattern.span,
+            "E2104",
+          );
+          continue;
+        }
+        const fieldType = this.resolveType(field.type, scope);
+        const nestedEnum = this.extractEnumSymbol(fieldType);
+        const ok = this.checkPattern(
+          fieldPattern.pattern,
+          fieldType,
+          nestedEnum,
+          scope,
+          seenVariants,
+          seenFiniteLiterals,
+        );
+        if (!ok) return false;
+      }
+      return true;
+    }
+
     const enumPattern = pattern as EnumPattern;
     if (!enumSymbol) {
       this.report(
@@ -1359,21 +1438,22 @@ export class Checker {
       enumSymbol,
       exprType,
     );
-    if (payloadTypes.length !== enumPattern.bindings.length)
+    if (payloadTypes.length !== enumPattern.args.length)
       this.report("Enum payload arity mismatch.", enumPattern.span, "E2601");
-    for (let i = 0; i < enumPattern.bindings.length; i++) {
-      const binding = enumPattern.bindings[i];
+    for (let i = 0; i < enumPattern.args.length; i++) {
+      const argPattern = enumPattern.args[i];
       const type =
         i < payloadTypes.length ? payloadTypes[i] : this.unknownType();
-      this.declareValue(
-        {
-          kind: "Value",
-          name: binding.name,
-          node: binding,
-          type,
-        },
+      const nestedEnum = this.extractEnumSymbol(type);
+      const ok = this.checkPattern(
+        argPattern,
+        type,
+        nestedEnum,
         scope,
+        seenVariants,
+        seenFiniteLiterals,
       );
+      if (!ok) return false;
     }
     return true;
   }
@@ -1394,7 +1474,9 @@ export class Checker {
       const bindings = new Map<string, Type>();
       for (let i = 0; i < Math.min(paramNames.length, typeArgs.length); i++)
         bindings.set(paramNames[i], typeArgs[i]);
-      return basePayload.map((type) => this.substituteTypeParams(type, bindings));
+      return basePayload.map((type) =>
+        this.substituteTypeParams(type, bindings),
+      );
     };
 
     if (exprType.kind === "Named" && exprType.symbol === enumSymbol)
@@ -1433,12 +1515,77 @@ export class Checker {
     return Array.from(domain.values());
   }
 
-  private literalPatternLabel(pattern: Extract<Pattern, { kind: "LiteralPattern" }>) {
+  private literalPatternLabel(
+    pattern: Extract<Pattern, { kind: "LiteralPattern" }>,
+  ) {
     const literal = pattern.literal;
     if (literal.literalType === "Boolean")
       return literal.value === "true" ? "true" : "false";
     if (literal.literalType === "Null") return "null";
     return null;
+  }
+
+  private patternCovers(previous: Pattern, current: Pattern): boolean {
+    if (this.isIrrefutablePattern(previous)) return true;
+
+    if (previous.kind === "LiteralPattern" && current.kind === "LiteralPattern")
+      return (
+        previous.literal.literalType === current.literal.literalType &&
+        previous.literal.value === current.literal.value
+      );
+
+    if (previous.kind === "EnumPattern" && current.kind === "EnumPattern") {
+      if (previous.name.name !== current.name.name) return false;
+      if (
+        previous.args.length === current.args.length &&
+        previous.args.every((arg) => this.isIrrefutablePattern(arg))
+      )
+        return true;
+      return this.patternArrayCovers(previous.args, current.args);
+    }
+
+    if (previous.kind === "TuplePattern" && current.kind === "TuplePattern")
+      return this.patternArrayCovers(previous.elements, current.elements);
+
+    if (previous.kind === "StructPattern" && current.kind === "StructPattern") {
+      if (previous.name.name !== current.name.name) return false;
+      if (previous.fields.length !== current.fields.length) return false;
+      for (const prevField of previous.fields) {
+        const currField = current.fields.find(
+          (field) => field.name.name === prevField.name.name,
+        );
+        if (!currField) return false;
+        if (!this.patternCovers(prevField.pattern, currField.pattern))
+          return false;
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  private patternArrayCovers(previous: Pattern[], current: Pattern[]) {
+    if (previous.length !== current.length) return false;
+    for (let i = 0; i < previous.length; i++)
+      if (!this.patternCovers(previous[i], current[i])) return false;
+    return true;
+  }
+
+  private isIrrefutablePattern(pattern: Pattern): boolean {
+    if (
+      pattern.kind === "WildcardPattern" ||
+      pattern.kind === "IdentifierPattern"
+    )
+      return true;
+    if (pattern.kind === "TuplePattern")
+      return pattern.elements.every((element) =>
+        this.isIrrefutablePattern(element),
+      );
+    if (pattern.kind === "StructPattern")
+      return pattern.fields.every((field) =>
+        this.isIrrefutablePattern(field.pattern),
+      );
+    return false;
   }
 
   private checkBlockStatement(

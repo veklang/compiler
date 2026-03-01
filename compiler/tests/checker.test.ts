@@ -293,6 +293,13 @@ match Pair(1, 2) { Nope() => {} }
     expectDiagnostics(result.checkDiagnostics, ["E2603"]);
   });
 
+  test("enum pattern on non-enum target errors", () => {
+    const result = check(`
+match 1 { Ok(v) => {} }
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2604"]);
+  });
+
   test("non-exhaustive enum match warns", () => {
     const result = check(`
 enum Result<T, E> { Ok(T), Err(E) }
@@ -312,6 +319,48 @@ match true {
 `);
     assert.equal(
       result.checkDiagnostics.some((d) => d.code === "W2601"),
+      true,
+    );
+  });
+
+  test("shadowed arm warns after wildcard", () => {
+    const result = check(`
+match 1 {
+  _ => {},
+  1 => {},
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2602"),
+      true,
+    );
+  });
+
+  test("shadowed duplicate literal arm warns", () => {
+    const result = check(`
+match true {
+  true => {},
+  true => {},
+  false => {},
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2602"),
+      true,
+    );
+  });
+
+  test("shadowed enum variant arm warns", () => {
+    const result = check(`
+enum Result<T, E> { Ok(T), Err(E) }
+match Ok(1) {
+  Ok(v) => {},
+  Ok(x) => {},
+  Err(e) => {},
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2602"),
       true,
     );
   });
@@ -354,6 +403,43 @@ fn main() {
     Ok(v) => use_i32(v),
     Err(e) => {},
   }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
+  });
+
+  test("nested enum payload pattern typing", () => {
+    const result = check(`
+enum Result<T, E> { Ok(T), Err(E) }
+fn use_i32(x: i32): void { return; }
+fn main() {
+  let r: Result<Result<i32, string>, string> = Ok(Err("nope"));
+  match r {
+    Ok(Err(v)) => use_i32(v),
+    _ => {},
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
+  });
+
+  test("tuple pattern binding types are enforced", () => {
+    const result = check(`
+fn use_i32(x: i32): void { return; }
+match (1, "a") {
+  (x, y) => use_i32(y),
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
+  });
+
+  test("struct pattern binding types are enforced", () => {
+    const result = check(`
+struct User { id: i32, name: string }
+fn use_i32(x: i32): void { return; }
+let u = User { id: 1, name: "a" };
+match u {
+  User { id, name } => use_i32(name),
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2207"]);
