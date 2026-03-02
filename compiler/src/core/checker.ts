@@ -187,6 +187,7 @@ const defaultFloatType: PrimitiveName = "f32";
 
 export class Checker {
   private diagnostics: Diagnostic[] = [];
+  private diagnosticSet = new Set<string>();
   private types = new WeakMap<Node, Type>();
   private currentScope: Scope;
   private currentFunction: Symbol | null = null;
@@ -238,11 +239,26 @@ export class Checker {
   }
 
   private report(message: string, span: Span, code: string) {
+    const key = this.diagnosticKey("error", message, span, code);
+    if (this.diagnosticSet.has(key)) return;
+    this.diagnosticSet.add(key);
     this.diagnostics.push({ severity: "error", message, span, code });
   }
 
   private warn(message: string, span: Span, code: string) {
+    const key = this.diagnosticKey("warning", message, span, code);
+    if (this.diagnosticSet.has(key)) return;
+    this.diagnosticSet.add(key);
     this.diagnostics.push({ severity: "warning", message, span, code });
+  }
+
+  private diagnosticKey(
+    severity: Diagnostic["severity"],
+    message: string,
+    span: Span,
+    code: string,
+  ) {
+    return `${severity}|${code}|${message}|${span.start.index}:${span.end.index}`;
   }
 
   private primitive(name: PrimitiveName): PrimitiveType {
@@ -963,7 +979,10 @@ export class Checker {
             this.report(`Missing trait method '${name}'.`, node.span, "E2814");
             continue;
           }
-          if (!this.typeEquals(implMethod.callType, traitMethod.callType)) {
+          if (
+            !this.typeEquals(implMethod.callType, traitMethod.callType) ||
+            implMethod.receiverMutable !== traitMethod.receiverMutable
+          ) {
             this.report(
               `Trait method signature mismatch for '${name}'.`,
               implMethod.node.span,
@@ -1387,7 +1406,17 @@ export class Checker {
         return false;
       }
       const structNode = exprType.symbol.node as StructDeclaration;
+      const seenFields = new Set<string>();
       for (const fieldPattern of structPattern.fields) {
+        if (seenFields.has(fieldPattern.name.name)) {
+          this.report(
+            `Duplicate struct pattern field '${fieldPattern.name.name}'.`,
+            fieldPattern.span,
+            "E2605",
+          );
+          continue;
+        }
+        seenFields.add(fieldPattern.name.name);
         const field = structNode.fields.find(
           (entry) => entry.name.name === fieldPattern.name.name,
         );
@@ -1423,8 +1452,12 @@ export class Checker {
       );
       return false;
     }
-    const variantSymbol = this.lookupValue(enumPattern.name.name, scope);
-    if (!variantSymbol || variantSymbol.parentEnum !== enumSymbol) {
+    const variantSymbol = this.resolveEnumVariantSymbol(
+      enumPattern.name.name,
+      enumSymbol,
+      scope,
+    );
+    if (!variantSymbol) {
       this.report(
         `Unknown enum variant '${enumPattern.name.name}'.`,
         enumPattern.span,
@@ -1499,6 +1532,25 @@ export class Checker {
     return basePayload;
   }
 
+  private resolveEnumVariantSymbol(
+    name: string,
+    enumSymbol: Symbol,
+    scope: Scope,
+  ): Symbol | undefined {
+    let current: Scope | undefined = scope;
+    while (current) {
+      const candidate = current.values.get(name);
+      if (
+        candidate &&
+        candidate.kind === "Variant" &&
+        candidate.parentEnum === enumSymbol
+      )
+        return candidate;
+      current = current.parent;
+    }
+    return undefined;
+  }
+
   private finiteLiteralDomain(type: Type): string[] | null {
     if (type.kind === "Primitive") {
       if (type.name === "bool") return ["true", "false"];
@@ -1549,7 +1601,6 @@ export class Checker {
 
     if (previous.kind === "StructPattern" && current.kind === "StructPattern") {
       if (previous.name.name !== current.name.name) return false;
-      if (previous.fields.length !== current.fields.length) return false;
       for (const prevField of previous.fields) {
         const currField = current.fields.find(
           (field) => field.name.name === prevField.name.name,
@@ -2008,6 +2059,8 @@ export class Checker {
   private checkAssignment(node: AssignmentExpression, scope: Scope): Type {
     const leftType = this.checkExpression(node.left, scope);
     const rightType = this.checkExpression(node.right, scope, leftType);
+    if (!this.isAssignableTarget(node.left))
+      this.report("Invalid assignment target.", node.left.span, "E2504");
 
     if (node.left.kind === "IdentifierExpression") {
       const sym = this.lookupValue(node.left.name, scope);
@@ -2040,6 +2093,13 @@ export class Checker {
       this.report("Type mismatch in assignment.", node.span, "E2101");
     this.enforceTypeParamBounds(rightType, leftType, scope, node.span);
     return leftType;
+  }
+
+  private isAssignableTarget(node: Expression) {
+    if (node.kind === "IdentifierExpression") return true;
+    if (node.kind === "MemberExpression")
+      return this.isAssignableTarget(node.object);
+    return false;
   }
 
   private checkCall(node: CallExpression, scope: Scope): Type {

@@ -33,6 +33,15 @@ x = 2;
     expectDiagnostics(result.checkDiagnostics, ["E2501"]);
   });
 
+  test("invalid assignment target", () => {
+    const result = check(`
+fn main() {
+  (1 + 2) = 3;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2504"]);
+  });
+
   test("const member mutation", () => {
     const result = check(`
 struct Stuff { num: i32, str: string }
@@ -175,6 +184,19 @@ impl Printable for User {
     expectDiagnostics(result.checkDiagnostics, ["E2815"]);
   });
 
+  test("trait impl self mutability must match", () => {
+    const result = check(`
+struct User { id: i32 }
+trait Touch {
+  fn touch(mut self: User): void;
+}
+impl Touch for User {
+  fn touch(self: User): void { return; }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2815"]);
+  });
+
   test("impl method requires self parameter", () => {
     const result = check(`
 struct User { id: i32 }
@@ -293,11 +315,35 @@ match Pair(1, 2) { Nope() => {} }
     expectDiagnostics(result.checkDiagnostics, ["E2603"]);
   });
 
+  test("enum variant patterns ignore local value shadowing", () => {
+    checkOk(`
+enum Result<T, E> { Ok(T), Err(E) }
+fn main() {
+  let Ok: i32 = 1;
+  match Err("x") {
+    Ok(v) => {},
+    Err(e) => {},
+  }
+}
+`);
+  });
+
   test("enum pattern on non-enum target errors", () => {
     const result = check(`
 match 1 { Ok(v) => {} }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2604"]);
+  });
+
+  test("duplicate struct pattern fields", () => {
+    const result = check(`
+struct User { id: i32, name: string }
+let u = User { id: 1, name: "a" };
+match u {
+  User { id, id: x } => {},
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2605"]);
   });
 
   test("non-exhaustive enum match warns", () => {
@@ -328,6 +374,21 @@ match true {
 match 1 {
   _ => {},
   1 => {},
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2602"),
+      true,
+    );
+  });
+
+  test("shadowed struct arm warns on subset pattern", () => {
+    const result = check(`
+struct User { id: i32, name: string }
+let u = User { id: 1, name: "a" };
+match u {
+  User { id } => {},
+  User { id, name } => {},
 }
 `);
     assert.equal(
