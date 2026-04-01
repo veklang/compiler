@@ -1,14 +1,14 @@
 <div align=center>
 
-[![Veklang banner](https://github.com/user-attachments/assets/1d010a33-164d-4732-82de-26a9510de3cd)](https://github.com/duccdev/veklang)
+[![Veklang banner](https://raw.githubusercontent.com/veklang/branding/refs/heads/main/banner.png)](https://github.com/veklang/veklang)
 
-[![LICENSE](https://img.shields.io/github/license/duccdev/veklang)](LICENSE)
-[![Top Language](https://img.shields.io/github/languages/top/duccdev/veklang)](https://github.com/duccdev/veklang)
-[![Issues](https://img.shields.io/github/issues/duccdev/veklang)](https://github.com/duccdev/veklang/issues)
-[![Pull requests](https://img.shields.io/github/issues-pr/duccdev/veklang)](https://github.com/duccdev/veklang/pulls)
+[![LICENSE](https://img.shields.io/github/license/veklang/veklang)](LICENSE)
+[![Top Language](https://img.shields.io/github/languages/top/veklang/veklang)](https://github.com/veklang/veklang)
+[![Issues](https://img.shields.io/github/issues/veklang/veklang)](https://github.com/veklang/veklang/issues)
+[![Pull requests](https://img.shields.io/github/issues-pr/veklang/veklang)](https://github.com/veklang/veklang/pulls)
 
-**[<kbd> <br> Wiki <br> </kbd>](https://github.com/duccdev/veklang/wiki)** 
-**[<kbd> <br> Specifications <br> </kbd>](https://github.com/duccdev/veklang/wiki/Specifications)**
+**[<kbd> <br> Wiki <br> </kbd>](https://github.com/veklang/veklang/wiki)** 
+**[<kbd> <br> Specifications <br> </kbd>](https://github.com/veklang/veklang/wiki/Specifications)**
 
 </div>
 
@@ -50,6 +50,6 @@
 
 ## Wiki
 
-You can also find more info about Veklang and it's specification in the [<kbd> <img src="https://github.com/user-attachments/assets/39abb9b0-9469-487d-9b45-6534de50d84b" alt="Veklang logo" height=8> <strong>Wiki</strong> </kbd>](https://github.com/duccdev/veklang/wiki).
+You can also find more info about Veklang and it's specification in the [<kbd> <img src="https://github.com/user-attachments/assets/39abb9b0-9469-487d-9b45-6534de50d84b" alt="Veklang logo" height=8> <strong>Wiki</strong> </kbd>](https://github.com/veklang/veklang/wiki).
 
 <!-- Hi mom! -->
