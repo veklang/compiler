@@ -50,6 +50,6 @@
 
 ## Wiki
 
-You can also find more info about Veklang and it's specification in the [<kbd> <img src="https://github.com/user-attachments/assets/39abb9b0-9469-487d-9b45-6534de50d84b" alt="Veklang logo" height=8> <strong>Wiki</strong> </kbd>](https://github.com/veklang/veklang/wiki).
+You can also find more info about Veklang and it's specification in the [<kbd> <img src="https://raw.githubusercontent.com/veklang/branding/refs/heads/main/banner.png" alt="Veklang logo" height=8> <strong>Wiki</strong> </kbd>](https://github.com/veklang/veklang/wiki).
 
 <!-- Hi mom! -->
