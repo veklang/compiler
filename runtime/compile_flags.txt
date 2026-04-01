@@ -1,5 +1,0 @@
--Iinclude
--Isrc
--Wall
--Wextra
--Wno-unused-variable
