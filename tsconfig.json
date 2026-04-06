@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    "baseUrl": ".",
     "outDir": "build",
     "target": "ES2020",
     "module": "commonjs",
@@ -22,9 +21,10 @@
     "declarationMap": false,
     "removeComments": true,
     "noEmitOnError": true,
-    "lib": ["ESNext"],
+    "lib": ["ESNext", "DOM"],
+    "types": ["node"],
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   }
 }

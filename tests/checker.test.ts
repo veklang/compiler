@@ -289,6 +289,15 @@ fn main() {
 `);
   });
 
+  test("function expression return does not leak to outer function", () => {
+    checkOk(`
+fn main(): void {
+  let mul: fn(i32, i32) -> i32 = fn(a: i32, b: i32): i32 { return a * b; };
+  let v: i32 = mul(2, 3);
+}
+`);
+  });
+
   test("generic function inference failure on unused type param", () => {
     const result = check(`
 fn keep_i32<T>(x: i32): i32 { return x; }
@@ -313,6 +322,30 @@ enum Pair<A, B> { Pair(A, B) }
 match Pair(1, 2) { Nope() => {} }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2603"]);
+  });
+
+  test("unit enum variant pattern without parentheses", () => {
+    const result = check(`
+enum State { Idle, Busy(i32) }
+let s = Idle();
+match s {
+  Idle => {},
+  Busy(v) => {},
+}
+`);
+    expectNoDiagnostics(result.lexDiagnostics, result.parseDiagnostics);
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.severity === "error"),
+      false,
+    );
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2601"),
+      false,
+    );
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2602"),
+      false,
+    );
   });
 
   test("enum variant patterns ignore local value shadowing", () => {
@@ -504,6 +537,35 @@ match u {
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2207"]);
+  });
+
+  test("for loop infers array element type", () => {
+    checkOk(`
+fn main(): void {
+  let xs = [1, 2, 3];
+  let total: i32 = 0;
+  for item in xs {
+    let x: i32 = item;
+    total = total + x;
+  }
+}
+`);
+  });
+
+  test("generic struct literal expression with explicit type args", () => {
+    checkOk(`
+struct User { id: i32, name: string }
+trait Printable { fn print(self: User): void; }
+impl Printable for User {
+  fn print(self: User): void { return; }
+}
+struct Box<T: Printable> { value: T }
+fn main(): void {
+  let u = User { id: 1, name: "a" };
+  let b = Box<User> { value: u };
+  let n: string = b.value.name;
+}
+`);
   });
 
   test("is operator requires aliasable types", () => {

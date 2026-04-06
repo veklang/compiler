@@ -823,9 +823,21 @@ export class Parser {
   }
 
   private parseLogicalAnd(): Expression | null {
-    let expression = this.parseEquality();
+    let expression = this.parseBitwiseOr();
     if (!expression) return null;
     while (this.matchOperator("&&")) {
+      const operatorToken = this.previous();
+      const right =
+        this.parseBitwiseOr() ?? this.placeholderExpression(this.currentSpan());
+      expression = this.binaryFrom(operatorToken, expression, right);
+    }
+    return expression;
+  }
+
+  private parseBitwiseOr(): Expression | null {
+    let expression = this.parseEquality();
+    if (!expression) return null;
+    while (this.matchOperator("|")) {
       const operatorToken = this.previous();
       const right =
         this.parseEquality() ?? this.placeholderExpression(this.currentSpan());
@@ -947,15 +959,27 @@ export class Parser {
         continue;
       }
 
-      if (
-        this.structLiteralEnabled &&
-        this.checkPunctuator("{") &&
-        expression.kind === "IdentifierExpression"
-      ) {
-        expression = this.parseStructLiteral(
-          expression as IdentifierExpression,
-        );
-        continue;
+      if (expression.kind === "IdentifierExpression") {
+        let typeArgs: TypeNode[] | undefined;
+        if (this.checkOperator("<") && this.looksLikeStructLiteralTypeArgs()) {
+          this.advance();
+          typeArgs = [];
+          if (!this.checkOperator(">")) {
+            do {
+              const type = this.parseType();
+              if (type) typeArgs.push(type);
+            } while (this.matchPunctuator(","));
+          }
+          this.expectOperator(">");
+        }
+
+        if (this.structLiteralEnabled && this.checkPunctuator("{")) {
+          expression = this.parseStructLiteral(
+            expression as IdentifierExpression,
+            typeArgs,
+          );
+          continue;
+        }
       }
 
       if (this.matchKeyword("as")) {
@@ -1091,6 +1115,7 @@ export class Parser {
 
   private parseStructLiteral(
     name: IdentifierExpression,
+    typeArgs?: TypeNode[],
   ): StructLiteralExpression {
     const start = name.span;
     this.expectPunctuator("{");
@@ -1127,6 +1152,7 @@ export class Parser {
       kind: "StructLiteralExpression",
       span: this.spanFrom(start, end?.span ?? start),
       name,
+      typeArgs,
       fields,
     };
   }
@@ -1968,6 +1994,39 @@ export class Parser {
 
   private checkIdentifierStart(): boolean {
     return this.peek()?.kind === "Identifier";
+  }
+
+  private looksLikeStructLiteralTypeArgs(): boolean {
+    if (!this.checkOperator("<")) return false;
+    let i = this.current;
+    let depth = 0;
+    while (i < this.tokens.length) {
+      const token = this.tokens[i];
+      if (token.kind === "Operator" && token.operator === "<") {
+        depth++;
+        i++;
+        continue;
+      }
+      if (token.kind === "Operator" && token.operator === ">") {
+        depth--;
+        if (depth === 0)
+          return this.tokens[i + 1]?.kind === "Punctuator"
+            ? this.tokens[i + 1].lexeme === "{"
+            : false;
+        i++;
+        continue;
+      }
+      if (token.kind === "EOF" || token.kind === "Punctuator") {
+        if (
+          token.lexeme === ";" ||
+          token.lexeme === ")" ||
+          token.lexeme === "}"
+        )
+          return false;
+      }
+      i++;
+    }
+    return false;
   }
 
   private withStructLiteral<T>(enabled: boolean, fn: () => T): T {

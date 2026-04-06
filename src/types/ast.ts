@@ -388,6 +388,7 @@ export interface MapEntry extends Node {
 export interface StructLiteralExpression extends Node {
   kind: "StructLiteralExpression";
   name: IdentifierExpression;
+  typeArgs?: TypeNode[];
   fields: StructLiteralField[];
 }
 

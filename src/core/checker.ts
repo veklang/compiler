@@ -31,8 +31,8 @@ import type {
   ReturnStatement,
   Statement,
   StructDeclaration,
-  StructPattern,
   StructLiteralExpression,
+  StructPattern,
   TraitDeclaration,
   TraitMethodSignature,
   TupleBinding,
@@ -1247,14 +1247,24 @@ export class Checker {
   }
 
   private checkForStatement(node: ForStatement, scope: Scope) {
-    this.checkExpression(node.iterable, scope);
+    const iterableType = this.checkExpression(node.iterable, scope);
+    let itemType: Type = this.unknownType();
+    if (
+      iterableType.kind === "Named" &&
+      iterableType.name === "Array" &&
+      iterableType.typeArgs?.[0]
+    )
+      itemType = iterableType.typeArgs[0];
+    else if (iterableType.kind === "Tuple" && iterableType.elements.length > 0)
+      itemType = this.makeUnion(iterableType.elements);
+
     const bodyScope = this.createScope(scope);
     this.declareValue(
       {
         kind: "Value",
         name: node.iterator.name,
         node: node.iterator,
-        type: this.unknownType(),
+        type: itemType,
       },
       bodyScope,
     );
@@ -1271,7 +1281,18 @@ export class Checker {
     const priorPatterns: Pattern[] = [];
 
     for (const arm of node.arms) {
-      if (priorPatterns.some((prior) => this.patternCovers(prior, arm.pattern)))
+      const armPattern = this.normalizeTopLevelPatternForCoverage(
+        arm.pattern,
+        enumSymbol,
+      );
+      if (
+        priorPatterns.some((prior) =>
+          this.patternCovers(
+            this.normalizeTopLevelPatternForCoverage(prior, enumSymbol),
+            armPattern,
+          ),
+        )
+      )
         this.warn(
           "Match arm is shadowed by an earlier arm.",
           arm.span,
@@ -1346,6 +1367,27 @@ export class Checker {
     seenFiniteLiterals: Set<string>,
   ): boolean {
     if (pattern.kind === "IdentifierPattern") {
+      if (enumSymbol) {
+        const unitVariant = this.findEnumVariant(
+          enumSymbol,
+          pattern.name.name,
+          scope,
+        );
+        if (unitVariant) {
+          const payloadTypes = this.resolveVariantPayloadTypes(
+            unitVariant,
+            enumSymbol,
+            exprType,
+          );
+          if (payloadTypes.length > 0) {
+            this.report("Enum payload arity mismatch.", pattern.span, "E2601");
+            return false;
+          }
+          seenVariants.add(pattern.name.name);
+          return true;
+        }
+      }
+
       this.declareValue(
         {
           kind: "Value",
@@ -1452,9 +1494,9 @@ export class Checker {
       );
       return false;
     }
-    const variantSymbol = this.resolveEnumVariantSymbol(
-      enumPattern.name.name,
+    const variantSymbol = this.findEnumVariant(
       enumSymbol,
+      enumPattern.name.name,
       scope,
     );
     if (!variantSymbol) {
@@ -1551,6 +1593,14 @@ export class Checker {
     return undefined;
   }
 
+  private findEnumVariant(
+    enumSymbol: Symbol,
+    name: string,
+    scope: Scope,
+  ): Symbol | undefined {
+    return this.resolveEnumVariantSymbol(name, enumSymbol, scope);
+  }
+
   private finiteLiteralDomain(type: Type): string[] | null {
     if (type.kind === "Primitive") {
       if (type.name === "bool") return ["true", "false"];
@@ -1637,6 +1687,32 @@ export class Checker {
         this.isIrrefutablePattern(field.pattern),
       );
     return false;
+  }
+
+  private normalizeTopLevelPatternForCoverage(
+    pattern: Pattern,
+    enumSymbol: Symbol | undefined,
+  ): Pattern {
+    if (
+      enumSymbol &&
+      pattern.kind === "IdentifierPattern" &&
+      this.isEnumUnitVariantName(enumSymbol, pattern.name.name)
+    )
+      return {
+        kind: "EnumPattern",
+        span: pattern.span,
+        name: pattern.name,
+        args: [],
+      };
+    return pattern;
+  }
+
+  private isEnumUnitVariantName(enumSymbol: Symbol, name: string) {
+    if (enumSymbol.kind !== "Enum") return false;
+    const enumNode = enumSymbol.node as EnumDeclaration;
+    const variant = enumNode.variants.find((v) => v.name.name === name);
+    if (!variant) return false;
+    return (variant.payload?.length ?? 0) === 0;
   }
 
   private checkBlockStatement(
@@ -2095,7 +2171,7 @@ export class Checker {
     return leftType;
   }
 
-  private isAssignableTarget(node: Expression) {
+  private isAssignableTarget(node: Expression): boolean {
     if (node.kind === "IdentifierExpression") return true;
     if (node.kind === "MemberExpression")
       return this.isAssignableTarget(node.object);
@@ -2609,10 +2685,28 @@ export class Checker {
     if (objectType.kind === "Named" && objectType.symbol) {
       if (objectType.symbol.kind === "Struct") {
         const structNode = objectType.symbol.node as StructDeclaration;
+        const typeParamBindings = new Map<string, Type>();
+        if (structNode.typeParams && objectType.typeArgs)
+          for (
+            let i = 0;
+            i <
+            Math.min(structNode.typeParams.length, objectType.typeArgs.length);
+            i++
+          )
+            typeParamBindings.set(
+              structNode.typeParams[i].name.name,
+              objectType.typeArgs[i],
+            );
+
         const field = structNode.fields.find(
           (f) => f.name.name === node.property.name,
         );
-        if (field) return this.resolveType(field.type, scope);
+        if (field)
+          return this.resolveTypeWithBindings(
+            field.type,
+            scope,
+            typeParamBindings,
+          );
         const method = this.lookupImplMethod(node, scope);
         if (method) return method.callType;
         this.report(
@@ -2675,8 +2769,43 @@ export class Checker {
       return this.errorType();
     }
     const structNode = symbol.node as StructDeclaration;
+    const explicitTypeArgs = node.typeArgs?.map((t) =>
+      this.resolveType(t, scope),
+    );
+    const expectedTypeParamCount = structNode.typeParams?.length ?? 0;
+    if (explicitTypeArgs && explicitTypeArgs.length !== expectedTypeParamCount)
+      this.report(
+        `Type argument count mismatch for '${structName}'.`,
+        node.name.span,
+        "E2005",
+      );
+
     const typeParamBindings = new Map<string, Type>();
-    if (
+    if (explicitTypeArgs && structNode.typeParams)
+      for (
+        let i = 0;
+        i < Math.min(structNode.typeParams.length, explicitTypeArgs.length);
+        i++
+      ) {
+        typeParamBindings.set(
+          structNode.typeParams[i].name.name,
+          explicitTypeArgs[i],
+        );
+        for (const bound of structNode.typeParams[i].bounds ?? [])
+          if (
+            !this.typeSatisfiesTrait(
+              explicitTypeArgs[i],
+              bound.name.name,
+              scope,
+            )
+          )
+            this.report(
+              `Type argument does not satisfy trait bound '${bound.name.name}'.`,
+              node.name.span,
+              "E2816",
+            );
+      }
+    else if (
       expected?.kind === "Named" &&
       expected.name === structName &&
       expected.typeArgs &&
@@ -2691,6 +2820,20 @@ export class Checker {
           structNode.typeParams[i].name.name,
           expected.typeArgs[i],
         );
+    }
+    if (
+      explicitTypeArgs &&
+      expected?.kind === "Named" &&
+      expected.name === structName &&
+      expected.typeArgs
+    ) {
+      const explicitNamed = this.namedType(
+        structName,
+        symbol,
+        explicitTypeArgs,
+      );
+      if (!this.isAssignable(explicitNamed, expected))
+        this.report("Struct field type mismatch.", node.name.span, "E2101");
     }
     const provided = new Set<string>();
     for (const field of node.fields) {
@@ -2725,9 +2868,13 @@ export class Checker {
         );
       }
     }
-    if (expected?.kind === "Named" && expected.name === structName)
+    if (
+      expected?.kind === "Named" &&
+      expected.name === structName &&
+      !explicitTypeArgs
+    )
       return expected;
-    return this.namedType(structName, symbol, undefined);
+    return this.namedType(structName, symbol, explicitTypeArgs);
   }
 
   private substituteTypeParams(type: Type, bindings: Map<string, Type>): Type {
@@ -2789,10 +2936,20 @@ export class Checker {
       returnType,
       aliasable: false,
     };
+    const fnSymbol: Symbol = {
+      kind: "Function",
+      name: "<lambda>",
+      node,
+      type: fnType,
+      params,
+    };
     const bodyScope = this.createScope(scope);
     this.declareParameters(params, bodyScope);
     const returns: Type[] = [];
+    const prevFunction = this.currentFunction;
+    this.currentFunction = fnSymbol;
     this.checkBlockStatement(node.body, bodyScope, returns);
+    this.currentFunction = prevFunction;
     if (!node.returnType)
       fnType.returnType =
         returns.length === 0 ? this.primitive("void") : this.makeUnion(returns);

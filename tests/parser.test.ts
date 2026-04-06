@@ -214,6 +214,13 @@ let v = io.print("hi\\n", stream=io.stderr) as void;
     assert.equal(program.body[0].kind, "VariableDeclaration");
   });
 
+  test("bitwise or expression parses", () => {
+    const program = parseOk(`
+let x: i32 = 1 | 2;
+`);
+    assert.equal(program.body[0].kind, "VariableDeclaration");
+  });
+
   test("string unescape supports unicode and null", () => {
     const program = parseOk(`let s = "a\\u{41}\\0";`);
     const decl = program.body[0] as any;
@@ -242,6 +249,20 @@ let s = Stuff { num: 69, str: "lol" };
 let s2 = Stuff { num, str };
 `);
     assert.equal(program.body.length, 9);
+  });
+
+  test("generic struct literal expression", () => {
+    const program = parseOk(`
+trait Printable { fn print(self: User): void; }
+struct User { id: i32, name: string }
+struct Box<T: Printable> { value: T }
+impl Printable for User {
+  fn print(self: User): void { return; }
+}
+let u = User { id: 1, name: "a" };
+let b = Box<User> { value: u };
+`);
+    assert.equal(program.body.length, 6);
   });
 
   test("return tuple literals", () => {
