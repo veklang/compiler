@@ -2351,11 +2351,48 @@ export class Checker {
 
   private iterableItemType(type: Type, scope: Scope): Type | null {
     if (type.kind === "Named" && type.name === "Array") return type.typeArgs?.[0] ?? this.unknownType();
-    const iterable = this.resolveBuiltinTrait("Iterable", [
-      type.kind === "Named" && type.typeArgs?.[0] ? type.typeArgs[0] : this.unknownType(),
-    ]);
+    const satisfied = this.findSatisfiedTrait(type, "Iterable", scope);
+    const iterable = satisfied ?? this.resolveBuiltinTrait("Iterable", [this.unknownType()]);
     if (this.typeSatisfiesTrait(type, iterable, scope)) {
       return iterable.typeArgs?.[0] ?? this.unknownType();
+    }
+    return null;
+  }
+
+  private findSatisfiedTrait(type: Type, traitName: string, scope: Scope): NamedRefType | null {
+    if (type.kind === "TypeParam") {
+      return type.bounds.find((bound) => bound.name === traitName) ?? null;
+    }
+    if (type.kind === "Named") {
+      if (type.name === "Array" && traitName === "Iterable" && type.typeArgs?.[0]) {
+        return this.resolveBuiltinTrait("Iterable", [type.typeArgs[0]]);
+      }
+      if (type.name === "Result" && traitName === "Unwrappable" && type.typeArgs?.[0]) {
+        return this.resolveBuiltinTrait("Unwrappable", [type.typeArgs[0]]);
+      }
+      if (traitName === "Formattable" && this.isFormattable(type)) {
+        return this.resolveBuiltinTrait("Formattable", []);
+      }
+      if (traitName === "Equal" && this.isBuiltinEquatable(type, this.resolveBuiltinTrait("Equal", [type]))) {
+        return this.resolveBuiltinTrait("Equal", [type]);
+      }
+      if (traitName === "Ordered" && this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Ordered", [type]), scope)) {
+        return this.resolveBuiltinTrait("Ordered", [type]);
+      }
+      return type.symbol?.satisfactions?.find((entry) => entry.trait.name === traitName)?.trait ?? null;
+    }
+    if (type.kind === "Primitive") {
+      if (traitName === "Formattable" && this.isFormattable(type)) {
+        return this.resolveBuiltinTrait("Formattable", []);
+      }
+      if (traitName === "Equal") {
+        const equal = this.resolveBuiltinTrait("Equal", [type]);
+        return this.isBuiltinEquatable(type, equal) ? equal : null;
+      }
+    }
+    if (type.kind === "Tuple" && traitName === "Equal") {
+      const equal = this.resolveBuiltinTrait("Equal", [type]);
+      return this.typeSatisfiesTrait(type, equal, scope) ? equal : null;
     }
     return null;
   }

@@ -184,6 +184,25 @@ fn main() -> void {
     assert.equal(program.body.length, 2);
   });
 
+  test("casts are parsed after lower-precedence expressions", () => {
+    const program = parseOk(`
+fn main() -> void {
+  let value = 1 + 2 as i32;
+}
+`);
+    assert.equal(program.body[0].kind, "FunctionDeclaration");
+  });
+
+  test("empty and one-element tuples are parsed", () => {
+    const program = parseOk(`
+fn main() -> void {
+  let unit: () = ();
+  let single: (i32,) = (1,);
+}
+`);
+    assert.equal(program.body[0].kind, "FunctionDeclaration");
+  });
+
   test("anonymous functions are parsed", () => {
     const program = parseOk(`
 let add_one = fn(x: i32) -> i32 {

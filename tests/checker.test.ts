@@ -258,4 +258,36 @@ fn main() -> void {
 }
 `);
   });
+
+  test("for loops use custom Iterable<T> item types", () => {
+    checkOk(`
+struct Counter {
+  current: i32;
+  end: i32;
+
+  fn new(end: i32) -> Self {
+    return Self { current: 0, end };
+  }
+
+  satisfies Iterable<i32> {
+    fn next(mut self) -> i32? {
+      if self.current == self.end {
+        return null;
+      }
+
+      let value = self.current;
+      self.current = self.current + 1;
+      return value;
+    }
+  }
+}
+
+fn main() -> void {
+  let counter = Counter.new(3);
+  for item in counter {
+    let x: i32 = item;
+  }
+}
+`);
+  });
 });
