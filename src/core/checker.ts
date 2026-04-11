@@ -120,6 +120,10 @@ interface CallableTarget {
   typeParams: TypeParamSpec[];
   params: FunctionParamType[];
   returnType: Type;
+  receiver?: {
+    type: Type;
+    isMutable: boolean;
+  };
 }
 
 interface FunctionRefType extends BaseType {
@@ -1326,6 +1330,13 @@ export class Checker {
     }
 
     const instantiated = this.instantiateCallable(calleeType, node, scope, expected);
+    if (
+      node.callee.kind === "MemberExpression" &&
+      instantiated.target?.kind === "method" &&
+      instantiated.target.receiver?.isMutable
+    ) {
+      this.ensureMutableRoot(node.callee.object, node.callee.span, scope);
+    }
     for (let i = 0; i < node.args.length; i++) {
       const param = instantiated.params[i];
       const arg = node.args[i];
@@ -1402,6 +1413,22 @@ export class Checker {
         type: this.substituteType(param.type, bindings),
       })),
       returnType: this.substituteType(callable.returnType, bindings),
+      target: callable.target
+        ? {
+            ...callable.target,
+            params: callable.target.params.map((param) => ({
+              ...param,
+              type: this.substituteType(param.type, bindings),
+            })),
+            returnType: this.substituteType(callable.target.returnType, bindings),
+            receiver: callable.target.receiver
+              ? {
+                  ...callable.target.receiver,
+                  type: this.substituteType(callable.target.receiver.type, bindings),
+                }
+              : undefined,
+          }
+        : undefined,
     };
   }
 
@@ -2332,6 +2359,7 @@ export class Checker {
         typeParams: method.typeParams,
         params: method.params,
         returnType: method.returnType,
+        receiver: method.receiver,
       },
     };
   }

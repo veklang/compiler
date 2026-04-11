@@ -91,6 +91,41 @@ fn bump(user: User) -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2503"]);
   });
 
+  test("mutating methods may not be called through const receivers", () => {
+    const result = check(`
+struct Counter {
+  value: i32;
+
+  fn bump(mut self) -> void {
+    self.value = self.value + 1;
+  }
+}
+
+fn main() -> void {
+  const counter = Counter { value: 1 };
+  counter.bump();
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2501"]);
+  });
+
+  test("mutating methods may not be called through readonly parameters", () => {
+    const result = check(`
+struct Counter {
+  value: i32;
+
+  fn bump(mut self) -> void {
+    self.value = self.value + 1;
+  }
+}
+
+fn tick(counter: Counter) -> void {
+  counter.bump();
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2503"]);
+  });
+
   test("nullable narrowing works for explicit checks", () => {
     checkOk(`
 fn main() -> void {
