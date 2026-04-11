@@ -307,6 +307,54 @@ fn main() -> void {
 `);
   });
 
+  test("type-parameter methods resolve through trait bounds", () => {
+    checkOk(`
+trait Named {
+  fn name(self) -> string;
+}
+
+struct User {
+  name_value: string;
+
+  satisfies Named {
+    fn name(self) -> string {
+      return self.name_value;
+    }
+  }
+}
+
+fn render<T>(value: T) -> string
+where T: Named
+{
+  return value.name();
+}
+
+fn main() -> void {
+  let user = User { name_value: "ducc" };
+  let label: string = render(user);
+}
+`);
+  });
+
+  test("ambiguous type-parameter methods are diagnosed", () => {
+    const result = check(`
+trait LeftName {
+  fn name(self) -> string;
+}
+
+trait RightName {
+  fn name(self) -> string;
+}
+
+fn render<T>(value: T) -> string
+where T: LeftName, T: RightName
+{
+  return value.name();
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2819"]);
+  });
+
   test("structs without Equal<T> cannot use ==", () => {
     const result = check(`
 struct UserId {

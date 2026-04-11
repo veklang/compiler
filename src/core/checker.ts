@@ -1217,6 +1217,10 @@ export class Checker {
 
   private checkCall(node: CallExpression, scope: Scope, expected?: Type): Type {
     const calleeType = this.checkExpression(node.callee, scope);
+    if (calleeType.kind === "Error") {
+      for (const arg of node.args) this.checkExpression(arg, scope);
+      return this.errorType();
+    }
     if (calleeType.kind !== "Function") {
       this.report("Callee is not callable.", node.callee.span, "E2207");
       for (const arg of node.args) this.checkExpression(arg, scope);
