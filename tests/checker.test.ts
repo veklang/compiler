@@ -16,747 +16,245 @@ const checkOk = (source: string) => {
 
 describe("checker", () => {
   test("unknown identifier", () => {
-    const result = check("fn main(): void { let x = y; }");
+    const result = check(`
+fn main() -> void {
+  let x = y;
+}
+`);
     expectDiagnostics(result.checkDiagnostics, ["E2001"]);
   });
 
-  test("duplicate symbol", () => {
-    const result = check("let x = 1; let x = 2;");
+  test("bool conditions are required", () => {
+    const result = check(`
+fn main() -> void {
+  if 1 {
+    return;
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
+  test("const assignment is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  const x: i32 = 1;
+  x = 2;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2501"]);
+  });
+
+  test("readonly parameter assignment is rejected", () => {
+    const result = check(`
+fn bump(x: i32) -> void {
+  x = 2;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2503"]);
+  });
+
+  test("nullable narrowing works for explicit checks", () => {
+    checkOk(`
+fn main() -> void {
+  let maybe_num: i32? = 1;
+  if maybe_num != null {
+    let n: i32 = maybe_num;
+  } else {
+    let z: null = maybe_num;
+  }
+}
+`);
+  });
+
+  test("array and string indexing", () => {
+    checkOk(`
+fn main() -> void {
+  let xs: i32[] = [1, 2, 3];
+  let first: i32 = xs[0];
+  let s: string = "cat";
+  let c: string = s[0];
+}
+`);
+  });
+
+  test("invalid index target is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let x: i32 = 1;
+  let y = x[0];
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2104"]);
+  });
+
+  test("struct literals require complete known fields", () => {
+    const result = check(`
+struct User {
+  id: i32;
+  name: string;
+}
+
+let user = User { id: 1, name: "a", id: 2 };
+`);
     expectDiagnostics(result.checkDiagnostics, ["E2002"]);
   });
 
-  test("const assignment", () => {
+  test("match expression requires wildcard arm", () => {
     const result = check(`
-const x: i32 = 1;
-x = 2;
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2501"]);
-  });
-
-  test("invalid assignment target", () => {
-    const result = check(`
-fn main() {
-  (1 + 2) = 3;
+fn main() -> void {
+  let value: Result<i32, string> = Ok(1);
+  let label = match value {
+    Ok(v) => v.format(),
+  };
 }
 `);
-    expectDiagnostics(result.checkDiagnostics, ["E2504"]);
+    expectDiagnostics(result.checkDiagnostics, ["E2606"]);
   });
 
-  test("const member mutation", () => {
+  test("statement match warns on missing enum variants", () => {
     const result = check(`
-struct Stuff { num: i32, str: string }
-const s: Stuff = Stuff { num: 1, str: "hi" };
-s.num = 2;
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2501"]);
-  });
-
-  test("type mismatch in initializer", () => {
-    const result = check('let x: i32 = "hi";');
-    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
-  });
-
-  test("no implicit string coercion", () => {
-    const result = check(`
-fn main() {
-  let x = "hi" + 1;
+fn main() -> void {
+  let value: Result<i32, string> = Ok(1);
+  match value {
+    Ok(v) => {
+      let x = v;
+    },
+  }
 }
 `);
-    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+    assert.equal(
+      result.checkDiagnostics.some((diagnostic) => diagnostic.code === "W2601"),
+      true,
+    );
   });
 
-  test("explicit cast for mixed numeric types", () => {
+  test("generic function inference works", () => {
     checkOk(`
-fn main() {
-  let x: i32 = 1;
-  let y: f32 = x as f32;
+fn id<T>(value: T) -> T {
+  return value;
 }
-`);
-  });
 
-  test("struct casts are not allowed by default", () => {
-    const result = check(`
-struct Stuff { num: i32 }
-fn main() {
-  let s = Stuff { num: 1 };
-  let t = s as Stuff;
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2105"]);
-  });
-
-  test("cannot infer type without annotation", () => {
-    const result = check("let x;");
-    expectDiagnostics(result.checkDiagnostics, ["E2102"]);
-  });
-
-  test("tuple binding mismatch", () => {
-    const result = check("let (a, b) = 1;");
-    expectDiagnostics(result.checkDiagnostics, ["E2104"]);
-  });
-
-  test("struct literal missing field", () => {
-    const result = check(`
-struct Stuff { num: i32, str: string }
-let s = Stuff { num: 1 };
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2103"]);
-  });
-
-  test("struct literal shorthand", () => {
-    checkOk(`
-struct Stuff { num: i32, str: string }
-let num = 1;
-let str = "hi";
-let s = Stuff { num, str };
-`);
-  });
-
-  test("map literal shorthand", () => {
-    checkOk(`
-let role = "admin";
-let meta = { role };
-`);
-  });
-
-  test("struct literal unknown field", () => {
-    const result = check(`
-struct Stuff { num: i32 }
-let s = Stuff { num: 1, bad: 2 };
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2104"]);
-  });
-
-  test("struct field type mismatch", () => {
-    const result = check(`
-struct Stuff { num: i32 }
-let s = Stuff { num: "nope" };
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
-  });
-
-  test("member access unknown field", () => {
-    const result = check(`
-struct Stuff { num: i32 }
-let s = Stuff { num: 1 };
-let v = s.bad;
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2104"]);
-  });
-
-  test("impl method call", () => {
-    checkOk(`
-struct User { id: i32, name: string }
-impl User {
-  fn display_name(self: User): string { return self.name; }
-}
-fn main() {
-  let u = User { id: 1, name: "sam" };
-  let s = u.display_name();
-}
-`);
-  });
-
-  test("trait impl missing method", () => {
-    const result = check(`
-struct User { id: i32 }
-trait Printable {
-  fn print(self: User): void;
-  fn id(self: User): i32;
-}
-impl Printable for User {
-  fn print(self: User): void { return; }
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2814"]);
-  });
-
-  test("trait impl signature mismatch", () => {
-    const result = check(`
-struct User { id: i32 }
-trait Printable {
-  fn id(self: User): i32;
-}
-impl Printable for User {
-  fn id(self: User): f32 { return 1.0; }
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2815"]);
-  });
-
-  test("trait impl self mutability must match", () => {
-    const result = check(`
-struct User { id: i32 }
-trait Touch {
-  fn touch(mut self: User): void;
-}
-impl Touch for User {
-  fn touch(self: User): void { return; }
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2815"]);
-  });
-
-  test("impl method requires self parameter", () => {
-    const result = check(`
-struct User { id: i32 }
-impl User {
-  fn nope(x: i32): i32 { return x; }
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2813"]);
-  });
-
-  test("only structs can be impl targets", () => {
-    const result = check(`
-enum Value { A }
-impl Value {
-  fn bad(self: Value): i32 { return 1; }
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2811"]);
-  });
-
-  test("generic trait bound satisfied", () => {
-    checkOk(`
-struct User { id: i32, name: string }
-trait Printable { fn print(self: User): void; }
-impl Printable for User {
-  fn print(self: User): void { return; }
-}
-fn log<T: Printable>(x: T): void {
-  x.print();
-}
-fn main() {
-  let u = User { id: 1, name: "sam" };
-  log(u);
-}
-`);
-  });
-
-  test("generic trait bound violation in call", () => {
-    const result = check(`
-struct User { id: i32 }
-struct Raw { id: i32 }
-trait Printable { fn print(self: User): void; }
-impl Printable for User {
-  fn print(self: User): void { return; }
-}
-fn log<T: Printable>(x: T): void { return; }
-fn main() {
-  let r = Raw { id: 1 };
-  log(r);
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
-  });
-
-  test("generic trait bound violation in type argument", () => {
-    const result = check(`
-struct User { id: i32 }
-struct Raw { id: i32 }
-trait Printable { fn print(self: User): void; }
-impl Printable for User {
-  fn print(self: User): void { return; }
-}
-struct Box<T: Printable> { value: T }
-let b: Box<Raw> = Box { value: Raw { id: 1 } };
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
-  });
-
-  test("duplicate trait impl pair is rejected", () => {
-    const result = check(`
-struct User { id: i32 }
-trait Printable { fn print(self: User): void; }
-impl Printable for User {
-  fn print(self: User): void { return; }
-}
-impl Printable for User {
-  fn print(self: User): void { return; }
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2817", "E2818"]);
-  });
-
-  test("generic function type argument inference", () => {
-    checkOk(`
-fn id<T>(x: T): T { return x; }
-fn main() {
+fn main() -> void {
   let x: i32 = id(1);
-  let y: string = id("ok");
 }
 `);
   });
 
-  test("function expression return does not leak to outer function", () => {
+  test("generic function explicit type arguments work", () => {
     checkOk(`
-fn main(): void {
-  let mul: fn(i32, i32) -> i32 = fn(a: i32, b: i32): i32 { return a * b; };
-  let v: i32 = mul(2, 3);
+fn id<T>(value: T) -> T {
+  return value;
+}
+
+fn main() -> void {
+  let x: i32 = id<i32>(1);
 }
 `);
   });
 
-  test("generic function inference failure on unused type param", () => {
+  test("generic function inference failure is diagnosed", () => {
     const result = check(`
-fn keep_i32<T>(x: i32): i32 { return x; }
-fn main() {
-  let x = keep_i32(1);
+fn keep<T>() -> i32 {
+  return 1;
+}
+
+fn main() -> void {
+  let x = keep();
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2820"]);
   });
 
-  test("enum pattern arity mismatch", () => {
+  test("anonymous functions may not capture outer locals", () => {
     const result = check(`
-enum Pair<A, B> { Pair(A, B) }
-match Pair(1, 2) { Pair(a) => {} }
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2601"]);
-  });
-
-  test("unknown enum variant", () => {
-    const result = check(`
-enum Pair<A, B> { Pair(A, B) }
-match Pair(1, 2) { Nope() => {} }
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2603"]);
-  });
-
-  test("unit enum variant pattern without parentheses", () => {
-    const result = check(`
-enum State { Idle, Busy(i32) }
-let s = Idle();
-match s {
-  Idle => {},
-  Busy(v) => {},
+fn main() -> void {
+  let offset: i32 = 2;
+  let add = fn(x: i32) -> i32 {
+    return x + offset;
+  };
 }
 `);
-    expectNoDiagnostics(result.lexDiagnostics, result.parseDiagnostics);
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.severity === "error"),
-      false,
-    );
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2601"),
-      false,
-    );
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2602"),
-      false,
-    );
+    expectDiagnostics(result.checkDiagnostics, ["E2813"]);
   });
 
-  test("enum variant patterns ignore local value shadowing", () => {
+  test("traits and satisfies blocks work", () => {
     checkOk(`
-enum Result<T, E> { Ok(T), Err(E) }
-fn main() {
-  let Ok: i32 = 1;
-  match Err("x") {
-    Ok(v) => {},
-    Err(e) => {},
+trait Printable {
+  fn print(self) -> void;
+}
+
+struct User {
+  id: i32;
+
+  fn show(self) -> i32 {
+    return self.id;
+  }
+
+  satisfies Printable {
+    fn print(self) -> void {
+      let x: i32 = self.show();
+      return;
+    }
+  }
+}
+
+fn main() -> void {
+  let user = User { id: 1 };
+  user.print();
+}
+`);
+  });
+
+  test("trait method mismatch is diagnosed", () => {
+    const result = check(`
+trait Printable {
+  fn print(self) -> void;
+}
+
+struct User {
+  id: i32;
+
+  satisfies Printable {
+    fn print(self) -> i32 {
+      return self.id;
+    }
   }
 }
 `);
+    expectDiagnostics(result.checkDiagnostics, ["E2815"]);
   });
 
-  test("enum pattern on non-enum target errors", () => {
-    const result = check(`
-match 1 { Ok(v) => {} }
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2604"]);
-  });
-
-  test("duplicate struct pattern fields", () => {
-    const result = check(`
-struct User { id: i32, name: string }
-let u = User { id: 1, name: "a" };
-match u {
-  User { id, id: x } => {},
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2605"]);
-  });
-
-  test("non-exhaustive enum match warns", () => {
-    const result = check(`
-enum Result<T, E> { Ok(T), Err(E) }
-match Ok(1) { Ok(v) => {} }
-`);
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2601"),
-      true,
-    );
-  });
-
-  test("non-exhaustive finite literal match warns", () => {
-    const result = check(`
-match true {
-  true => {},
-}
-`);
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2601"),
-      true,
-    );
-  });
-
-  test("shadowed arm warns after wildcard", () => {
-    const result = check(`
-match 1 {
-  _ => {},
-  1 => {},
-}
-`);
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2602"),
-      true,
-    );
-  });
-
-  test("shadowed struct arm warns on subset pattern", () => {
-    const result = check(`
-struct User { id: i32, name: string }
-let u = User { id: 1, name: "a" };
-match u {
-  User { id } => {},
-  User { id, name } => {},
-}
-`);
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2602"),
-      true,
-    );
-  });
-
-  test("shadowed duplicate literal arm warns", () => {
-    const result = check(`
-match true {
-  true => {},
-  true => {},
-  false => {},
-}
-`);
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2602"),
-      true,
-    );
-  });
-
-  test("shadowed enum variant arm warns", () => {
-    const result = check(`
-enum Result<T, E> { Ok(T), Err(E) }
-match Ok(1) {
-  Ok(v) => {},
-  Ok(x) => {},
-  Err(e) => {},
-}
-`);
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2602"),
-      true,
-    );
-  });
-
-  test("exhaustive finite literal match does not warn", () => {
-    const result = check(`
-match true {
-  true => {},
-  false => {},
-}
-`);
-    assert.equal(
-      result.checkDiagnostics.some((d) => d.code === "W2601"),
-      false,
-    );
-  });
-
-  test("enum payload binding types specialize from matched generic enum type", () => {
+  test("type-qualified method references work", () => {
     checkOk(`
-enum Result<T, E> { Ok(T), Err(E) }
-fn use_i32(x: i32): void { return; }
-fn use_string(x: string): void { return; }
-fn main() {
-  let r: Result<i32, string> = Ok(1);
-  match r {
-    Ok(v) => use_i32(v),
-    Err(e) => use_string(e),
+struct User {
+  id: i32;
+
+  fn show(self) -> i32 {
+    return self.id;
+  }
+
+  fn new(id: i32) -> Self {
+    return Self { id };
   }
 }
-`);
-  });
 
-  test("enum payload binding from unioned generic enum instances is union-typed", () => {
-    const result = check(`
-enum Result<T, E> { Ok(T), Err(E) }
-fn use_i32(x: i32): void { return; }
-fn main() {
-  let r: Result<i32, string> | Result<string, i32> = Ok(1);
-  match r {
-    Ok(v) => use_i32(v),
-    Err(e) => {},
-  }
+fn main() -> void {
+  let f: fn(User) -> i32 = User.show;
+  let g: fn(i32) -> User = User.new;
+  let user = g(1);
+  let x: i32 = f(user);
 }
 `);
-    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
   });
 
-  test("nested enum payload pattern typing", () => {
-    const result = check(`
-enum Result<T, E> { Ok(T), Err(E) }
-fn use_i32(x: i32): void { return; }
-fn main() {
-  let r: Result<Result<i32, string>, string> = Ok(Err("nope"));
-  match r {
-    Ok(Err(v)) => use_i32(v),
-    _ => {},
-  }
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
-  });
-
-  test("tuple pattern binding types are enforced", () => {
-    const result = check(`
-fn use_i32(x: i32): void { return; }
-match (1, "a") {
-  (x, y) => use_i32(y),
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
-  });
-
-  test("struct pattern binding types are enforced", () => {
-    const result = check(`
-struct User { id: i32, name: string }
-fn use_i32(x: i32): void { return; }
-let u = User { id: 1, name: "a" };
-match u {
-  User { id, name } => use_i32(name),
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
-  });
-
-  test("for loop infers array element type", () => {
+  test("for loops use array iteration item types", () => {
     checkOk(`
-fn main(): void {
-  let xs = [1, 2, 3];
-  let total: i32 = 0;
+fn main() -> void {
+  let xs: i32[] = [1, 2, 3];
   for item in xs {
     let x: i32 = item;
-    total = total + x;
   }
-}
-`);
-  });
-
-  test("generic struct literal expression with explicit type args", () => {
-    checkOk(`
-struct User { id: i32, name: string }
-trait Printable { fn print(self: User): void; }
-impl Printable for User {
-  fn print(self: User): void { return; }
-}
-struct Box<T: Printable> { value: T }
-fn main(): void {
-  let u = User { id: 1, name: "a" };
-  let b = Box<User> { value: u };
-  let n: string = b.value.name;
-}
-`);
-  });
-
-  test("is operator requires aliasable types", () => {
-    const result = check("let x = 1 is 2;");
-    expectDiagnostics(result.checkDiagnostics, ["E2502"]);
-  });
-
-  test("readonly parameter assignment", () => {
-    const result = check(`
-fn f(x: i32) {
-  x = 2;
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2503"]);
-  });
-
-  test("readonly parameter member mutation", () => {
-    const result = check(`
-struct Stuff { num: i32 }
-fn f(s: Stuff) {
-  s.num = 2;
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2503"]);
-  });
-
-  test("mut parameter requires mutable argument", () => {
-    const result = check(`
-fn bump(mut x: i32) {
-  x = 2;
-}
-fn main() {
-  const y: i32 = 1;
-  bump(y);
-}
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2204"]);
-  });
-
-  test("logical not with truthy values", () => {
-    checkOk('fn main() { let x = !0; let y = !""; let z = !null; }');
-  });
-
-  test("logical not accepts arrays/maps", () => {
-    checkOk("fn main() { let x = ![]; let y = ![1]; let z = !{}; }");
-  });
-
-  test("unknown type", () => {
-    const result = check("let x: Nope = 1;");
-    expectDiagnostics(result.checkDiagnostics, ["E2003"]);
-  });
-
-  test("cyclic type alias", () => {
-    const result = check(`
-type A = B;
-type B = A;
-let x: A = 1;
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2004"]);
-  });
-
-  test("generic arity mismatch", () => {
-    const result = check(`
-struct Box<T> { value: T }
-let x: Box = Box { value: 1 };
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2005", "E2003"]);
-  });
-
-  test("all truthy/falsy conditions allowed", () => {
-    checkOk(`
-fn main() {
-  // falsy
-  if false {}
-  if null {}
-  if 0 {}
-  if 0.0 {}
-  if -0.0 {}
-  if "" {}
-  if NaN {}
-  if [] {}
-  if {} {}
-
-  // truthy
-  if true {}
-  if 1 {}
-  if -1 {}
-  if 0.1 {}
-  if "x" {}
-  if Infinity {}
-  if -Infinity {}
-  if [1] {}
-  if { "a": 1 } {}
-}
-`);
-  });
-
-  test("all conditions are allowed", () => {
-    checkOk("if [1, 2] {} if {} {}");
-  });
-
-  test("return type mismatch", () => {
-    const result = check(`fn f(): i32 { return "nope"; }`);
-    expectDiagnostics(result.checkDiagnostics, ["E2302"]);
-  });
-
-  test("integer literal range", () => {
-    const result = check("let x: i8 = 999;");
-    expectDiagnostics(result.checkDiagnostics, ["E2401"]);
-  });
-
-  test("unknown keyword argument", () => {
-    const result = check(`
-fn f(a: i32, b: i32) { return; }
-f(a=1, b=2, c=3);
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2201"]);
-  });
-
-  test("duplicate keyword argument", () => {
-    const result = check(`
-fn f(a: i32, b: i32) { return; }
-f(a=1, b=2, a=3);
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2202"]);
-  });
-
-  test("kwspread overlap with explicit", () => {
-    const result = check(`
-fn f(a: i32, b: i32) { return; }
-f(a=1, b=2, **{ "a": 2 });
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2203"]);
-  });
-
-  test("kwspread must be map", () => {
-    const result = check(`
-fn f(**a: Map<string, i32>) { return; }
-f(**[1, 2]);
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2206"]);
-  });
-
-  test("spread requires array or tuple", () => {
-    const result = check(`
-fn f(*a: Array<i32>) { return; }
-f(*1);
-`);
-    expectDiagnostics(result.checkDiagnostics, ["E2206"]);
-  });
-
-  test("variadic param type must be array", () => {
-    const result = check("fn f(*a: i32) { return; }");
-    expectDiagnostics(result.checkDiagnostics, ["E2209"]);
-  });
-
-  test("kw-variadic param type must be map", () => {
-    const result = check("fn f(**a: i32) { return; }");
-    expectDiagnostics(result.checkDiagnostics, ["E2210"]);
-  });
-
-  test("missing arguments", () => {
-    const result = check("fn f(a: i32, b: i32) { return; } f(1);");
-    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
-  });
-
-  test("default export unknown symbol", () => {
-    const result = check("pub default a, b;");
-    expectDiagnostics(result.checkDiagnostics, ["E2701", "E2701"]);
-  });
-
-  test("checker happy path", () => {
-    checkOk(`
-import io from "std:io";
-
-struct Stuff { num: i32, str: string }
-enum Result<T, E> { Ok(T), Err(E) }
-
-fn add(a: i32, b: i32): i32 { return a + b; }
-
-fn main() {
-  let s = Stuff { num: 1, str: "hi" };
-  let xs = [1, 2, 3];
-  let ys = xs;
-  let ok: Result<i32, string> | null = Ok(1);
-  if ok != null { io.print("ok\\n"); }
-  match ok {
-    Ok(v) => io.print(v + "\\n"),
-    Err(e) => io.eprint(e + "\\n"),
-  }
-  add(1, 2);
 }
 `);
   });

@@ -1,81 +1,54 @@
 import type {
-  Argument,
   ArrayLiteralExpression,
-  AssignmentExpression,
+  AssignmentStatement,
   BinaryExpression,
   BlockStatement,
   CallExpression,
   CastExpression,
   EnumDeclaration,
   EnumPattern,
+  EnumVariant,
   Expression,
   ForStatement,
   FunctionDeclaration,
   FunctionExpression,
-  FunctionType,
-  Identifier,
   IdentifierExpression,
   IfStatement,
-  ImplDeclaration,
-  ImplMethod,
   ImportDeclaration,
+  IndexExpression,
   LiteralExpression,
-  MapLiteralExpression,
+  MatchExpression,
   MatchStatement,
   MemberExpression,
+  MethodDeclaration,
+  NamedParameter,
   NamedType,
   Node,
-  ParameterNode,
+  NullableType,
+  Parameter,
   Pattern,
   Program,
   ReturnStatement,
+  SelfParameter,
+  SelfType,
   Statement,
   StructDeclaration,
+  StructField,
   StructLiteralExpression,
-  StructPattern,
   TraitDeclaration,
   TraitMethodSignature,
-  TupleBinding,
+  TraitSatisfiesDeclaration,
   TupleLiteralExpression,
-  TuplePattern,
-  TupleType,
+  TupleMemberExpression,
   TypeAliasDeclaration,
   TypeNode,
   TypeParameter,
-  UnaryExpression,
-  UnionType,
   VariableDeclaration,
+  WhereConstraint,
   WhileStatement,
 } from "@/types/ast";
 import type { Diagnostic } from "@/types/diagnostic";
 import type { Span } from "@/types/position";
-
-type SymbolKind =
-  | "Value"
-  | "Function"
-  | "Type"
-  | "Struct"
-  | "Trait"
-  | "Enum"
-  | "Alias"
-  | "Variant"
-  | "TypeParam";
-
-interface Symbol {
-  kind: SymbolKind;
-  name: string;
-  node: Node;
-  type?: Type;
-  params?: ParamInfo[];
-  typeParams?: string[];
-  typeParamBounds?: Map<string, string[]>;
-  isConst?: boolean;
-  isMutable?: boolean;
-  isParam?: boolean;
-  isPublic?: boolean;
-  parentEnum?: Symbol;
-  payloadTypes?: Type[];
-}
 
 type PrimitiveName =
   | "i8"
@@ -97,16 +70,15 @@ type PrimitiveName =
 type Type =
   | PrimitiveType
   | NamedRefType
-  | UnionRefType
+  | NullableRefType
   | TupleRefType
   | FunctionRefType
-  | TypeParamType
-  | ErrorType
-  | UnknownType;
+  | TypeParamRefType
+  | UnknownType
+  | ErrorType;
 
 interface BaseType {
   kind: string;
-  aliasable: boolean;
 }
 
 interface PrimitiveType extends BaseType {
@@ -117,13 +89,13 @@ interface PrimitiveType extends BaseType {
 interface NamedRefType extends BaseType {
   kind: "Named";
   name: string;
-  symbol?: Symbol;
+  symbol?: TypeSymbol;
   typeArgs?: Type[];
 }
 
-interface UnionRefType extends BaseType {
-  kind: "Union";
-  types: Type[];
+interface NullableRefType extends BaseType {
+  kind: "Nullable";
+  base: Type;
 }
 
 interface TupleRefType extends BaseType {
@@ -131,32 +103,100 @@ interface TupleRefType extends BaseType {
   elements: Type[];
 }
 
-interface FunctionRefType extends BaseType {
-  kind: "Function";
-  params: Type[];
+interface FunctionParamType {
+  name?: string;
+  type: Type;
+  isMutable: boolean;
+}
+
+interface TypeParamSpec {
+  name: string;
+  bounds: NamedRefType[];
+}
+
+interface CallableTarget {
+  kind: "function" | "method" | "variant";
+  name: string;
+  typeParams: TypeParamSpec[];
+  params: FunctionParamType[];
   returnType: Type;
 }
 
-interface TypeParamType extends BaseType {
-  kind: "TypeParam";
-  name: string;
-  bounds?: string[];
+interface FunctionRefType extends BaseType {
+  kind: "Function";
+  typeParams: TypeParamSpec[];
+  params: FunctionParamType[];
+  returnType: Type;
+  target?: CallableTarget;
 }
 
-interface ErrorType extends BaseType {
-  kind: "Error";
+interface TypeParamRefType extends BaseType {
+  kind: "TypeParam";
+  name: string;
+  bounds: NamedRefType[];
 }
 
 interface UnknownType extends BaseType {
   kind: "Unknown";
 }
 
+interface ErrorType extends BaseType {
+  kind: "Error";
+}
+
 interface Scope {
   parent?: Scope;
-  values: Map<string, Symbol>;
-  types: Map<string, Symbol>;
+  values: Map<string, ValueSymbol>;
+  types: Map<string, TypeSymbol>;
+  typeParams: Map<string, TypeParamSpec>;
   overrides: Map<string, Type>;
-  typeParamBounds: Map<string, NamedRefType[]>;
+  selfType?: NamedRefType;
+}
+
+interface BaseSymbol {
+  kind: string;
+  name: string;
+  node: Node;
+  isPublic?: boolean;
+}
+
+interface ValueSymbol extends BaseSymbol {
+  kind: "Value" | "Function" | "Variant" | "BuiltinFunction";
+  type: Type;
+  functionDepth: number;
+  isGlobal: boolean;
+  isConst?: boolean;
+  isMutableParam?: boolean;
+}
+
+interface MethodInfo {
+  name: string;
+  node: MethodDeclaration | TraitMethodSignature;
+  receiver?: {
+    type: Type;
+    isMutable: boolean;
+  };
+  typeParams: TypeParamSpec[];
+  params: FunctionParamType[];
+  returnType: Type;
+}
+
+interface TraitSatisfactionInfo {
+  trait: NamedRefType;
+  methods: Map<string, MethodDeclaration>;
+}
+
+interface TypeSymbol extends BaseSymbol {
+  kind: "BuiltinType" | "Alias" | "Struct" | "Enum" | "Trait";
+  typeParams: TypeParameter[];
+  aliasTarget?: TypeAliasDeclaration;
+  traitDecl?: TraitDeclaration;
+  structDecl?: StructDeclaration;
+  enumDecl?: EnumDeclaration;
+  fields?: Map<string, StructField>;
+  methods?: Map<string, MethodDeclaration>;
+  variants?: Map<string, EnumVariant>;
+  satisfactions?: TraitSatisfactionInfo[];
 }
 
 export interface CheckResult {
@@ -189,343 +229,359 @@ export class Checker {
   private diagnostics: Diagnostic[] = [];
   private diagnosticSet = new Set<string>();
   private types = new WeakMap<Node, Type>();
-  private currentScope: Scope;
-  private currentFunction: Symbol | null = null;
-  private resolvingAliases = new Set<string>();
-  private reportedAliasCycles = new Set<string>();
-  private traitMethods = new Map<string, Map<string, ResolvedMethod>>();
-  private implMethods = new Map<string, Map<string, ResolvedMethod>>();
-  private implTraits = new Map<string, Set<string>>();
+  private globalScope: Scope;
+  private currentFunctionReturnType: Type | null = null;
+  private currentFunctionDepth = 0;
 
   constructor(private program: Program) {
-    this.currentScope = this.createScope();
-    for (const name of primitiveNames) {
-      this.declareType(
-        {
-          kind: "Type",
-          name,
-          node: this.program,
-          type: this.primitive(name),
-        },
-        this.currentScope,
-      );
-    }
-    for (const name of ["Array", "Map"]) {
-      this.declareType(
-        {
-          kind: "Type",
-          name,
-          node: this.program,
-        },
-        this.currentScope,
-      );
-    }
+    this.globalScope = this.createScope();
+    this.installBuiltins();
   }
 
   public checkProgram(): CheckResult {
-    this.predeclareTypes(this.program.body, this.currentScope);
-    this.checkStatements(this.program.body, this.currentScope);
-    return { diagnostics: this.diagnostics, types: this.types };
+    this.predeclareTypes();
+    this.predeclareFunctions();
+    this.materializeTypes();
+    for (const statement of this.program.body) this.checkStatement(statement, this.globalScope);
+    return {
+      diagnostics: this.diagnostics,
+      types: this.types,
+    };
   }
 
-  private createScope(parent?: Scope): Scope {
+  private createScope(parent?: Scope, selfType?: NamedRefType): Scope {
     return {
       parent,
       values: new Map(),
       types: new Map(),
+      typeParams: new Map(),
       overrides: new Map(),
-      typeParamBounds: new Map(),
+      selfType,
     };
   }
 
-  private report(message: string, span: Span, code: string) {
-    const key = this.diagnosticKey("error", message, span, code);
-    if (this.diagnosticSet.has(key)) return;
-    this.diagnosticSet.add(key);
-    this.diagnostics.push({ severity: "error", message, span, code });
-  }
-
-  private warn(message: string, span: Span, code: string) {
-    const key = this.diagnosticKey("warning", message, span, code);
-    if (this.diagnosticSet.has(key)) return;
-    this.diagnosticSet.add(key);
-    this.diagnostics.push({ severity: "warning", message, span, code });
-  }
-
-  private diagnosticKey(
-    severity: Diagnostic["severity"],
-    message: string,
-    span: Span,
-    code: string,
-  ) {
-    return `${severity}|${code}|${message}|${span.start.index}:${span.end.index}`;
-  }
-
-  private primitive(name: PrimitiveName): PrimitiveType {
-    return { kind: "Primitive", name, aliasable: false };
-  }
-
-  private errorType(): ErrorType {
-    return { kind: "Error", aliasable: false };
-  }
-
-  private unknownType(): UnknownType {
-    return { kind: "Unknown", aliasable: false };
-  }
-
-  private isError(type: Type) {
-    return type.kind === "Error";
-  }
-
-  private isUnknown(type: Type): type is UnknownType {
-    return type.kind === "Unknown";
-  }
-
-  private isUnknownLike(type: Type) {
-    return this.isUnknown(type) || type.kind === "TypeParam";
-  }
-
-  private typeEquals(a: Type, b: Type): boolean {
-    if (a.kind !== b.kind) return false;
-    if (a.kind === "Primitive" && b.kind === "Primitive")
-      return a.name === b.name;
-    if (a.kind === "Named" && b.kind === "Named")
-      return (
-        a.name === b.name &&
-        (a.typeArgs === undefined ||
-          b.typeArgs === undefined ||
-          ((a.typeArgs?.length ?? 0) === (b.typeArgs?.length ?? 0) &&
-            (a.typeArgs ?? []).every((t, i) =>
-              this.typeEquals(t, b.typeArgs![i]),
-            )))
-      );
-    if (a.kind === "Union" && b.kind === "Union") {
-      if (a.types.length !== b.types.length) return false;
-      return a.types.every((t, i) => this.typeEquals(t, b.types[i]));
+  private installBuiltins() {
+    for (const name of primitiveNames) {
+      this.globalScope.types.set(name, {
+        kind: "BuiltinType",
+        name,
+        node: this.program,
+        typeParams: [],
+      });
     }
-    if (a.kind === "Tuple" && b.kind === "Tuple") {
-      if (a.elements.length !== b.elements.length) return false;
-      return a.elements.every((t, i) => this.typeEquals(t, b.elements[i]));
-    }
-    if (a.kind === "Function" && b.kind === "Function") {
-      if (a.params.length !== b.params.length) return false;
-      if (!this.typeEquals(a.returnType, b.returnType)) return false;
-      return a.params.every((t, i) => this.typeEquals(t, b.params[i]));
-    }
-    if (a.kind === "TypeParam" && b.kind === "TypeParam")
-      return a.name === b.name;
-    if (a.kind === "Error" && b.kind === "Error") return true;
-    if (a.kind === "Unknown" && b.kind === "Unknown") return true;
-    return false;
-  }
 
-  private isAssignable(from: Type, to: Type): boolean {
-    if (this.isError(from) || this.isError(to)) return true;
-    if (this.isUnknownLike(from) || this.isUnknownLike(to)) return true;
-    if (this.typeEquals(from, to)) return true;
-
-    if (from.kind === "Named" && to.kind === "Named")
-      if (from.name === to.name && (!from.typeArgs || !to.typeArgs))
-        return true;
-
-    if (to.kind === "Union")
-      return to.types.some((t) => this.isAssignable(from, t));
-    if (from.kind === "Union")
-      return from.types.every((t) => this.isAssignable(t, to));
-    return false;
-  }
-
-  private makeUnion(types: Type[]): Type {
-    const flattened: Type[] = [];
-    for (const t of types) {
-      if (t.kind === "Union") flattened.push(...t.types);
-      else flattened.push(t);
-    }
-    const unique: Type[] = [];
-    for (const t of flattened)
-      if (!unique.some((u) => this.typeEquals(u, t))) unique.push(t);
-    if (unique.length === 0) return this.errorType();
-    if (unique.length === 1) return unique[0];
-    return {
-      kind: "Union",
-      types: unique,
-      aliasable: unique.every((t) => t.aliasable),
+    const builtinType = (name: string, typeParams: string[]) => {
+      this.globalScope.types.set(name, {
+        kind: "BuiltinType",
+        name,
+        node: this.program,
+        typeParams: typeParams.map((param) => this.syntheticTypeParam(param)),
+      });
     };
+
+    builtinType("Array", ["T"]);
+    builtinType("Map", ["K", "V"]);
+
+    const orderingDecl: EnumDeclaration = {
+      kind: "EnumDeclaration",
+      span: this.program.span,
+      name: this.syntheticIdentifier("Ordering"),
+      typeParams: [],
+      members: [
+        this.syntheticEnumVariant("Less"),
+        this.syntheticEnumVariant("Equal"),
+        this.syntheticEnumVariant("Greater"),
+      ],
+      isPublic: true,
+    };
+    this.globalScope.types.set("Ordering", {
+      kind: "Enum",
+      name: "Ordering",
+      node: orderingDecl,
+      enumDecl: orderingDecl,
+      typeParams: [],
+    });
+
+    const resultDecl: EnumDeclaration = {
+      kind: "EnumDeclaration",
+      span: this.program.span,
+      name: this.syntheticIdentifier("Result"),
+      typeParams: [this.syntheticTypeParam("T"), this.syntheticTypeParam("E")],
+      members: [
+        this.syntheticEnumVariant("Ok", [this.syntheticNamedType("T")]),
+        this.syntheticEnumVariant("Err", [this.syntheticNamedType("E")]),
+      ],
+      isPublic: true,
+    };
+    this.globalScope.types.set("Result", {
+      kind: "Enum",
+      name: "Result",
+      node: resultDecl,
+      enumDecl: resultDecl,
+      typeParams: resultDecl.typeParams ?? [],
+    });
+
+    const builtinTrait = (
+      name: string,
+      typeParams: string[],
+      methods: TraitMethodSignature[],
+    ) => {
+      const decl: TraitDeclaration = {
+        kind: "TraitDeclaration",
+        span: this.program.span,
+        name: this.syntheticIdentifier(name),
+        typeParams: typeParams.map((param) => this.syntheticTypeParam(param)),
+        methods,
+        isPublic: true,
+      };
+      this.globalScope.types.set(name, {
+        kind: "Trait",
+        name,
+        node: decl,
+        traitDecl: decl,
+        typeParams: decl.typeParams ?? [],
+      });
+    };
+
+    builtinTrait("Equal", ["T"], [
+      this.syntheticTraitMethod("equals", [this.syntheticSelfParam(false), this.syntheticNamedParam("other", this.syntheticNamedType("T"))], this.syntheticNamedType("bool")),
+    ]);
+    builtinTrait("Hashable", [], [
+      this.syntheticTraitMethod("hash", [this.syntheticSelfParam(false)], this.syntheticNamedType("u64")),
+    ]);
+    builtinTrait("Ordered", ["T"], [
+      this.syntheticTraitMethod("compare", [this.syntheticSelfParam(false), this.syntheticNamedParam("other", this.syntheticNamedType("T"))], this.syntheticNamedType("Ordering")),
+    ]);
+    builtinTrait("Cloneable", [], [
+      this.syntheticTraitMethod("clone", [this.syntheticSelfParam(false)], this.syntheticSelfType()),
+    ]);
+    builtinTrait("Iterable", ["T"], [
+      this.syntheticTraitMethod("next", [this.syntheticSelfParam(true)], this.syntheticNullableType(this.syntheticNamedType("T"))),
+    ]);
+    builtinTrait("Defaultable", [], [
+      this.syntheticTraitMethod("default", [], this.syntheticSelfType()),
+    ]);
+    builtinTrait("Formattable", [], [
+      this.syntheticTraitMethod("format", [this.syntheticSelfParam(false)], this.syntheticNamedType("string")),
+    ]);
+    builtinTrait("Unwrappable", ["T"], [
+      this.syntheticTraitMethod("unwrap", [this.syntheticSelfParam(false)], this.syntheticNamedType("T")),
+    ]);
+
+    const panicType: FunctionRefType = {
+      kind: "Function",
+      typeParams: [],
+      params: [{ name: "message", type: this.primitive("string"), isMutable: false }],
+      returnType: this.primitive("void"),
+      target: {
+        kind: "function",
+        name: "panic",
+        typeParams: [],
+        params: [{ name: "message", type: this.primitive("string"), isMutable: false }],
+        returnType: this.primitive("void"),
+      },
+    };
+    this.globalScope.values.set("panic", {
+      kind: "BuiltinFunction",
+      name: "panic",
+      node: this.program,
+      type: panicType,
+      functionDepth: 0,
+      isGlobal: true,
+    });
   }
 
-  private removeNull(type: Type): Type {
-    const nullType = this.primitive("null");
-    if (this.typeEquals(type, nullType)) return this.errorType();
-    if (type.kind !== "Union") return type;
-    const filtered = type.types.filter((t) => !this.typeEquals(t, nullType));
-    if (filtered.length === 0) return this.errorType();
-    return this.makeUnion(filtered);
+  private predeclareTypes() {
+    for (const statement of this.program.body) {
+      if (statement.kind === "TypeAliasDeclaration") {
+        this.declareType(this.globalScope, {
+          kind: "Alias",
+          name: statement.name.name,
+          node: statement,
+          typeParams: [],
+          aliasTarget: statement,
+          isPublic: statement.isPublic,
+        });
+      } else if (statement.kind === "StructDeclaration") {
+        this.declareType(this.globalScope, {
+          kind: "Struct",
+          name: statement.name.name,
+          node: statement,
+          typeParams: statement.typeParams ?? [],
+          structDecl: statement,
+          isPublic: statement.isPublic,
+        });
+      } else if (statement.kind === "EnumDeclaration") {
+        this.declareType(this.globalScope, {
+          kind: "Enum",
+          name: statement.name.name,
+          node: statement,
+          typeParams: statement.typeParams ?? [],
+          enumDecl: statement,
+          isPublic: statement.isPublic,
+        });
+      } else if (statement.kind === "TraitDeclaration") {
+        this.declareType(this.globalScope, {
+          kind: "Trait",
+          name: statement.name.name,
+          node: statement,
+          typeParams: statement.typeParams ?? [],
+          traitDecl: statement,
+          isPublic: statement.isPublic,
+        });
+      }
+    }
   }
 
-  private isIntegerType(type: Type): type is PrimitiveType {
-    return (
-      type.kind === "Primitive" &&
-      ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(type.name)
+  private predeclareFunctions() {
+    for (const statement of this.program.body) {
+      if (statement.kind !== "FunctionDeclaration") continue;
+      const type = this.resolveFunctionDeclarationSignature(statement, this.globalScope);
+      this.declareValue(this.globalScope, {
+        kind: "Function",
+        name: statement.name.name,
+        node: statement,
+        type,
+        functionDepth: 0,
+        isGlobal: true,
+      });
+    }
+  }
+
+  private materializeTypes() {
+    for (const symbol of this.globalScope.types.values()) {
+      if (symbol.kind === "Struct") this.materializeStruct(symbol);
+      if (symbol.kind === "Enum") this.materializeEnum(symbol);
+    }
+  }
+
+  private materializeStruct(symbol: TypeSymbol) {
+    if (!symbol.structDecl) return;
+    const scope = this.createTypeScope(symbol, this.globalScope);
+    symbol.fields = new Map();
+    symbol.methods = new Map();
+    symbol.satisfactions = [];
+
+    for (const member of symbol.structDecl.members) {
+      if (member.kind === "StructField") {
+        if (symbol.fields.has(member.name.name)) {
+          this.report(`Duplicate field '${member.name.name}'.`, member.span, "E2002");
+          continue;
+        }
+        symbol.fields.set(member.name.name, member);
+      } else if (member.kind === "MethodDeclaration") {
+        if (symbol.methods.has(member.name.name)) {
+          this.report(`Duplicate method '${member.name.name}'.`, member.span, "E2002");
+          continue;
+        }
+        symbol.methods.set(member.name.name, member);
+      } else {
+        symbol.satisfactions.push(this.materializeSatisfaction(member, symbol, scope));
+      }
+    }
+  }
+
+  private materializeEnum(symbol: TypeSymbol) {
+    if (!symbol.enumDecl) return;
+    const scope = this.createTypeScope(symbol, this.globalScope);
+    symbol.variants = new Map();
+    symbol.methods = new Map();
+    symbol.satisfactions = [];
+
+    for (const member of symbol.enumDecl.members) {
+      if (member.kind === "EnumVariant") {
+        if (symbol.variants.has(member.name.name)) {
+          this.report(`Duplicate variant '${member.name.name}'.`, member.span, "E2002");
+          continue;
+        }
+        symbol.variants.set(member.name.name, member);
+      } else if (member.kind === "MethodDeclaration") {
+        if (symbol.methods.has(member.name.name)) {
+          this.report(`Duplicate method '${member.name.name}'.`, member.span, "E2002");
+          continue;
+        }
+        symbol.methods.set(member.name.name, member);
+      } else {
+        symbol.satisfactions.push(this.materializeSatisfaction(member, symbol, scope));
+      }
+    }
+
+    const enumTypeArgs = symbol.typeParams.map((param) =>
+      this.typeParamType(param.name.name, this.lookupTypeParamBounds(param.name.name, scope)),
     );
+    const enumType = this.namedType(symbol.name, symbol, enumTypeArgs);
+
+    for (const variant of symbol.variants.values()) {
+      const payload = (variant.payload ?? []).map((node) => this.resolveType(node, scope));
+      const type =
+        payload.length === 0
+          ? enumType
+          : ({
+              kind: "Function",
+              typeParams: this.resolveTypeParams(symbol.typeParams, undefined, this.globalScope),
+              params: payload.map((type, index) => ({
+                name: `arg${index}`,
+                type,
+                isMutable: false,
+              })),
+              returnType: enumType,
+              target: {
+                kind: "variant",
+                name: variant.name.name,
+                typeParams: this.resolveTypeParams(symbol.typeParams, undefined, this.globalScope),
+                params: payload.map((type, index) => ({
+                  name: `arg${index}`,
+                  type,
+                  isMutable: false,
+                })),
+                returnType: enumType,
+              },
+            } as FunctionRefType);
+
+      this.declareValue(this.globalScope, {
+        kind: "Variant",
+        name: variant.name.name,
+        node: variant,
+        type,
+        functionDepth: 0,
+        isGlobal: true,
+      });
+    }
   }
 
-  private isFloatType(type: Type): type is PrimitiveType {
-    return (
-      type.kind === "Primitive" && ["f16", "f32", "f64"].includes(type.name)
+  private materializeSatisfaction(
+    declaration: TraitSatisfiesDeclaration,
+    _owner: TypeSymbol,
+    ownerScope: Scope,
+  ): TraitSatisfactionInfo {
+    const trait = this.resolveNamedType(declaration.trait, ownerScope);
+    const methods = new Map<string, MethodDeclaration>();
+    for (const method of declaration.methods) {
+      if (methods.has(method.name.name)) {
+        this.report(`Duplicate method '${method.name.name}'.`, method.span, "E2002");
+        continue;
+      }
+      methods.set(method.name.name, method);
+    }
+    return { trait, methods };
+  }
+
+  private createTypeScope(symbol: TypeSymbol, parent: Scope) {
+    const typeArgs = symbol.typeParams.map((param) =>
+      this.typeParamType(param.name.name, []),
     );
-  }
-
-  private isNumericType(type: Type) {
-    return this.isIntegerType(type) || this.isFloatType(type);
-  }
-
-  private isTruthyType(type: Type): boolean {
-    if (type.kind === "Union")
-      return type.types.every((t) => this.isTruthyType(t));
-    if (type.kind === "Primitive") {
-      const name = (type as PrimitiveType).name;
-      return (
-        name === "bool" ||
-        name === "null" ||
-        this.isNumericType(type) ||
-        name === "string"
-      );
+    const selfType = this.namedType(symbol.name, symbol, typeArgs);
+    const scope = this.createScope(parent, selfType);
+    for (const param of this.resolveTypeParams(symbol.typeParams, undefined, parent)) {
+      scope.typeParams.set(param.name, param);
     }
-    if (type.aliasable) return true;
-    return false;
-  }
-
-  private isBooleanType(type: Type) {
-    return type.kind === "Primitive" && type.name === "bool";
-  }
-
-  private isStringType(type: Type) {
-    return type.kind === "Primitive" && type.name === "string";
-  }
-
-  private isAliasable(type: Type): boolean {
-    return type.aliasable;
-  }
-
-  private isArrayLike(type: Type): boolean {
-    return type.kind === "Named" && type.name === "Array";
-  }
-
-  private isMapLike(type: Type): boolean {
-    return type.kind === "Named" && type.name === "Map";
-  }
-
-  private declareValue(symbol: Symbol, scope: Scope) {
-    if (scope.values.has(symbol.name)) {
-      this.report(
-        `Duplicate symbol '${symbol.name}'.`,
-        symbol.node.span,
-        "E2002",
-      );
-      return;
-    }
-    scope.values.set(symbol.name, symbol);
-  }
-
-  private declareType(symbol: Symbol, scope: Scope) {
-    if (scope.types.has(symbol.name)) {
-      this.report(
-        `Duplicate type '${symbol.name}'.`,
-        symbol.node.span,
-        "E2002",
-      );
-      return;
-    }
-    scope.types.set(symbol.name, symbol);
-  }
-
-  private lookupValue(name: string, scope: Scope): Symbol | undefined {
-    let current: Scope | undefined = scope;
-    while (current) {
-      if (current.values.has(name)) return current.values.get(name);
-      current = current.parent;
-    }
-    return undefined;
-  }
-
-  private lookupTypeSymbol(name: string, scope: Scope): Symbol | undefined {
-    let current: Scope | undefined = scope;
-    while (current) {
-      if (current.types.has(name)) return current.types.get(name);
-      current = current.parent;
-    }
-    return undefined;
-  }
-
-  private lookupValueType(name: string, scope: Scope): Type | undefined {
-    let current: Scope | undefined = scope;
-    while (current) {
-      if (current.overrides.has(name)) return current.overrides.get(name);
-      if (current.values.has(name)) return current.values.get(name)?.type;
-      current = current.parent;
-    }
-    return undefined;
-  }
-
-  private predeclareTypes(statements: Statement[], scope: Scope) {
-    for (const statement of statements) {
-      if (statement.kind === "StructDeclaration")
-        this.declareType(
-          {
-            kind: "Struct",
-            name: statement.name.name,
-            node: statement,
-            isPublic: statement.isPublic,
-          },
-          scope,
-        );
-
-      if (statement.kind === "TraitDeclaration")
-        this.declareType(
-          {
-            kind: "Trait",
-            name: statement.name.name,
-            node: statement,
-            isPublic: statement.isPublic,
-          },
-          scope,
-        );
-
-      if (statement.kind === "EnumDeclaration")
-        this.declareType(
-          {
-            kind: "Enum",
-            name: statement.name.name,
-            node: statement,
-            isPublic: statement.isPublic,
-          },
-          scope,
-        );
-
-      if (statement.kind === "TypeAliasDeclaration")
-        this.declareType(
-          {
-            kind: "Alias",
-            name: statement.name.name,
-            node: statement,
-            isPublic: statement.isPublic,
-          },
-          scope,
-        );
-    }
-  }
-
-  private checkStatements(statements: Statement[], scope: Scope) {
-    for (const statement of statements) this.checkStatement(statement, scope);
+    return scope;
   }
 
   private checkStatement(statement: Statement, scope: Scope) {
     switch (statement.kind) {
       case "ImportDeclaration":
         this.checkImport(statement, scope);
-        return;
-      case "ExportDefaultDeclaration":
-        this.checkExportDefault(statement, scope);
         return;
       case "VariableDeclaration":
         this.checkVariableDeclaration(statement, scope);
@@ -534,19 +590,16 @@ export class Checker {
         this.checkFunctionDeclaration(statement, scope);
         return;
       case "TypeAliasDeclaration":
-        this.checkTypeAlias(statement, scope);
+        this.resolveType(statement.type, scope);
         return;
       case "StructDeclaration":
-        this.checkStructDeclaration(statement, scope);
-        return;
-      case "TraitDeclaration":
-        this.checkTraitDeclaration(statement, scope);
-        return;
-      case "ImplDeclaration":
-        this.checkImplDeclaration(statement, scope);
+        this.checkTypeDeclaration(this.requireTypeSymbol(statement.name.name, scope), scope);
         return;
       case "EnumDeclaration":
-        this.checkEnumDeclaration(statement, scope);
+        this.checkTypeDeclaration(this.requireTypeSymbol(statement.name.name, scope), scope);
+        return;
+      case "TraitDeclaration":
+        this.checkTraitDeclaration(this.requireTypeSymbol(statement.name.name, scope), scope);
         return;
       case "ReturnStatement":
         this.checkReturnStatement(statement, scope);
@@ -563,8 +616,11 @@ export class Checker {
       case "MatchStatement":
         this.checkMatchStatement(statement, scope);
         return;
+      case "AssignmentStatement":
+        this.checkAssignmentStatement(statement, scope);
+        return;
       case "BlockStatement":
-        this.checkBlockStatement(statement, scope);
+        this.checkBlockStatement(statement, this.createScope(scope, scope.selfType));
         return;
       case "ExpressionStatement":
         this.checkExpression(statement.expression, scope);
@@ -578,1540 +634,566 @@ export class Checker {
   }
 
   private checkImport(statement: ImportDeclaration, scope: Scope) {
-    if (statement.defaultImport)
-      this.declareValue(
-        {
-          kind: "Value",
-          name: statement.defaultImport.name,
-          node: statement.defaultImport,
-          type: this.unknownType(),
-        },
-        scope,
-      );
-
-    if (statement.namedImports)
-      for (const name of statement.namedImports) {
-        this.declareValue(
-          {
-            kind: "Value",
-            name: name.name,
-            node: name,
-            type: this.unknownType(),
-          },
-          scope,
-        );
-      }
-  }
-
-  private checkExportDefault(statement: Statement, scope: Scope) {
-    if (statement.kind !== "ExportDefaultDeclaration") return;
-    if (statement.expression) this.checkExpression(statement.expression, scope);
-    if (statement.symbols)
-      for (const sym of statement.symbols) {
-        const found = this.lookupValue(sym.name, scope);
-        if (!found) {
-          this.report(
-            `Unknown symbol '${sym.name}' in default export.`,
-            sym.span,
-            "E2701",
-          );
-        }
-      }
+    if (statement.namespace) {
+      this.declareValue(scope, {
+        kind: "Value",
+        name: statement.namespace.name,
+        node: statement.namespace,
+        type: this.unknownType(),
+        functionDepth: this.currentFunctionDepth,
+        isGlobal: this.currentFunctionDepth === 0,
+      });
+    }
+    for (const imported of statement.namedImports ?? []) {
+      this.declareValue(scope, {
+        kind: "Value",
+        name: imported.name,
+        node: imported,
+        type: this.unknownType(),
+        functionDepth: this.currentFunctionDepth,
+        isGlobal: this.currentFunctionDepth === 0,
+      });
+    }
   }
 
   private checkVariableDeclaration(node: VariableDeclaration, scope: Scope) {
     const declaredType = node.typeAnnotation
       ? this.resolveType(node.typeAnnotation, scope)
       : undefined;
-    const initType = node.initializer
+    const initializerType = node.initializer
       ? this.checkExpression(node.initializer, scope, declaredType)
       : undefined;
 
-    if (node.declarationKind === "const" && !node.initializer)
-      this.report(
-        "Const declarations require an initializer.",
-        node.span,
-        "E2106",
-      );
+    if (node.declarationKind === "const" && !node.initializer) {
+      this.report("Const declarations require an initializer.", node.span, "E2106");
+    }
 
-    if (!declaredType && !initType)
+    if (!declaredType && !initializerType) {
       this.report(
         "Cannot infer type without annotation or initializer.",
         node.span,
         "E2102",
       );
+    }
 
-    const finalType = declaredType ?? initType ?? this.errorType();
-
-    if (
-      declaredType &&
-      initType &&
-      !this.isAssignable(initType, declaredType)
-    ) {
+    const finalType = declaredType ?? initializerType ?? this.errorType();
+    if (declaredType && initializerType && !this.isAssignable(initializerType, declaredType)) {
       this.report("Type mismatch in variable initializer.", node.span, "E2101");
     }
-    if (declaredType && initType)
-      this.enforceTypeParamBounds(initType, declaredType, scope, node.span);
 
-    this.bindPattern(
-      node.name,
-      finalType,
-      node.declarationKind === "const",
-      scope,
-    );
-  }
-
-  private bindPattern(
-    pattern: Identifier | TupleBinding,
-    type: Type,
-    isConst: boolean,
-    scope: Scope,
-  ) {
-    if (pattern.kind === "Identifier") {
-      this.declareValue(
-        {
-          kind: "Value",
-          name: pattern.name,
-          node: pattern,
-          type,
-          isConst,
-        },
-        scope,
-      );
-      return;
-    }
-
-    const tuple = pattern as TupleBinding;
-    if (
-      type.kind === "Tuple" &&
-      type.elements.length === tuple.elements.length
-    ) {
-      for (let i = 0; i < tuple.elements.length; i++) {
-        this.declareValue(
-          {
-            kind: "Value",
-            name: tuple.elements[i].name,
-            node: tuple.elements[i],
-            type: type.elements[i],
-            isConst,
-          },
-          scope,
-        );
-      }
-      return;
-    }
-
-    for (const element of tuple.elements)
-      this.declareValue(
-        {
-          kind: "Value",
-          name: element.name,
-          node: element,
-          type: this.unknownType(),
-          isConst,
-        },
-        scope,
-      );
-    this.report(
-      "Tuple binding requires a matching tuple type.",
-      pattern.span,
-      "E2104",
-    );
+    this.declareValue(scope, {
+      kind: "Value",
+      name: node.name.name,
+      node,
+      type: finalType,
+      functionDepth: this.currentFunctionDepth,
+      isGlobal: this.currentFunctionDepth === 0,
+      isConst: node.declarationKind === "const",
+    });
   }
 
   private checkFunctionDeclaration(node: FunctionDeclaration, scope: Scope) {
-    const typeScope = this.createScope(scope);
-    this.bindTypeParams(node.typeParams, typeScope);
-    const params = this.resolveParameters(node.params, typeScope);
-    const returnType = node.returnType
-      ? this.resolveType(node.returnType, typeScope)
-      : this.unknownType();
+    const symbol = this.lookupValue(node.name.name, scope);
+    if (!symbol || symbol.type.kind !== "Function") return;
 
-    const fnType: FunctionRefType = {
-      kind: "Function",
-      params: params.map((p) => p.type),
-      returnType,
-      aliasable: false,
-    };
+    const functionType = symbol.type;
+    const bodyScope = this.createScope(scope, scope.selfType);
+    for (const param of functionType.typeParams) bodyScope.typeParams.set(param.name, param);
+    for (const param of functionType.params) {
+      if (!param.name) continue;
+      this.declareValue(bodyScope, {
+        kind: "Value",
+        name: param.name,
+        node,
+        type: param.type,
+        functionDepth: this.currentFunctionDepth + 1,
+        isGlobal: false,
+        isMutableParam: param.isMutable,
+      });
+    }
 
-    const symbol: Symbol = {
-      kind: "Function",
-      name: node.name.name,
-      node,
-      type: fnType,
-      params,
-      typeParams: (node.typeParams ?? []).map((p) => p.name.name),
-      typeParamBounds: new Map(
-        (node.typeParams ?? []).map((p) => [
-          p.name.name,
-          (p.bounds ?? []).map((b) => b.name.name),
-        ]),
-      ),
-      isPublic: node.isPublic,
-    };
+    const previousReturnType = this.currentFunctionReturnType;
+    const previousDepth = this.currentFunctionDepth;
+    this.currentFunctionReturnType = functionType.returnType;
+    this.currentFunctionDepth++;
+    this.checkBlockStatement(node.body, bodyScope);
+    this.currentFunctionDepth = previousDepth;
+    this.currentFunctionReturnType = previousReturnType;
+  }
 
-    this.declareValue(symbol, scope);
+  private checkTypeDeclaration(symbol: TypeSymbol | undefined, scope: Scope) {
+    if (!symbol) return;
+    if (symbol.kind === "Struct") this.checkStructDeclaration(symbol, scope);
+    if (symbol.kind === "Enum") this.checkEnumDeclaration(symbol, scope);
+  }
 
-    const bodyScope = this.createScope(typeScope);
-    this.declareParameters(params, bodyScope);
-
-    const prevFunction = this.currentFunction;
-    this.currentFunction = symbol;
-    const returnTypes: Type[] = [];
-    this.checkBlockStatement(node.body, bodyScope, returnTypes);
-    this.currentFunction = prevFunction;
-
-    if (!node.returnType) {
-      const inferred =
-        returnTypes.length === 0
-          ? this.primitive("void")
-          : this.makeUnion(returnTypes);
-      fnType.returnType = inferred;
+  private checkStructDeclaration(symbol: TypeSymbol, scope: Scope) {
+    const typeScope = this.createTypeScope(symbol, scope);
+    for (const field of symbol.fields?.values() ?? []) {
+      this.resolveType(field.type, typeScope);
+    }
+    for (const method of symbol.methods?.values() ?? []) {
+      this.checkMethodDeclaration(method, symbol, typeScope);
+    }
+    for (const satisfaction of symbol.satisfactions ?? []) {
+      this.checkTraitSatisfaction(satisfaction, symbol, typeScope);
     }
   }
 
-  private resolveParameters(params: ParameterNode[], scope: Scope) {
-    const resolved: ParamInfo[] = [];
-    const paramScope = this.createScope(scope);
-    for (const param of params) {
-      if (param.kind === "ParameterSeparator") continue;
-      if (param.kind === "Parameter") {
-        const type = this.resolveType(param.type, scope);
-        if (param.defaultValue) {
-          const defType = this.checkExpression(
-            param.defaultValue,
-            paramScope,
-            type,
-          );
-          if (!this.isAssignable(defType, type)) {
-            this.report(
-              "Default value type mismatch.",
-              param.defaultValue.span,
-              "E2208",
-            );
-          }
-        }
-        resolved.push({
-          name: param.name.name,
-          type,
-          isNamedOnly: param.isNamedOnly,
-          hasDefault: !!param.defaultValue,
-          isVariadic: false,
-          isKwVariadic: false,
-          isMutable: param.isMutable,
-          span: param.span,
-        });
-        this.declareValue(
-          {
-            kind: "Value",
-            name: param.name.name,
-            node: param,
-            type,
-            isConst: false,
-          },
-          paramScope,
-        );
+  private checkEnumDeclaration(symbol: TypeSymbol, scope: Scope) {
+    const typeScope = this.createTypeScope(symbol, scope);
+    for (const variant of symbol.variants?.values() ?? []) {
+      for (const payload of variant.payload ?? []) this.resolveType(payload, typeScope);
+    }
+    for (const method of symbol.methods?.values() ?? []) {
+      this.checkMethodDeclaration(method, symbol, typeScope);
+    }
+    for (const satisfaction of symbol.satisfactions ?? []) {
+      this.checkTraitSatisfaction(satisfaction, symbol, typeScope);
+    }
+  }
+
+  private checkTraitDeclaration(symbol: TypeSymbol | undefined, scope: Scope) {
+    if (!symbol?.traitDecl) return;
+    const typeScope = this.createScope(scope, scope.selfType);
+    for (const param of this.resolveTypeParams(symbol.typeParams, undefined, scope)) {
+      typeScope.typeParams.set(param.name, param);
+    }
+    typeScope.selfType = this.namedType("Self", symbol);
+
+    const seen = new Set<string>();
+    for (const method of symbol.traitDecl.methods) {
+      if (seen.has(method.name.name)) {
+        this.report(`Duplicate method '${method.name.name}'.`, method.span, "E2002");
         continue;
       }
-      if (param.kind === "VariadicParameter") {
-        const type = this.resolveType(param.type, scope);
-        if (!this.isArrayLike(type)) {
-          this.report(
-            "Variadic parameter must be an Array type.",
-            param.span,
-            "E2209",
-          );
-        }
-        resolved.push({
-          name: param.name.name,
-          type,
-          isNamedOnly: true,
-          hasDefault: false,
-          isVariadic: true,
-          isKwVariadic: false,
-          isMutable: false,
-          span: param.span,
-        });
-        continue;
-      }
-      if (param.kind === "KwVariadicParameter") {
-        const type = this.resolveType(param.type, scope);
-        if (!this.isMapLike(type)) {
-          this.report(
-            "Kw-variadic parameter must be a Map type.",
-            param.span,
-            "E2210",
-          );
-        }
-        resolved.push({
-          name: param.name.name,
-          type,
-          isNamedOnly: true,
-          hasDefault: false,
-          isVariadic: false,
-          isKwVariadic: true,
-          isMutable: false,
-          span: param.span,
-        });
-      }
-    }
-    return resolved;
-  }
-
-  private declareParameters(params: ParamInfo[], scope: Scope) {
-    for (const param of params) {
-      this.declareValue(
-        {
-          kind: "Value",
-          name: param.name,
-          node: this.program,
-          type: param.type,
-          isConst: false,
-          isMutable: param.isMutable,
-          isParam: true,
-        },
-        scope,
-      );
+      seen.add(method.name.name);
+      this.resolveTraitMethod(method, symbol, typeScope);
     }
   }
 
-  private checkTypeAlias(node: TypeAliasDeclaration, scope: Scope) {
-    const symbol = this.lookupTypeSymbol(node.name.name, scope);
-    if (!symbol) return;
-    symbol.type = this.resolveType(node.type, scope);
-  }
-
-  private checkStructDeclaration(node: StructDeclaration, scope: Scope) {
-    const symbol = this.lookupTypeSymbol(node.name.name, scope);
-    if (!symbol) return;
-    const typeScope = this.createScope(scope);
-    this.bindTypeParams(node.typeParams, typeScope);
-    symbol.type = this.namedType(node.name.name, symbol, undefined);
-    for (const field of node.fields) this.resolveType(field.type, typeScope);
-  }
-
-  private checkTraitDeclaration(node: TraitDeclaration, scope: Scope) {
-    const symbol = this.lookupTypeSymbol(node.name.name, scope);
-    if (!symbol) return;
-    symbol.type = this.namedType(node.name.name, symbol, undefined);
-
-    const methods = new Map<string, ResolvedMethod>();
-    for (const method of node.methods) {
-      const resolved = this.resolveTraitMethodSignature(method, scope);
-      if (methods.has(method.name.name)) {
-        this.report(
-          `Duplicate trait method '${method.name.name}'.`,
-          method.span,
-          "E2002",
-        );
-        continue;
-      }
-      methods.set(method.name.name, resolved);
-    }
-    this.traitMethods.set(node.name.name, methods);
-  }
-
-  private checkImplDeclaration(node: ImplDeclaration, scope: Scope) {
-    const targetType = this.resolveType(node.target, scope);
-    if (targetType.kind !== "Named" || !targetType.symbol) {
-      this.report(
-        "Impl target must be a named type.",
-        node.target.span,
-        "E2810",
-      );
-      return;
-    }
-    if (targetType.symbol.kind !== "Struct") {
-      this.report(
-        "Only structs can be impl targets in this version.",
-        node.target.span,
-        "E2811",
-      );
+  private checkTraitSatisfaction(
+    satisfaction: TraitSatisfactionInfo,
+    owner: TypeSymbol,
+    scope: Scope,
+  ) {
+    if (!satisfaction.trait.symbol || satisfaction.trait.symbol.kind !== "Trait") {
+      this.report("Unknown trait in satisfies block.", satisfaction.trait.node.span, "E2812");
       return;
     }
 
-    const methods = new Map<string, ResolvedMethod>();
-    for (const method of node.methods) {
-      if (methods.has(method.name.name)) {
-        this.report(
-          `Duplicate impl method '${method.name.name}'.`,
-          method.span,
-          "E2002",
-        );
+    const traitSymbol = satisfaction.trait.symbol;
+    const required = this.resolveTraitMethodsForReference(
+      traitSymbol,
+      satisfaction.trait,
+      this.namedType(owner.name, owner, this.ownerTypeArgs(owner, scope)),
+      scope,
+    );
+
+    for (const [name, requiredMethod] of required) {
+      const impl = satisfaction.methods.get(name);
+      if (!impl) {
+        this.report(`Missing trait method '${name}'.`, owner.node.span, "E2814");
         continue;
       }
-      methods.set(
-        method.name.name,
-        this.resolveImplMethod(method, targetType, scope),
-      );
-    }
-
-    if (node.trait) {
-      const traitType = this.resolveType(node.trait, scope);
-      if (traitType.kind !== "Named" || !traitType.symbol) {
+      const actual = this.resolveMethod(impl, owner, scope);
+      if (!this.methodEquals(actual, requiredMethod)) {
         this.report(
-          "Impl trait must be a named type.",
-          node.trait.span,
-          "E2812",
-        );
-      } else if (traitType.symbol.kind !== "Trait") {
-        this.report(
-          "Impl trait must reference a trait.",
-          node.trait.span,
-          "E2812",
-        );
-      } else {
-        const existingTraits =
-          this.implTraits.get(targetType.name) ?? new Set<string>();
-        if (existingTraits.has(traitType.name))
-          this.report(
-            `Duplicate impl for trait '${traitType.name}' on '${targetType.name}'.`,
-            node.span,
-            "E2817",
-          );
-        existingTraits.add(traitType.name);
-        this.implTraits.set(targetType.name, existingTraits);
-
-        const required = this.ensureTraitMethods(traitType.symbol, scope);
-        for (const [name, traitMethod] of required) {
-          const implMethod = methods.get(name);
-          if (!implMethod) {
-            this.report(`Missing trait method '${name}'.`, node.span, "E2814");
-            continue;
-          }
-          if (
-            !this.typeEquals(implMethod.callType, traitMethod.callType) ||
-            implMethod.receiverMutable !== traitMethod.receiverMutable
-          ) {
-            this.report(
-              `Trait method signature mismatch for '${name}'.`,
-              implMethod.node.span,
-              "E2815",
-            );
-          }
-        }
-      }
-    }
-
-    const targetMethods =
-      this.implMethods.get(targetType.name) ??
-      new Map<string, ResolvedMethod>();
-    for (const [name, method] of methods) {
-      if (targetMethods.has(name))
-        this.report(
-          `Duplicate impl method '${name}' for '${targetType.name}'.`,
-          method.node.span,
-          "E2818",
-        );
-      targetMethods.set(name, method);
-    }
-    this.implMethods.set(targetType.name, targetMethods);
-  }
-
-  private ensureTraitMethods(symbol: Symbol, scope: Scope) {
-    const cached = this.traitMethods.get(symbol.name);
-    if (cached) return cached;
-    const node = symbol.node as TraitDeclaration;
-    const methods = new Map<string, ResolvedMethod>();
-    for (const method of node.methods)
-      methods.set(
-        method.name.name,
-        this.resolveTraitMethodSignature(method, scope),
-      );
-    this.traitMethods.set(symbol.name, methods);
-    return methods;
-  }
-
-  private checkEnumDeclaration(node: EnumDeclaration, scope: Scope) {
-    const symbol = this.lookupTypeSymbol(node.name.name, scope);
-    if (!symbol) return;
-    const typeScope = this.createScope(scope);
-    this.bindTypeParams(node.typeParams, typeScope);
-    symbol.type = this.namedType(node.name.name, symbol, undefined);
-
-    for (const variant of node.variants) {
-      const payloadTypes = variant.payload
-        ? variant.payload.map((t) => this.resolveType(t, typeScope))
-        : [];
-      const variantSymbol: Symbol = {
-        kind: "Variant",
-        name: variant.name.name,
-        node: variant,
-        parentEnum: symbol,
-        payloadTypes,
-        type: this.makeVariantType(symbol, payloadTypes),
-      };
-      this.declareValue(variantSymbol, scope);
-    }
-  }
-
-  private makeVariantType(
-    enumSymbol: Symbol,
-    payloadTypes: Type[],
-  ): FunctionRefType {
-    return {
-      kind: "Function",
-      params: payloadTypes,
-      returnType: this.namedType(enumSymbol.name, enumSymbol, undefined),
-      aliasable: false,
-    };
-  }
-
-  private resolveTraitMethodSignature(
-    method: TraitMethodSignature,
-    scope: Scope,
-  ): ResolvedMethod {
-    const params = this.resolveParameters(method.params, scope);
-    const returnType = method.returnType
-      ? this.resolveType(method.returnType, scope)
-      : this.unknownType();
-
-    let receiverMutable = false;
-    const callParams = [...params];
-    if (params.length > 0 && params[0].name === "self") {
-      receiverMutable = params[0].isMutable;
-      callParams.shift();
-    } else
-      this.report(
-        "Trait methods must start with a 'self' parameter.",
-        method.span,
-        "E2813",
-      );
-
-    const callType: FunctionRefType = {
-      kind: "Function",
-      params: callParams.map((p) => p.type),
-      returnType,
-      aliasable: false,
-    };
-    return {
-      node: method,
-      callType,
-      params: callParams,
-      receiverMutable,
-    };
-  }
-
-  private resolveImplMethod(
-    method: ImplMethod,
-    targetType: NamedRefType,
-    scope: Scope,
-  ): ResolvedMethod {
-    const params = this.resolveParameters(method.params, scope);
-    const returnType = method.returnType
-      ? this.resolveType(method.returnType, scope)
-      : this.unknownType();
-
-    let receiverMutable = false;
-    const callParams = [...params];
-    if (params.length > 0 && params[0].name === "self") {
-      const selfParam = params[0];
-      receiverMutable = selfParam.isMutable;
-      if (!this.isAssignable(targetType, selfParam.type)) {
-        this.report(
-          "First 'self' parameter must be the impl target type.",
-          method.params[0]?.span ?? method.span,
-          "E2813",
+          `Trait method signature mismatch for '${name}'.`,
+          impl.span,
+          "E2815",
         );
       }
-      callParams.shift();
-    } else
-      this.report(
-        "Impl methods must start with a 'self' parameter.",
-        method.span,
-        "E2813",
-      );
+      this.checkMethodBody(impl, actual, owner, scope);
+    }
+  }
 
-    const callType: FunctionRefType = {
-      kind: "Function",
-      params: callParams.map((p) => p.type),
-      returnType,
-      aliasable: false,
-    };
+  private checkMethodDeclaration(
+    method: MethodDeclaration,
+    owner: TypeSymbol,
+    scope: Scope,
+  ) {
+    const resolved = this.resolveMethod(method, owner, scope);
+    this.checkMethodBody(method, resolved, owner, scope);
+  }
 
-    const methodSymbol: Symbol = {
-      kind: "Function",
-      name: method.name.name,
-      node: method,
-      type: callType,
-      params: callParams,
-    };
+  private checkMethodBody(
+    method: MethodDeclaration,
+    resolved: MethodInfo,
+    owner: TypeSymbol,
+    scope: Scope,
+  ) {
+    const bodyScope = this.createScope(scope, this.namedType(owner.name, owner, this.ownerTypeArgs(owner, scope)));
+    for (const param of this.resolveTypeParams(owner.typeParams, undefined, this.globalScope)) {
+      bodyScope.typeParams.set(param.name, param);
+    }
+    for (const param of resolved.typeParams) bodyScope.typeParams.set(param.name, param);
+    if (resolved.receiver && method.params[0]?.kind === "SelfParameter") {
+      this.declareValue(bodyScope, {
+        kind: "Value",
+        name: "self",
+        node: method.params[0],
+        type: resolved.receiver.type,
+        functionDepth: this.currentFunctionDepth + 1,
+        isGlobal: false,
+        isMutableParam: resolved.receiver.isMutable,
+      });
+    }
+    for (const param of resolved.params) {
+      if (!param.name) continue;
+      this.declareValue(bodyScope, {
+        kind: "Value",
+        name: param.name,
+        node: method,
+        type: param.type,
+        functionDepth: this.currentFunctionDepth + 1,
+        isGlobal: false,
+        isMutableParam: param.isMutable,
+      });
+    }
 
-    const bodyScope = this.createScope(scope);
-    this.declareParameters(params, bodyScope);
-    const prevFunction = this.currentFunction;
-    this.currentFunction = methodSymbol;
-    const returns: Type[] = [];
-    this.checkBlockStatement(method.body, bodyScope, returns);
-    this.currentFunction = prevFunction;
+    const previousReturnType = this.currentFunctionReturnType;
+    const previousDepth = this.currentFunctionDepth;
+    this.currentFunctionReturnType = resolved.returnType;
+    this.currentFunctionDepth++;
+    this.checkBlockStatement(method.body, bodyScope);
+    this.currentFunctionDepth = previousDepth;
+    this.currentFunctionReturnType = previousReturnType;
+  }
 
-    if (!method.returnType)
-      callType.returnType =
-        returns.length === 0 ? this.primitive("void") : this.makeUnion(returns);
-
-    return {
-      node: method,
-      callType,
-      params: callParams,
-      receiverMutable,
-    };
+  private checkBlockStatement(block: BlockStatement, scope: Scope) {
+    const blockScope = this.createScope(scope, scope.selfType);
+    blockScope.typeParams = new Map(scope.typeParams);
+    for (const statement of block.body) this.checkStatement(statement, blockScope);
   }
 
   private checkReturnStatement(node: ReturnStatement, scope: Scope) {
-    if (!this.currentFunction) return;
-    const functionType = this.currentFunction.type;
-    if (!functionType || functionType.kind !== "Function") return;
-    if (!node.value) {
-      if (!this.isAssignable(this.primitive("void"), functionType.returnType))
-        this.report("Return type mismatch.", node.span, "E2302");
-      return;
-    }
-    const valueType = this.checkExpression(
-      node.value,
-      scope,
-      functionType.returnType,
-    );
-    if (!this.isAssignable(valueType, functionType.returnType))
+    if (!this.currentFunctionReturnType) return;
+    const valueType = node.value
+      ? this.checkExpression(node.value, scope, this.currentFunctionReturnType)
+      : this.primitive("void");
+    if (!this.isAssignable(valueType, this.currentFunctionReturnType)) {
       this.report("Return type mismatch.", node.span, "E2302");
+    }
   }
 
   private checkIfStatement(node: IfStatement, scope: Scope) {
-    const condType = this.checkExpression(node.condition, scope);
-    void condType;
+    const conditionType = this.checkExpression(node.condition, scope);
+    if (!this.isBooleanType(conditionType)) {
+      this.report("Condition must be bool.", node.condition.span, "E2101");
+    }
 
-    const thenScope = this.createScope(scope);
-    const elseScope = this.createScope(scope);
+    const thenScope = this.createScope(scope, scope.selfType);
+    thenScope.typeParams = new Map(scope.typeParams);
+    const elseScope = this.createScope(scope, scope.selfType);
+    elseScope.typeParams = new Map(scope.typeParams);
 
-    const narrowThen = this.narrowByCondition(node.condition, true, scope);
-    const narrowElse = this.narrowByCondition(node.condition, false, scope);
-    for (const [name, type] of narrowThen) thenScope.overrides.set(name, type);
-    for (const [name, type] of narrowElse) elseScope.overrides.set(name, type);
+    const thenNarrow = this.narrowNullComparison(node.condition, true, scope);
+    const elseNarrow = this.narrowNullComparison(node.condition, false, scope);
+    for (const [name, type] of thenNarrow) thenScope.overrides.set(name, type);
+    for (const [name, type] of elseNarrow) elseScope.overrides.set(name, type);
 
     this.checkBlockStatement(node.thenBranch, thenScope);
-    if (node.elseBranch) {
-      if (node.elseBranch.kind === "IfStatement")
-        this.checkIfStatement(node.elseBranch, elseScope);
-      else this.checkBlockStatement(node.elseBranch, elseScope);
-    }
-  }
-
-  private narrowByCondition(
-    expr: Expression,
-    truthy: boolean,
-    scope: Scope,
-  ): Map<string, Type> {
-    const result = new Map<string, Type>();
-    if (expr.kind !== "BinaryExpression") return result;
-    const op = expr.operator;
-    if (op !== "==" && op !== "!=") return result;
-    const left = expr.left;
-    const right = expr.right;
-    const isNullLiteral = (node: Expression) =>
-      node.kind === "LiteralExpression" && node.literalType === "Null";
-    const isId = (node: Expression): node is IdentifierExpression =>
-      node.kind === "IdentifierExpression";
-
-    if (isId(left) && isNullLiteral(right)) {
-      const original = this.lookupValueType(left.name, scope);
-      if (original) {
-        const narrowed =
-          op === "!=" ? this.removeNull(original) : this.primitive("null");
-        const final = truthy
-          ? narrowed
-          : op === "!="
-            ? this.primitive("null")
-            : this.removeNull(original);
-        result.set(left.name, final);
-      }
-    }
-    if (isId(right) && isNullLiteral(left)) {
-      const original = this.lookupValueType(right.name, scope);
-      if (original) {
-        const narrowed =
-          op === "!=" ? this.removeNull(original) : this.primitive("null");
-        const final = truthy
-          ? narrowed
-          : op === "!="
-            ? this.primitive("null")
-            : this.removeNull(original);
-        result.set(right.name, final);
-      }
-    }
-    return result;
+    if (!node.elseBranch) return;
+    if (node.elseBranch.kind === "IfStatement") this.checkIfStatement(node.elseBranch, elseScope);
+    else this.checkBlockStatement(node.elseBranch, elseScope);
   }
 
   private checkWhileStatement(node: WhileStatement, scope: Scope) {
-    const condType = this.checkExpression(node.condition, scope);
-    void condType;
-    this.checkBlockStatement(node.body, this.createScope(scope));
+    const conditionType = this.checkExpression(node.condition, scope);
+    if (!this.isBooleanType(conditionType)) {
+      this.report("Condition must be bool.", node.condition.span, "E2101");
+    }
+    this.checkBlockStatement(node.body, this.createScope(scope, scope.selfType));
   }
 
   private checkForStatement(node: ForStatement, scope: Scope) {
     const iterableType = this.checkExpression(node.iterable, scope);
-    let itemType: Type = this.unknownType();
-    if (
-      iterableType.kind === "Named" &&
-      iterableType.name === "Array" &&
-      iterableType.typeArgs?.[0]
-    )
-      itemType = iterableType.typeArgs[0];
-    else if (iterableType.kind === "Tuple" && iterableType.elements.length > 0)
-      itemType = this.makeUnion(iterableType.elements);
-
-    const bodyScope = this.createScope(scope);
-    this.declareValue(
-      {
-        kind: "Value",
-        name: node.iterator.name,
-        node: node.iterator,
-        type: itemType,
-      },
-      bodyScope,
-    );
+    const itemType = this.iterableItemType(iterableType, scope);
+    if (!itemType) {
+      this.report("For loop requires an iterable value.", node.iterable.span, "E2101");
+    }
+    const bodyScope = this.createScope(scope, scope.selfType);
+    bodyScope.typeParams = new Map(scope.typeParams);
+    this.declareValue(bodyScope, {
+      kind: "Value",
+      name: node.iterator.name,
+      node: node.iterator,
+      type: itemType ?? this.unknownType(),
+      functionDepth: this.currentFunctionDepth,
+      isGlobal: false,
+    });
     this.checkBlockStatement(node.body, bodyScope);
   }
 
   private checkMatchStatement(node: MatchStatement, scope: Scope) {
-    const exprType = this.checkExpression(node.expression, scope);
-    const enumSymbol = this.extractEnumSymbol(exprType);
-    const seenVariants = new Set<string>();
-    let hasWildcard = false;
-    let hasPatternError = false;
-    const seenFiniteLiterals = new Set<string>();
+    const matchedType = this.checkExpression(node.expression, scope);
+    const coverage = this.createCoverageTracker(matchedType);
     const priorPatterns: Pattern[] = [];
 
     for (const arm of node.arms) {
-      const armPattern = this.normalizeTopLevelPatternForCoverage(
-        arm.pattern,
-        enumSymbol,
-      );
-      if (
-        priorPatterns.some((prior) =>
-          this.patternCovers(
-            this.normalizeTopLevelPatternForCoverage(prior, enumSymbol),
-            armPattern,
-          ),
-        )
-      )
-        this.warn(
-          "Match arm is shadowed by an earlier arm.",
-          arm.span,
-          "W2602",
-        );
-
-      const armScope = this.createScope(scope);
-      const ok = this.checkPattern(
-        arm.pattern,
-        exprType,
-        enumSymbol,
-        armScope,
-        seenVariants,
-        seenFiniteLiterals,
-      );
-      if (!ok) hasPatternError = true;
-      if (arm.pattern.kind === "WildcardPattern") hasWildcard = true;
-      if (arm.body.kind === "BlockStatement")
-        this.checkBlockStatement(arm.body, armScope);
-      else this.checkExpression(arm.body, armScope);
+      if (priorPatterns.some((pattern) => this.patternCovers(pattern, arm.pattern, matchedType, scope))) {
+        this.warn("Match arm is shadowed by an earlier arm.", arm.span, "W2602");
+      }
+      const armScope = this.createScope(scope, scope.selfType);
+      armScope.typeParams = new Map(scope.typeParams);
+      this.bindPattern(arm.pattern, matchedType, armScope, scope, coverage);
+      this.checkBlockStatement(arm.body, armScope);
       priorPatterns.push(arm.pattern);
     }
 
-    if (enumSymbol && !hasWildcard && !hasPatternError) {
-      const enumNode = enumSymbol.node as EnumDeclaration;
-      const total = enumNode.variants.map((v) => v.name.name);
-      const missing = total.filter((v) => !seenVariants.has(v));
-      if (missing.length > 0) {
-        this.warn(
-          `Match is not exhaustive; missing ${missing.join(", ")}.`,
-          node.span,
-          "W2601",
-        );
-      }
-    }
-
-    if (!enumSymbol && !hasWildcard && !hasPatternError) {
-      const domain = this.finiteLiteralDomain(exprType);
-      if (domain) {
-        const missing = domain.filter(
-          (label) => !seenFiniteLiterals.has(label),
-        );
-        if (missing.length > 0)
-          this.warn(
-            `Match is not exhaustive; missing ${missing.join(", ")}.`,
-            node.span,
-            "W2601",
-          );
-      }
+    const missing = this.coverageMissing(coverage);
+    if (missing.length > 0) {
+      this.warn(
+        `Match is not exhaustive; missing ${missing.join(", ")}.`,
+        node.span,
+        "W2601",
+      );
     }
   }
 
-  private extractEnumSymbol(type: Type): Symbol | undefined {
-    if (type.kind === "Named" && type.symbol?.kind === "Enum")
-      return type.symbol;
-    if (type.kind === "Union") {
-      const enums = type.types
-        .map((t) => this.extractEnumSymbol(t))
-        .filter(Boolean) as Symbol[];
-      const unique = new Set<Symbol>(enums);
-      if (unique.size === 1) return enums[0];
+  private checkAssignmentStatement(node: AssignmentStatement, scope: Scope) {
+    if (!this.isAssignableTarget(node.target)) {
+      this.report("Invalid assignment target.", node.target.span, "E2504");
+      return;
     }
-    return undefined;
+
+    const targetType = this.checkAssignableTarget(node.target, scope);
+    const valueType = this.checkExpression(node.value, scope, targetType);
+
+    if (!this.isAssignable(valueType, targetType)) {
+      this.report("Type mismatch in assignment.", node.span, "E2101");
+    }
   }
 
-  private checkPattern(
-    pattern: Pattern,
-    exprType: Type,
-    enumSymbol: Symbol | undefined,
-    scope: Scope,
-    seenVariants: Set<string>,
-    seenFiniteLiterals: Set<string>,
-  ): boolean {
-    if (pattern.kind === "IdentifierPattern") {
-      if (enumSymbol) {
-        const unitVariant = this.findEnumVariant(
-          enumSymbol,
-          pattern.name.name,
-          scope,
-        );
-        if (unitVariant) {
-          const payloadTypes = this.resolveVariantPayloadTypes(
-            unitVariant,
-            enumSymbol,
-            exprType,
-          );
-          if (payloadTypes.length > 0) {
-            this.report("Enum payload arity mismatch.", pattern.span, "E2601");
-            return false;
-          }
-          seenVariants.add(pattern.name.name);
-          return true;
-        }
-      }
-
-      this.declareValue(
-        {
-          kind: "Value",
-          name: pattern.name.name,
-          node: pattern,
-          type: exprType,
-        },
-        scope,
-      );
-      return true;
-    }
-    if (pattern.kind === "LiteralPattern") {
-      const litType = this.checkExpression(pattern.literal, scope);
-      if (!this.isAssignable(litType, exprType))
-        this.report("Pattern type mismatch.", pattern.span, "E2602");
-      const label = this.literalPatternLabel(pattern);
-      if (label) seenFiniteLiterals.add(label);
-      return true;
-    }
-    if (pattern.kind === "WildcardPattern") return true;
-
-    if (pattern.kind === "TuplePattern") {
-      const tuplePattern = pattern as TuplePattern;
-      if (exprType.kind !== "Tuple") {
-        this.report("Pattern type mismatch.", pattern.span, "E2602");
-        return false;
-      }
-      if (tuplePattern.elements.length !== exprType.elements.length)
-        this.report("Tuple pattern arity mismatch.", pattern.span, "E2601");
-      for (let i = 0; i < tuplePattern.elements.length; i++) {
-        const elementPattern = tuplePattern.elements[i];
-        const elementType =
-          i < exprType.elements.length
-            ? exprType.elements[i]
-            : this.unknownType();
-        const nestedEnum = this.extractEnumSymbol(elementType);
-        const ok = this.checkPattern(
-          elementPattern,
-          elementType,
-          nestedEnum,
-          scope,
-          seenVariants,
-          seenFiniteLiterals,
-        );
-        if (!ok) return false;
-      }
-      return true;
-    }
-
-    if (pattern.kind === "StructPattern") {
-      const structPattern = pattern as StructPattern;
-      if (
-        exprType.kind !== "Named" ||
-        exprType.symbol?.kind !== "Struct" ||
-        exprType.name !== structPattern.name.name
-      ) {
-        this.report("Pattern type mismatch.", pattern.span, "E2602");
-        return false;
-      }
-      const structNode = exprType.symbol.node as StructDeclaration;
-      const seenFields = new Set<string>();
-      for (const fieldPattern of structPattern.fields) {
-        if (seenFields.has(fieldPattern.name.name)) {
-          this.report(
-            `Duplicate struct pattern field '${fieldPattern.name.name}'.`,
-            fieldPattern.span,
-            "E2605",
-          );
-          continue;
-        }
-        seenFields.add(fieldPattern.name.name);
-        const field = structNode.fields.find(
-          (entry) => entry.name.name === fieldPattern.name.name,
-        );
-        if (!field) {
-          this.report(
-            `Unknown struct field '${fieldPattern.name.name}'.`,
-            fieldPattern.span,
-            "E2104",
-          );
-          continue;
-        }
-        const fieldType = this.resolveType(field.type, scope);
-        const nestedEnum = this.extractEnumSymbol(fieldType);
-        const ok = this.checkPattern(
-          fieldPattern.pattern,
-          fieldType,
-          nestedEnum,
-          scope,
-          seenVariants,
-          seenFiniteLiterals,
-        );
-        if (!ok) return false;
-      }
-      return true;
-    }
-
-    const enumPattern = pattern as EnumPattern;
-    if (!enumSymbol) {
-      this.report(
-        "Enum pattern used with non-enum match target.",
-        enumPattern.span,
-        "E2604",
-      );
-      return false;
-    }
-    const variantSymbol = this.findEnumVariant(
-      enumSymbol,
-      enumPattern.name.name,
-      scope,
+  private isAssignableTarget(node: Expression): boolean {
+    return (
+      node.kind === "IdentifierExpression" ||
+      node.kind === "MemberExpression" ||
+      node.kind === "TupleMemberExpression" ||
+      node.kind === "IndexExpression"
     );
-    if (!variantSymbol) {
-      this.report(
-        `Unknown enum variant '${enumPattern.name.name}'.`,
-        enumPattern.span,
-        "E2603",
-      );
-      return false;
-    }
-    seenVariants.add(enumPattern.name.name);
-    const payloadTypes = this.resolveVariantPayloadTypes(
-      variantSymbol,
-      enumSymbol,
-      exprType,
-    );
-    if (payloadTypes.length !== enumPattern.args.length)
-      this.report("Enum payload arity mismatch.", enumPattern.span, "E2601");
-    for (let i = 0; i < enumPattern.args.length; i++) {
-      const argPattern = enumPattern.args[i];
-      const type =
-        i < payloadTypes.length ? payloadTypes[i] : this.unknownType();
-      const nestedEnum = this.extractEnumSymbol(type);
-      const ok = this.checkPattern(
-        argPattern,
-        type,
-        nestedEnum,
-        scope,
-        seenVariants,
-        seenFiniteLiterals,
-      );
-      if (!ok) return false;
-    }
-    return true;
   }
 
-  private resolveVariantPayloadTypes(
-    variantSymbol: Symbol,
-    enumSymbol: Symbol,
-    exprType: Type,
-  ): Type[] {
-    const basePayload = variantSymbol.payloadTypes ?? [];
-    if (basePayload.length === 0) return basePayload;
-
-    const enumNode = enumSymbol.node as EnumDeclaration;
-    const paramNames = (enumNode.typeParams ?? []).map((p) => p.name.name);
-    if (paramNames.length === 0) return basePayload;
-
-    const applyBindings = (typeArgs: Type[]) => {
-      const bindings = new Map<string, Type>();
-      for (let i = 0; i < Math.min(paramNames.length, typeArgs.length); i++)
-        bindings.set(paramNames[i], typeArgs[i]);
-      return basePayload.map((type) =>
-        this.substituteTypeParams(type, bindings),
-      );
-    };
-
-    if (exprType.kind === "Named" && exprType.symbol === enumSymbol)
-      return applyBindings(exprType.typeArgs ?? []);
-
-    if (exprType.kind === "Union") {
-      const candidates = exprType.types
-        .filter(
-          (type): type is NamedRefType =>
-            type.kind === "Named" && type.symbol === enumSymbol,
-        )
-        .map((type) => applyBindings(type.typeArgs ?? []));
-      if (candidates.length === 0) return basePayload;
-      const merged: Type[] = [];
-      for (let i = 0; i < basePayload.length; i++)
-        merged.push(this.makeUnion(candidates.map((c) => c[i])));
-      return merged;
-    }
-
-    return basePayload;
-  }
-
-  private resolveEnumVariantSymbol(
-    name: string,
-    enumSymbol: Symbol,
-    scope: Scope,
-  ): Symbol | undefined {
-    let current: Scope | undefined = scope;
-    while (current) {
-      const candidate = current.values.get(name);
-      if (
-        candidate &&
-        candidate.kind === "Variant" &&
-        candidate.parentEnum === enumSymbol
-      )
-        return candidate;
-      current = current.parent;
-    }
-    return undefined;
-  }
-
-  private findEnumVariant(
-    enumSymbol: Symbol,
-    name: string,
-    scope: Scope,
-  ): Symbol | undefined {
-    return this.resolveEnumVariantSymbol(name, enumSymbol, scope);
-  }
-
-  private finiteLiteralDomain(type: Type): string[] | null {
-    if (type.kind === "Primitive") {
-      if (type.name === "bool") return ["true", "false"];
-      if (type.name === "null") return ["null"];
-      return null;
-    }
-    if (type.kind !== "Union") return null;
-    const domain = new Set<string>();
-    for (const member of type.types) {
-      const sub = this.finiteLiteralDomain(member);
-      if (!sub) return null;
-      for (const label of sub) domain.add(label);
-    }
-    return Array.from(domain.values());
-  }
-
-  private literalPatternLabel(
-    pattern: Extract<Pattern, { kind: "LiteralPattern" }>,
-  ) {
-    const literal = pattern.literal;
-    if (literal.literalType === "Boolean")
-      return literal.value === "true" ? "true" : "false";
-    if (literal.literalType === "Null") return "null";
-    return null;
-  }
-
-  private patternCovers(previous: Pattern, current: Pattern): boolean {
-    if (this.isIrrefutablePattern(previous)) return true;
-
-    if (previous.kind === "LiteralPattern" && current.kind === "LiteralPattern")
-      return (
-        previous.literal.literalType === current.literal.literalType &&
-        previous.literal.value === current.literal.value
-      );
-
-    if (previous.kind === "EnumPattern" && current.kind === "EnumPattern") {
-      if (previous.name.name !== current.name.name) return false;
-      if (
-        previous.args.length === current.args.length &&
-        previous.args.every((arg) => this.isIrrefutablePattern(arg))
-      )
-        return true;
-      return this.patternArrayCovers(previous.args, current.args);
-    }
-
-    if (previous.kind === "TuplePattern" && current.kind === "TuplePattern")
-      return this.patternArrayCovers(previous.elements, current.elements);
-
-    if (previous.kind === "StructPattern" && current.kind === "StructPattern") {
-      if (previous.name.name !== current.name.name) return false;
-      for (const prevField of previous.fields) {
-        const currField = current.fields.find(
-          (field) => field.name.name === prevField.name.name,
-        );
-        if (!currField) return false;
-        if (!this.patternCovers(prevField.pattern, currField.pattern))
-          return false;
+  private checkAssignableTarget(node: Expression, scope: Scope): Type {
+    if (node.kind === "IdentifierExpression") {
+      const symbol = this.lookupValue(node.name, scope);
+      if (!symbol) {
+        this.report(`Unknown identifier '${node.name}'.`, node.span, "E2001");
+        return this.errorType();
       }
-      return true;
-    }
-
-    return false;
-  }
-
-  private patternArrayCovers(previous: Pattern[], current: Pattern[]) {
-    if (previous.length !== current.length) return false;
-    for (let i = 0; i < previous.length; i++)
-      if (!this.patternCovers(previous[i], current[i])) return false;
-    return true;
-  }
-
-  private isIrrefutablePattern(pattern: Pattern): boolean {
-    if (
-      pattern.kind === "WildcardPattern" ||
-      pattern.kind === "IdentifierPattern"
-    )
-      return true;
-    if (pattern.kind === "TuplePattern")
-      return pattern.elements.every((element) =>
-        this.isIrrefutablePattern(element),
-      );
-    if (pattern.kind === "StructPattern")
-      return pattern.fields.every((field) =>
-        this.isIrrefutablePattern(field.pattern),
-      );
-    return false;
-  }
-
-  private normalizeTopLevelPatternForCoverage(
-    pattern: Pattern,
-    enumSymbol: Symbol | undefined,
-  ): Pattern {
-    if (
-      enumSymbol &&
-      pattern.kind === "IdentifierPattern" &&
-      this.isEnumUnitVariantName(enumSymbol, pattern.name.name)
-    )
-      return {
-        kind: "EnumPattern",
-        span: pattern.span,
-        name: pattern.name,
-        args: [],
-      };
-    return pattern;
-  }
-
-  private isEnumUnitVariantName(enumSymbol: Symbol, name: string) {
-    if (enumSymbol.kind !== "Enum") return false;
-    const enumNode = enumSymbol.node as EnumDeclaration;
-    const variant = enumNode.variants.find((v) => v.name.name === name);
-    if (!variant) return false;
-    return (variant.payload?.length ?? 0) === 0;
-  }
-
-  private checkBlockStatement(
-    node: BlockStatement,
-    scope: Scope,
-    returnTypes?: Type[],
-  ) {
-    const blockScope = this.createScope(scope);
-    for (const statement of node.body) {
-      if (statement.kind === "ReturnStatement" && returnTypes) {
-        const type = statement.value
-          ? this.checkExpression(statement.value, blockScope)
-          : this.primitive("void");
-        returnTypes.push(type);
+      if (symbol.isConst) this.report("Cannot assign to const binding.", node.span, "E2501");
+      if (symbol.isMutableParam === false) {
+        this.report("Cannot assign to readonly parameter.", node.span, "E2503");
       }
-      this.checkStatement(statement, blockScope);
+      return symbol.type;
     }
-  }
 
-  private resolveType(node: TypeNode, scope: Scope): Type {
-    if (node.kind === "NamedType") return this.resolveNamedType(node, scope);
-    if (node.kind === "UnionType") {
-      const types = (node as UnionType).types.map((t) =>
-        this.resolveType(t, scope),
-      );
-      return this.makeUnion(types);
+    if (node.kind === "MemberExpression") {
+      this.ensureMutableRoot(node.object, node.span, scope);
+      return this.checkMember(node, scope);
     }
-    if (node.kind === "TupleType") {
-      const elements = (node as TupleType).elements.map((t) =>
-        this.resolveType(t, scope),
-      );
-      return { kind: "Tuple", elements, aliasable: false };
+
+    if (node.kind === "TupleMemberExpression") {
+      this.ensureMutableRoot(node.object, node.span, scope);
+      return this.checkTupleMember(node, scope);
     }
-    if (node.kind === "FunctionType") {
-      const fn = node as FunctionType;
-      const params = fn.params.map((p) => this.resolveType(p, scope));
-      const returnType = this.resolveType(fn.returnType, scope);
-      return { kind: "Function", params, returnType, aliasable: false };
+
+    if (node.kind === "IndexExpression") {
+      this.ensureMutableRoot(node.object, node.span, scope);
+      return this.checkIndex(node, scope);
     }
+
+    this.report("Invalid assignment target.", node.span, "E2504");
     return this.errorType();
   }
 
-  private resolveNamedType(node: NamedType, scope: Scope): Type {
-    const name = node.name.name;
-    if (primitiveNames.includes(name as PrimitiveName))
-      return this.primitive(name as PrimitiveName);
-    const symbol = this.lookupTypeSymbol(name, scope);
-    if (!symbol) {
-      this.report(`Unknown type '${name}'.`, node.span, "E2003");
-      return this.errorType();
+  private ensureMutableRoot(node: Expression, span: Span, scope: Scope) {
+    const root = this.findRootIdentifier(node);
+    if (!root) return;
+    const symbol = this.lookupValue(root, scope);
+    if (!symbol) return;
+    if (symbol.isConst) this.report("Cannot mutate through const binding.", span, "E2501");
+    if (symbol.isMutableParam === false) {
+      this.report("Cannot mutate through readonly parameter.", span, "E2503");
     }
-    if (symbol.kind === "TypeParam") {
-      return {
-        kind: "TypeParam",
-        name: symbol.name,
-        bounds: this.lookupTypeParamBounds(symbol.name, scope).map(
-          (b) => b.name,
-        ),
-        aliasable: false,
-      };
-    }
-    if (symbol.kind === "Alias") {
-      if (node.typeArgs && node.typeArgs.length > 0) {
-        this.report(
-          `Type argument count mismatch for '${name}'.`,
-          node.span,
-          "E2005",
-        );
-      }
-      if (this.resolvingAliases.has(name)) {
-        if (!this.reportedAliasCycles.has(name)) {
-          this.report(`Cyclic type alias '${name}'.`, node.span, "E2004");
-          for (const alias of this.resolvingAliases)
-            this.reportedAliasCycles.add(alias);
-        }
-        return this.errorType();
-      }
-      this.resolvingAliases.add(name);
-      const aliasNode = symbol.node as TypeAliasDeclaration;
-      const resolved = this.resolveType(aliasNode.type, scope);
-      symbol.type = resolved;
-      this.resolvingAliases.delete(name);
-      return resolved;
-    }
-    const typeArgs = node.typeArgs?.map((t) => this.resolveType(t, scope));
-    const expected = this.expectedTypeArgs(symbol, name);
-    const provided = typeArgs?.length ?? 0;
-    if (expected !== null && expected !== provided) {
-      this.report(
-        `Type argument count mismatch for '${name}'.`,
-        node.span,
-        "E2005",
-      );
-    }
-    if (typeArgs && typeArgs.length > 0) {
-      const params = this.typeParamsForSymbol(symbol);
-      for (let i = 0; i < Math.min(params.length, typeArgs.length); i++) {
-        const bounds = params[i].bounds ?? [];
-        for (const bound of bounds)
-          if (!this.typeSatisfiesTrait(typeArgs[i], bound.name.name, scope))
-            this.report(
-              `Type argument does not satisfy trait bound '${bound.name.name}'.`,
-              node.span,
-              "E2816",
-            );
-      }
-    }
-    return this.namedType(name, symbol, typeArgs);
   }
 
-  private typeParamsForSymbol(symbol: Symbol): TypeParameter[] {
-    if (symbol.kind === "Struct")
-      return (symbol.node as StructDeclaration).typeParams ?? [];
-    if (symbol.kind === "Enum")
-      return (symbol.node as EnumDeclaration).typeParams ?? [];
-    if (symbol.kind === "Trait") return [];
-    if (symbol.kind === "Alias") return [];
-    return [];
-  }
-
-  private typeSatisfiesTrait(
-    type: Type,
-    traitName: string,
-    scope: Scope,
-  ): boolean {
-    if (type.kind === "TypeParam") {
-      const bounds = this.lookupTypeParamBounds(type.name, scope);
-      return bounds.some((b) => b.name === traitName);
-    }
-    if (type.kind !== "Named") return false;
-    const implemented = this.implTraits.get(type.name);
-    return implemented?.has(traitName) ?? false;
-  }
-
-  private expectedTypeArgs(symbol: Symbol, name: string): number | null {
-    if (name === "Array") return 1;
-    if (name === "Map") return 2;
-    if (symbol.kind === "Struct") {
-      const node = symbol.node as StructDeclaration;
-      return node.typeParams?.length ?? 0;
-    }
-    if (symbol.kind === "Enum") {
-      const node = symbol.node as EnumDeclaration;
-      return node.typeParams?.length ?? 0;
-    }
-    if (
-      symbol.kind === "Alias" ||
-      symbol.kind === "Type" ||
-      symbol.kind === "Trait"
-    )
-      return 0;
+  private findRootIdentifier(node: Expression): string | null {
+    if (node.kind === "IdentifierExpression") return node.name;
+    if (node.kind === "MemberExpression") return this.findRootIdentifier(node.object);
+    if (node.kind === "TupleMemberExpression") return this.findRootIdentifier(node.object);
+    if (node.kind === "IndexExpression") return this.findRootIdentifier(node.object);
     return null;
   }
 
-  private bindTypeParams(
-    typeParams: TypeParameter[] | undefined,
-    scope: Scope,
-  ) {
-    if (!typeParams) return;
-    for (const param of typeParams) {
-      const name = param.name.name;
-      if (scope.types.has(name)) {
-        this.report(`Duplicate type parameter '${name}'.`, param.span, "E2002");
-        continue;
-      }
-      scope.types.set(name, {
-        kind: "TypeParam",
-        name,
-        node: param,
-      });
-      const bounds: NamedRefType[] = [];
-      for (const bound of param.bounds ?? []) {
-        const boundSymbol = this.lookupTypeSymbol(bound.name.name, scope);
-        if (!boundSymbol) {
-          this.report(
-            `Unknown trait '${bound.name.name}'.`,
-            bound.span,
-            "E2812",
-          );
-          continue;
-        }
-        if (boundSymbol.kind !== "Trait") {
-          this.report(
-            `Type bound '${bound.name.name}' must be a trait.`,
-            bound.span,
-            "E2812",
-          );
-          continue;
-        }
-        bounds.push(this.namedType(bound.name.name, boundSymbol, undefined));
-      }
-      scope.typeParamBounds.set(name, bounds);
-    }
-  }
-
-  private lookupTypeParamBounds(name: string, scope: Scope): NamedRefType[] {
-    let current: Scope | undefined = scope;
-    while (current) {
-      const bounds = current.typeParamBounds.get(name);
-      if (bounds) return bounds;
-      current = current.parent;
-    }
-    return [];
-  }
-
-  private namedType(
-    name: string,
-    symbol: Symbol,
-    typeArgs?: Type[],
-  ): NamedRefType {
-    let aliasable = false;
-    if (name === "Array" || name === "Map") aliasable = true;
-    return { kind: "Named", name, symbol, typeArgs, aliasable };
-  }
-
-  private checkExpression(
-    node: Expression,
-    scope: Scope,
-    expected?: Type,
-  ): Type {
+  private checkExpression(node: Expression, scope: Scope, expected?: Type): Type {
+    let type: Type;
     switch (node.kind) {
       case "LiteralExpression":
-        return this.checkLiteral(node, expected);
+        type = this.checkLiteral(node, expected);
+        break;
       case "IdentifierExpression":
-        return this.checkIdentifier(node, scope);
+        type = this.checkIdentifier(node, scope);
+        break;
       case "BinaryExpression":
-        return this.checkBinary(node, scope);
+        type = this.checkBinary(node, scope);
+        break;
       case "UnaryExpression":
-        return this.checkUnary(node, scope);
-      case "AssignmentExpression":
-        return this.checkAssignment(node, scope);
+        type = this.checkUnary(node, scope);
+        break;
       case "CallExpression":
-        return this.checkCall(node, scope);
+        type = this.checkCall(node, scope, expected);
+        break;
       case "MemberExpression":
-        return this.checkMember(node, scope);
+        type = this.checkMember(node, scope);
+        break;
+      case "TupleMemberExpression":
+        type = this.checkTupleMember(node, scope);
+        break;
+      case "IndexExpression":
+        type = this.checkIndex(node, scope);
+        break;
       case "ArrayLiteralExpression":
-        return this.checkArrayLiteral(node, scope);
+        type = this.checkArrayLiteral(node, scope, expected);
+        break;
       case "TupleLiteralExpression":
-        return this.checkTupleLiteral(node, scope);
-      case "MapLiteralExpression":
-        return this.checkMapLiteral(node, scope);
+        type = this.checkTupleLiteral(node, scope);
+        break;
       case "StructLiteralExpression":
-        return this.checkStructLiteral(node, scope, expected);
+        type = this.checkStructLiteral(node, scope, expected);
+        break;
       case "GroupingExpression":
-        return this.checkExpression(node.expression, scope, expected);
+        type = this.checkExpression(node.expression, scope, expected);
+        break;
       case "FunctionExpression":
-        return this.checkFunctionExpression(node, scope);
+        type = this.checkFunctionExpression(node, scope, expected);
+        break;
       case "CastExpression":
-        return this.checkCastExpression(node, scope);
+        type = this.checkCast(node, scope);
+        break;
+      case "MatchExpression":
+        type = this.checkMatchExpression(node, scope, expected);
+        break;
       default:
-        return this.errorType();
+        type = this.errorType();
+        break;
     }
-  }
-
-  private checkLiteral(node: LiteralExpression, expected?: Type): Type {
-    let type: Type;
-    if (node.literalType === "Integer") {
-      type = this.pickNumericType(expected, "int");
-      this.checkIntegerLiteral(node, type);
-    } else if (node.literalType === "Float")
-      type = this.pickNumericType(expected, "float");
-    else if (node.literalType === "Boolean") type = this.primitive("bool");
-    else if (node.literalType === "String") type = this.primitive("string");
-    else type = this.primitive("null");
     this.types.set(node, type);
     return type;
   }
 
-  private pickNumericType(
-    expected: Type | undefined,
-    kind: "int" | "float",
-  ): Type {
-    if (expected) {
-      if (kind === "int" && this.isIntegerType(expected)) return expected;
-      if (kind === "float" && this.isFloatType(expected)) return expected;
-      if (expected.kind === "Union") {
-        for (const t of expected.types) {
-          if (kind === "int" && this.isIntegerType(t)) return t;
-          if (kind === "float" && this.isFloatType(t)) return t;
-        }
-      }
+  private checkLiteral(node: LiteralExpression, expected?: Type): Type {
+    if (node.literalType === "Integer") {
+      const type = this.pickNumericType(expected, true);
+      this.checkIntegerLiteral(node, type);
+      return type;
     }
-    return this.primitive(kind === "int" ? defaultIntType : defaultFloatType);
+    if (node.literalType === "Float") return this.pickNumericType(expected, false);
+    if (node.literalType === "Boolean") return this.primitive("bool");
+    if (node.literalType === "String") return this.primitive("string");
+    return this.primitive("null");
+  }
+
+  private pickNumericType(expected: Type | undefined, integer: boolean): Type {
+    const candidate = expected?.kind === "Nullable" ? expected.base : expected;
+    if (candidate) {
+      if (integer && this.isIntegerType(candidate)) return candidate;
+      if (!integer && this.isFloatType(candidate)) return candidate;
+    }
+    return this.primitive(integer ? defaultIntType : defaultFloatType);
   }
 
   private checkIntegerLiteral(node: LiteralExpression, target: Type) {
     if (!this.isIntegerType(target)) return;
-    const value = node.value.replace(/_/g, "");
-    let bigintValue: bigint;
     try {
-      if (value.startsWith("0x") || value.startsWith("0X"))
-        bigintValue = BigInt(value);
-      else if (value.startsWith("0b") || value.startsWith("0B"))
-        bigintValue = BigInt(value);
-      else bigintValue = BigInt(value);
+      const value = BigInt(node.value);
+      const [min, max] = this.intRange(target.name);
+      if (value < min || value > max) {
+        this.report("Integer literal out of range.", node.span, "E2401");
+      }
     } catch {
       return;
     }
-    const [min, max] = this.intRange(target.name);
-    if (bigintValue < min || bigintValue > max)
-      this.report("Integer literal out of range.", node.span, "E2401");
   }
 
   private intRange(name: PrimitiveName): [bigint, bigint] {
     const bits = Number(name.slice(1));
-    if (name.startsWith("u"))
+    if (name.startsWith("u")) {
       return [BigInt(0), (BigInt(1) << BigInt(bits)) - BigInt(1)];
+    }
     const max = (BigInt(1) << BigInt(bits - 1)) - BigInt(1);
     const min = -(BigInt(1) << BigInt(bits - 1));
     return [min, max];
   }
 
   private checkIdentifier(node: IdentifierExpression, scope: Scope): Type {
-    const type = this.lookupValueType(node.name, scope);
-    if (!type) {
+    const override = this.lookupOverride(node.name, scope);
+    if (override) return override;
+
+    const symbol = this.lookupValue(node.name, scope);
+    if (!symbol) {
       this.report(`Unknown identifier '${node.name}'.`, node.span, "E2001");
       return this.errorType();
     }
-    return type;
+
+    if (
+      this.currentFunctionDepth > 0 &&
+      symbol.functionDepth > 0 &&
+      symbol.functionDepth < this.currentFunctionDepth &&
+      !symbol.isGlobal
+    ) {
+      this.report(
+        "Anonymous functions may not capture outer locals.",
+        node.span,
+        "E2813",
+      );
+    }
+
+    return symbol.type;
   }
 
   private checkBinary(node: BinaryExpression, scope: Scope): Type {
     const left = this.checkExpression(node.left, scope);
     const right = this.checkExpression(node.right, scope);
-    const op = node.operator;
 
-    if (op === "is") {
-      if (!this.isAliasable(left) || !this.isAliasable(right)) {
-        this.report(
-          "Operator 'is' requires aliasable operands.",
-          node.span,
-          "E2502",
-        );
-      }
-      return this.primitive("bool");
-    }
-
-    if (["&&", "||"].includes(op)) {
+    if (node.operator === "&&" || node.operator === "||") {
       if (!this.isBooleanType(left) || !this.isBooleanType(right)) {
-        this.report(
-          "Logical operators require boolean operands.",
-          node.span,
-          "E2101",
-        );
+        this.report("Logical operators require bool operands.", node.span, "E2101");
       }
       return this.primitive("bool");
     }
 
-    if (["==", "!="].includes(op)) {
-      if (!this.isAssignable(left, right) && !this.isAssignable(right, left))
+    if (node.operator === "==" || node.operator === "!=") {
+      if (!this.canCompareForEquality(left, right, scope)) {
         this.report("Incompatible operands for equality.", node.span, "E2101");
-      return this.primitive("bool");
-    }
-
-    if (["<", "<=", ">", ">="].includes(op)) {
-      if (!this.isNumericType(left) || !this.isNumericType(right)) {
-        this.report(
-          "Comparison requires numeric operands.",
-          node.span,
-          "E2101",
-        );
-      } else if (!this.typeEquals(left, right)) {
-        this.report(
-          "Comparison requires matching numeric types.",
-          node.span,
-          "E2101",
-        );
       }
       return this.primitive("bool");
     }
 
-    if (op === "+") {
+    if (["<", "<=", ">", ">="].includes(node.operator)) {
+      if (!this.isNumericType(left) || !this.isNumericType(right) || !this.typeEquals(left, right)) {
+        this.report("Comparison requires matching numeric types.", node.span, "E2101");
+      }
+      return this.primitive("bool");
+    }
+
+    if (node.operator === "+") {
       if (this.isStringType(left) || this.isStringType(right)) {
         if (!this.isStringType(left) || !this.isStringType(right)) {
-          this.report(
-            "String concatenation requires both operands to be string.",
-            node.span,
-            "E2101",
-          );
+          this.report("String concatenation requires string operands.", node.span, "E2101");
         }
         return this.primitive("string");
       }
     }
 
-    if (["+", "-", "*", "/", "%", "|"].includes(op)) {
+    if (["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"].includes(node.operator)) {
       if (!this.isNumericType(left) || !this.isNumericType(right)) {
-        this.report(
-          "Arithmetic requires numeric operands.",
-          node.span,
-          "E2101",
-        );
+        this.report("Arithmetic requires numeric operands.", node.span, "E2101");
         return this.errorType();
       }
       if (!this.typeEquals(left, right)) {
-        this.report(
-          "Arithmetic requires matching numeric types.",
-          node.span,
-          "E2101",
-        );
+        this.report("Arithmetic requires matching numeric types.", node.span, "E2101");
       }
       return left;
     }
@@ -2119,641 +1201,301 @@ export class Checker {
     return this.errorType();
   }
 
-  private checkUnary(node: UnaryExpression, scope: Scope): Type {
-    const arg = this.checkExpression(node.argument, scope);
-    if (node.operator === "!") return this.primitive("bool");
-    if (!this.isNumericType(arg)) {
-      this.report(
-        "Unary operator requires numeric operand.",
-        node.span,
-        "E2101",
-      );
-    }
-    return arg;
-  }
-
-  private checkAssignment(node: AssignmentExpression, scope: Scope): Type {
-    const leftType = this.checkExpression(node.left, scope);
-    const rightType = this.checkExpression(node.right, scope, leftType);
-    if (!this.isAssignableTarget(node.left))
-      this.report("Invalid assignment target.", node.left.span, "E2504");
-
-    if (node.left.kind === "IdentifierExpression") {
-      const sym = this.lookupValue(node.left.name, scope);
-      if (sym?.isConst)
-        this.report("Cannot assign to const binding.", node.span, "E2501");
-      if (sym?.isParam && !sym.isMutable)
-        this.report("Cannot assign to readonly parameter.", node.span, "E2503");
-    }
-
-    if (node.left.kind === "MemberExpression") {
-      const base = node.left.object;
-      if (base.kind === "IdentifierExpression") {
-        const sym = this.lookupValue(base.name, scope);
-        if (sym?.isConst)
-          this.report(
-            "Cannot mutate through const binding.",
-            node.span,
-            "E2501",
-          );
-        if (sym?.isParam && !sym.isMutable)
-          this.report(
-            "Cannot mutate through readonly parameter.",
-            node.span,
-            "E2503",
-          );
+  private checkUnary(node: any, scope: Scope): Type {
+    const argument = this.checkExpression(node.argument, scope);
+    if (node.operator === "!") {
+      if (!this.isBooleanType(argument)) {
+        this.report("Unary '!' requires a bool operand.", node.span, "E2101");
       }
+      return this.primitive("bool");
     }
-
-    if (!this.isAssignable(rightType, leftType))
-      this.report("Type mismatch in assignment.", node.span, "E2101");
-    this.enforceTypeParamBounds(rightType, leftType, scope, node.span);
-    return leftType;
+    if (!this.isNumericType(argument)) {
+      this.report("Unary '-' requires a numeric operand.", node.span, "E2101");
+    }
+    return argument;
   }
 
-  private isAssignableTarget(node: Expression): boolean {
-    if (node.kind === "IdentifierExpression") return true;
-    if (node.kind === "MemberExpression")
-      return this.isAssignableTarget(node.object);
-    return false;
-  }
-
-  private checkCall(node: CallExpression, scope: Scope): Type {
+  private checkCall(node: CallExpression, scope: Scope, expected?: Type): Type {
     const calleeType = this.checkExpression(node.callee, scope);
-    if (calleeType.kind !== "Function") return this.errorType();
-    let concreteCalleeType: FunctionRefType = calleeType;
-
-    if (node.callee.kind === "MemberExpression") {
-      const method = this.lookupImplMethod(node.callee, scope);
-      if (method?.receiverMutable)
-        this.requireMutableArgument(
-          node.callee.object,
-          node.callee.span,
-          scope,
-        );
+    if (calleeType.kind !== "Function") {
+      this.report("Callee is not callable.", node.callee.span, "E2207");
+      for (const arg of node.args) this.checkExpression(arg, scope);
+      return this.errorType();
     }
 
-    let paramInfo = this.lookupParamInfo(node.callee, scope);
-    if (node.callee.kind === "IdentifierExpression") {
-      const calleeSym = this.lookupValue(node.callee.name, scope);
-      if (calleeSym?.kind === "Function" && calleeSym.type?.kind === "Function")
-        if ((calleeSym.typeParams?.length ?? 0) > 0) {
-          const inference = this.inferFunctionTypeArgs(
-            node.args,
-            calleeSym,
-            scope,
-            paramInfo,
-          );
-          const bindings = inference.bindings;
-          concreteCalleeType = this.substituteTypeParams(
-            calleeSym.type,
-            bindings,
-          ) as FunctionRefType;
-          if (paramInfo)
-            paramInfo = paramInfo.map((param) => ({
-              ...param,
-              type: this.substituteTypeParams(param.type, bindings),
-            }));
-        }
-    }
-
-    if (paramInfo) this.checkArgumentsWithInfo(node.args, paramInfo, scope);
-    else this.checkArgumentsByType(node.args, concreteCalleeType.params, scope);
-    return concreteCalleeType.returnType;
-  }
-
-  private inferFunctionTypeArgs(
-    args: Argument[],
-    fnSymbol: Symbol,
-    scope: Scope,
-    paramInfo: ParamInfo[] | null,
-  ): { bindings: Map<string, Type> } {
-    const bindings = new Map<string, Type>();
-    const typeParamNames = fnSymbol.typeParams ?? [];
-    const typeParamBounds =
-      fnSymbol.typeParamBounds ?? new Map<string, string[]>();
-
-    const addBinding = (name: string, type: Type, span: Span) => {
-      const existing = bindings.get(name);
-      if (!existing) {
-        bindings.set(name, type);
-        return;
-      }
-      if (this.typeEquals(existing, type)) return;
-      if (this.isAssignable(type, existing)) return;
-      if (this.isAssignable(existing, type)) {
-        bindings.set(name, type);
-        return;
-      }
-      this.report(
-        `Conflicting inferences for type parameter '${name}'.`,
-        span,
-        "E2821",
-      );
-    };
-
-    const inferFrom = (paramType: Type, argType: Type, span: Span): void => {
-      if (paramType.kind === "TypeParam") {
-        addBinding(paramType.name, argType, span);
-        return;
-      }
-      if (paramType.kind === "Named" && argType.kind === "Named") {
-        if (paramType.name !== argType.name) return;
-        const paramArgs = paramType.typeArgs ?? [];
-        const argArgs = argType.typeArgs ?? [];
-        for (let i = 0; i < Math.min(paramArgs.length, argArgs.length); i++)
-          inferFrom(paramArgs[i], argArgs[i], span);
-        return;
-      }
-      if (paramType.kind === "Tuple" && argType.kind === "Tuple")
-        for (
-          let i = 0;
-          i < Math.min(paramType.elements.length, argType.elements.length);
-          i++
-        )
-          inferFrom(paramType.elements[i], argType.elements[i], span);
-    };
-
-    if (paramInfo) {
-      const paramsByName = new Map<string, ParamInfo>();
-      for (const param of paramInfo) paramsByName.set(param.name, param);
-      let positionalIndex = 0;
-
-      for (const arg of args) {
-        if (arg.kind === "PositionalArgument") {
-          const nextParam = this.nextPositionalParam(
-            paramInfo,
-            positionalIndex,
-          );
-          if (!nextParam) continue;
-          const argType = this.checkExpression(
-            arg.value,
-            scope,
-            nextParam.type,
-          );
-          inferFrom(nextParam.type, argType, arg.span);
-          positionalIndex++;
-          continue;
-        }
-        if (arg.kind === "NamedArgument") {
-          const param = paramsByName.get(arg.name.name);
-          if (!param) continue;
-          const argType = this.checkExpression(arg.value, scope, param.type);
-          inferFrom(param.type, argType, arg.span);
-        }
-      }
-    } else if (fnSymbol.type?.kind === "Function") {
-      const params = fnSymbol.type.params;
-      let idx = 0;
-      for (const arg of args) {
-        if (arg.kind !== "PositionalArgument") continue;
-        if (idx >= params.length) break;
-        const argType = this.checkExpression(arg.value, scope, params[idx]);
-        inferFrom(params[idx], argType, arg.span);
-        idx++;
-      }
-    }
-
-    for (const typeParamName of typeParamNames) {
-      const inferred = bindings.get(typeParamName);
-      if (!inferred) {
-        this.report(
-          `Cannot infer type argument for '${typeParamName}'.`,
-          fnSymbol.node.span,
-          "E2820",
-        );
+    const instantiated = this.instantiateCallable(calleeType, node, scope, expected);
+    for (let i = 0; i < node.args.length; i++) {
+      const param = instantiated.params[i];
+      const arg = node.args[i];
+      if (!param) {
+        this.report("Too many arguments.", arg.span, "E2207");
+        this.checkExpression(arg, scope);
         continue;
       }
-      const bounds = typeParamBounds.get(typeParamName) ?? [];
-      for (const bound of bounds)
-        if (!this.typeSatisfiesTrait(inferred, bound, scope))
+      const argType = this.checkExpression(arg, scope, param.type);
+      if (!this.isAssignable(argType, param.type)) {
+        this.report("Argument type mismatch.", arg.span, "E2207");
+      }
+      if (param.isMutable) this.requireMutableArgument(arg, scope);
+    }
+    if (node.args.length < instantiated.params.length) {
+      this.report("Missing arguments.", node.span, "E2207");
+    }
+    return instantiated.returnType;
+  }
+
+  private instantiateCallable(
+    callable: FunctionRefType,
+    node: CallExpression,
+    scope: Scope,
+    expected?: Type,
+  ): FunctionRefType {
+    if (callable.typeParams.length === 0) return callable;
+
+    const bindings = new Map<string, Type>();
+    if (node.typeArgs) {
+      const explicit = node.typeArgs.map((arg) => this.resolveType(arg, scope));
+      if (explicit.length !== callable.typeParams.length) {
+        this.report("Type argument count mismatch.", node.span, "E2005");
+      }
+      for (let i = 0; i < Math.min(explicit.length, callable.typeParams.length); i++) {
+        bindings.set(callable.typeParams[i].name, explicit[i]);
+      }
+    } else {
+      for (let i = 0; i < Math.min(node.args.length, callable.params.length); i++) {
+        const argType = this.checkExpression(node.args[i], scope, callable.params[i].type);
+        this.inferBindingsFromTypes(callable.params[i].type, argType, bindings);
+      }
+      if (expected) this.inferBindingsFromTypes(callable.returnType, expected, bindings);
+    }
+
+    for (const typeParam of callable.typeParams) {
+      const inferred = bindings.get(typeParam.name);
+      if (!inferred) {
+        this.report(`Cannot infer type argument for '${typeParam.name}'.`, node.span, "E2820");
+        continue;
+      }
+      for (const bound of typeParam.bounds) {
+        const concreteBound = this.substituteNamedType(bound, bindings);
+        if (!this.typeSatisfiesTrait(inferred, concreteBound, scope)) {
           this.report(
-            `Type does not satisfy trait bound '${bound}'.`,
-            fnSymbol.node.span,
+            `Type does not satisfy trait bound '${this.displayType(concreteBound)}'.`,
+            node.span,
             "E2816",
           );
-    }
-
-    return { bindings };
-  }
-
-  private lookupParamInfo(
-    callee: Expression,
-    scope: Scope,
-  ): ParamInfo[] | null {
-    if (callee.kind === "IdentifierExpression") {
-      const sym = this.lookupValue(callee.name, scope);
-      if (sym?.params) return sym.params;
-    }
-    if (callee.kind === "MemberExpression")
-      return this.lookupImplMethod(callee, scope)?.params ?? null;
-    return null;
-  }
-
-  private lookupImplMethod(
-    member: MemberExpression,
-    scope: Scope,
-  ): ResolvedMethod | null {
-    const objectType = this.checkExpression(member.object, scope);
-    if (objectType.kind !== "Named") return null;
-    const methods = this.implMethods.get(objectType.name);
-    if (!methods) return null;
-    return methods.get(member.property.name) ?? null;
-  }
-
-  private checkArgumentsByType(args: Argument[], params: Type[], scope: Scope) {
-    let position = 0;
-    for (const arg of args) {
-      if (arg.kind === "NamedArgument" || arg.kind === "KwSpreadArgument") {
-        this.report("Named arguments are not allowed here.", arg.span, "E2201");
-        continue;
-      }
-      if (arg.kind === "PositionalArgument") {
-        if (position >= params.length) {
-          this.report("Too many positional arguments.", arg.span, "E2205");
-          continue;
-        }
-        const paramType = params[position];
-        const argType = this.checkExpression(arg.value, scope, paramType);
-        if (!this.isAssignable(argType, paramType))
-          this.report("Argument type mismatch.", arg.span, "E2207");
-        this.enforceTypeParamBounds(argType, paramType, scope, arg.span);
-        position++;
-        continue;
-      }
-      if (arg.kind === "SpreadArgument") this.checkExpression(arg.value, scope);
-    }
-  }
-
-  private checkArgumentsWithInfo(
-    args: Argument[],
-    params: ParamInfo[],
-    scope: Scope,
-  ) {
-    const paramByName = new Map<string, ParamInfo>();
-    const provided = new Set<string>();
-    const namedFromSpread = new Set<string>();
-    let positionalIndex = 0;
-    const variadic = params.find((p) => p.isVariadic);
-    const kwVariadic = params.find((p) => p.isKwVariadic);
-    const positionalProvided = new Set<string>();
-
-    for (const param of params) paramByName.set(param.name, param);
-
-    for (const arg of args) {
-      if (arg.kind === "PositionalArgument") {
-        const nextParam = this.nextPositionalParam(params, positionalIndex);
-        if (!nextParam && !variadic) {
-          this.report("Too many positional arguments.", arg.span, "E2205");
-          continue;
-        }
-        if (nextParam) {
-          const argType = this.checkExpression(
-            arg.value,
-            scope,
-            nextParam.type,
-          );
-          if (!this.isAssignable(argType, nextParam.type))
-            this.report("Argument type mismatch.", arg.span, "E2207");
-          this.enforceTypeParamBounds(argType, nextParam.type, scope, arg.span);
-          if (nextParam.isMutable)
-            this.requireMutableArgument(arg.value, arg.span, scope);
-          positionalProvided.add(nextParam.name);
-          positionalIndex++;
-        } else if (variadic)
-          this.checkVariadicArg(arg.value, variadic.type, scope);
-        continue;
-      }
-
-      if (arg.kind === "NamedArgument") {
-        const name = arg.name.name;
-        if (provided.has(name)) {
-          this.report(
-            `Duplicate keyword argument '${name}'.`,
-            arg.span,
-            "E2202",
-          );
-        }
-        provided.add(name);
-        const param = paramByName.get(name);
-        if (!param) {
-          if (kwVariadic) {
-            const valueType = this.checkExpression(arg.value, scope);
-            const kwType = this.mapValueType(kwVariadic.type);
-            if (kwType && !this.isAssignable(valueType, kwType))
-              this.report("Argument type mismatch.", arg.span, "E2207");
-          } else {
-            this.report(
-              `Unknown keyword argument '${name}'.`,
-              arg.span,
-              "E2201",
-            );
-          }
-          continue;
-        }
-        const argType = this.checkExpression(arg.value, scope, param.type);
-        if (!this.isAssignable(argType, param.type))
-          this.report("Argument type mismatch.", arg.span, "E2207");
-        this.enforceTypeParamBounds(argType, param.type, scope, arg.span);
-        if (param.isMutable)
-          this.requireMutableArgument(arg.value, arg.span, scope);
-        continue;
-      }
-
-      if (arg.kind === "SpreadArgument") {
-        const argType = this.checkExpression(arg.value, scope);
-        if (arg.value.kind === "TupleLiteralExpression") {
-          for (const element of arg.value.elements) {
-            const nextParam = this.nextPositionalParam(params, positionalIndex);
-            if (!nextParam && !variadic) {
-              this.report("Too many positional arguments.", arg.span, "E2205");
-              break;
-            }
-            const elementType = this.checkExpression(element, scope);
-            if (nextParam) {
-              if (!this.isAssignable(elementType, nextParam.type))
-                this.report("Argument type mismatch.", arg.span, "E2207");
-              if (nextParam.isMutable)
-                this.requireMutableArgument(element, element.span, scope);
-              positionalIndex++;
-              positionalProvided.add(nextParam.name);
-            } else if (variadic)
-              this.checkVariadicArg(element, variadic.type, scope);
-          }
-        } else if (this.isArrayLike(argType)) {
-          if (!variadic)
-            this.report(
-              "Spread argument requires variadic parameter.",
-              arg.span,
-              "E2206",
-            );
-        } else
-          this.report(
-            "Spread argument must be an array or tuple.",
-            arg.span,
-            "E2206",
-          );
-        continue;
-      }
-
-      if (arg.kind === "KwSpreadArgument") {
-        const argType = this.checkExpression(arg.value, scope);
-        if (!this.isMapLike(argType)) {
-          this.report("Kw-spread argument must be a map.", arg.span, "E2206");
-          continue;
-        }
-        if (arg.value.kind === "MapLiteralExpression") {
-          const { entries, hasNonString } = this.extractStringEntries(
-            arg.value,
-          );
-          if (hasNonString)
-            this.report("Kw-spread keys must be strings.", arg.span, "E2206");
-          for (const [key, valueExpr] of entries.entries()) {
-            if (provided.has(key) || namedFromSpread.has(key)) {
-              this.report(
-                `Duplicate keyword argument '${key}'.`,
-                arg.span,
-                "E2203",
-              );
-              continue;
-            }
-            namedFromSpread.add(key);
-            const param = paramByName.get(key);
-            if (param) {
-              const valueType = this.checkExpression(
-                valueExpr,
-                scope,
-                param.type,
-              );
-              if (!this.isAssignable(valueType, param.type))
-                this.report("Argument type mismatch.", valueExpr.span, "E2207");
-              this.enforceTypeParamBounds(
-                valueType,
-                param.type,
-                scope,
-                valueExpr.span,
-              );
-              if (param.isMutable)
-                this.requireMutableArgument(valueExpr, valueExpr.span, scope);
-            } else if (kwVariadic) {
-              const valueType = this.checkExpression(valueExpr, scope);
-              const kwType = this.mapValueType(kwVariadic.type);
-              if (kwType && !this.isAssignable(valueType, kwType))
-                this.report("Argument type mismatch.", valueExpr.span, "E2207");
-            } else {
-              this.report(
-                `Unknown keyword argument '${key}'.`,
-                arg.span,
-                "E2201",
-              );
-            }
-          }
         }
       }
     }
 
-    for (const param of params) {
-      if (param.isVariadic || param.isKwVariadic) continue;
-      const supplied =
-        provided.has(param.name) || positionalProvided.has(param.name);
-      if (!supplied && !param.hasDefault) {
-        this.report(`Missing argument '${param.name}'.`, param.span, "E2207");
-      }
-    }
+    return {
+      ...callable,
+      typeParams: [],
+      params: callable.params.map((param) => ({
+        ...param,
+        type: this.substituteType(param.type, bindings),
+      })),
+      returnType: this.substituteType(callable.returnType, bindings),
+    };
   }
 
-  private requireMutableArgument(expr: Expression, span: Span, scope: Scope) {
-    if (expr.kind !== "IdentifierExpression") {
-      this.report(
-        "Mut parameter requires a mutable identifier.",
-        span,
-        "E2204",
-      );
+  private inferBindingsFromTypes(template: Type, actual: Type, bindings: Map<string, Type>) {
+    if (template.kind === "TypeParam") {
+      if (!bindings.has(template.name)) bindings.set(template.name, actual);
       return;
     }
-    const sym = this.lookupValue(expr.name, scope);
-    if (!sym) return;
-    if (sym.isConst || (sym.isParam && !sym.isMutable)) {
-      this.report(
-        "Mut parameter requires a mutable identifier.",
-        span,
-        "E2204",
-      );
+    if (template.kind === "Named" && actual.kind === "Named") {
+      if (template.name !== actual.name) return;
+      const left = template.typeArgs ?? [];
+      const right = actual.typeArgs ?? [];
+      for (let i = 0; i < Math.min(left.length, right.length); i++) {
+        this.inferBindingsFromTypes(left[i], right[i], bindings);
+      }
+      return;
+    }
+    if (template.kind === "Tuple" && actual.kind === "Tuple") {
+      for (let i = 0; i < Math.min(template.elements.length, actual.elements.length); i++) {
+        this.inferBindingsFromTypes(template.elements[i], actual.elements[i], bindings);
+      }
+      return;
+    }
+    if (template.kind === "Nullable" && actual.kind === "Nullable") {
+      this.inferBindingsFromTypes(template.base, actual.base, bindings);
     }
   }
 
-  private nextPositionalParam(
-    params: ParamInfo[],
-    index: number,
-  ): ParamInfo | null {
-    let count = 0;
-    for (const param of params) {
-      if (param.isVariadic || param.isKwVariadic) continue;
-      if (param.isNamedOnly) continue;
-      if (count === index) return param;
-      count++;
+  private requireMutableArgument(node: Expression, scope: Scope) {
+    if (node.kind !== "IdentifierExpression") {
+      this.report("Mut parameter requires a mutable identifier.", node.span, "E2204");
+      return;
     }
-    return null;
-  }
-
-  private checkVariadicArg(expr: Expression, variadicType: Type, scope: Scope) {
-    const elementType = this.arrayElementType(variadicType);
-    if (!elementType) return;
-    const argType = this.checkExpression(expr, scope, elementType);
-    if (!this.isAssignable(argType, elementType))
-      this.report("Argument type mismatch.", expr.span, "E2207");
-    this.enforceTypeParamBounds(argType, elementType, scope, expr.span);
-  }
-
-  private enforceTypeParamBounds(
-    from: Type,
-    to: Type,
-    scope: Scope,
-    span: Span,
-  ) {
-    if (to.kind !== "TypeParam") return;
-    const boundNames =
-      to.bounds && to.bounds.length > 0
-        ? to.bounds
-        : this.lookupTypeParamBounds(to.name, scope).map((b) => b.name);
-    for (const boundName of boundNames)
-      if (!this.typeSatisfiesTrait(from, boundName, scope))
-        this.report(
-          `Type does not satisfy trait bound '${boundName}'.`,
-          span,
-          "E2816",
-        );
-  }
-
-  private arrayElementType(type: Type): Type | null {
-    if (type.kind === "Named" && type.name === "Array" && type.typeArgs?.[0])
-      return type.typeArgs[0];
-    return null;
-  }
-
-  private mapValueType(type: Type): Type | null {
-    if (type.kind === "Named" && type.name === "Map" && type.typeArgs?.[1])
-      return type.typeArgs[1];
-    return null;
-  }
-
-  private extractStringEntries(node: MapLiteralExpression): {
-    entries: Map<string, Expression>;
-    hasNonString: boolean;
-  } {
-    const entries = new Map<string, Expression>();
-    let hasNonString = false;
-    for (const entry of node.entries) {
-      if (
-        entry.key.kind === "LiteralExpression" &&
-        entry.key.literalType === "String"
-      )
-        entries.set(entry.key.value, entry.value);
-      else hasNonString = true;
+    const symbol = this.lookupValue(node.name, scope);
+    if (!symbol || symbol.isConst || symbol.isMutableParam === false) {
+      this.report("Mut parameter requires a mutable identifier.", node.span, "E2204");
     }
-    return { entries, hasNonString };
   }
 
   private checkMember(node: MemberExpression, scope: Scope): Type {
+    if (node.object.kind === "IdentifierExpression") {
+      const typeSymbol = this.lookupType(node.object.name, scope);
+      const valueSymbol = this.lookupValue(node.object.name, scope);
+      if (typeSymbol && !valueSymbol) {
+        return this.checkTypeQualifiedMember(typeSymbol, node.property.name, node.span, scope);
+      }
+    }
+
     const objectType = this.checkExpression(node.object, scope);
     if (objectType.kind === "TypeParam") {
-      const bounds = this.lookupTypeParamBounds(objectType.name, scope);
-      const candidates: ResolvedMethod[] = [];
-      for (const bound of bounds) {
-        const traitSymbol = this.lookupTypeSymbol(bound.name, scope);
-        if (!traitSymbol || traitSymbol.kind !== "Trait") continue;
-        const methods = this.ensureTraitMethods(traitSymbol, scope);
-        const method = methods.get(node.property.name);
-        if (method) candidates.push(method);
-      }
-      if (candidates.length === 1) return candidates[0].callType;
-      if (candidates.length > 1) {
-        this.report(
-          `Ambiguous trait method '${node.property.name}' for bounded type parameter.`,
-          node.property.span,
-          "E2819",
-        );
-        return this.errorType();
-      }
-      this.report(
-        `Unknown member '${node.property.name}' on bounded type parameter.`,
-        node.property.span,
-        "E2104",
-      );
+      return this.checkTypeParamMember(node, objectType, scope);
+    }
+
+    if (objectType.kind !== "Named" || !objectType.symbol) {
+      const traitMethod = this.lookupTraitMethodOnType(objectType, node.property.name, scope);
+      if (traitMethod) return this.methodCallType(traitMethod);
+      this.report(`Unknown member '${node.property.name}'.`, node.property.span, "E2104");
       return this.errorType();
     }
-    if (objectType.kind === "Named" && objectType.symbol) {
-      if (objectType.symbol.kind === "Struct") {
-        const structNode = objectType.symbol.node as StructDeclaration;
-        const typeParamBindings = new Map<string, Type>();
-        if (structNode.typeParams && objectType.typeArgs)
-          for (
-            let i = 0;
-            i <
-            Math.min(structNode.typeParams.length, objectType.typeArgs.length);
-            i++
-          )
-            typeParamBindings.set(
-              structNode.typeParams[i].name.name,
-              objectType.typeArgs[i],
-            );
 
-        const field = structNode.fields.find(
-          (f) => f.name.name === node.property.name,
-        );
-        if (field)
-          return this.resolveTypeWithBindings(
-            field.type,
-            scope,
-            typeParamBindings,
-          );
-        const method = this.lookupImplMethod(node, scope);
-        if (method) return method.callType;
-        this.report(
-          `Unknown struct field '${node.property.name}'.`,
-          node.property.span,
-          "E2104",
-        );
-        return this.errorType();
-      }
+    if (objectType.symbol.kind === "Struct") {
+      const field = objectType.symbol.fields?.get(node.property.name);
+      if (field) return this.resolveTypeWithOwnerBindings(field.type, objectType.symbol, objectType.typeArgs, scope);
     }
-    return this.unknownType();
+
+    const method = this.lookupInstanceMethod(objectType, node.property.name, scope);
+    if (method) return this.methodCallType(method);
+
+    const traitMethod = this.lookupTraitMethodOnType(objectType, node.property.name, scope);
+    if (traitMethod) return this.methodCallType(traitMethod);
+
+    this.report(`Unknown member '${node.property.name}'.`, node.property.span, "E2104");
+    return this.errorType();
   }
 
-  private checkArrayLiteral(node: ArrayLiteralExpression, scope: Scope): Type {
-    const elements = node.elements.map((e) => this.checkExpression(e, scope));
-    const elementType = elements.length
-      ? this.makeUnion(elements)
-      : this.unknownType();
+  private checkTypeQualifiedMember(
+    symbol: TypeSymbol,
+    memberName: string,
+    span: Span,
+    scope: Scope,
+  ): Type {
+    const method = this.lookupStaticOrQualifiedMethod(symbol, memberName, scope);
+    if (!method) {
+      this.report(`Unknown member '${memberName}'.`, span, "E2104");
+      return this.errorType();
+    }
+
+    if (!method.receiver) return this.methodCallType(method);
+
     return {
-      kind: "Named",
-      name: "Array",
-      symbol: this.lookupTypeSymbol("Array", scope),
-      typeArgs: [elementType],
-      aliasable: true,
+      kind: "Function",
+      typeParams: method.typeParams,
+      params: [
+        {
+          name: "self",
+          type: method.receiver.type,
+          isMutable: method.receiver.isMutable,
+        },
+        ...method.params,
+      ],
+      returnType: method.returnType,
+      target: {
+        kind: "method",
+        name: method.name,
+        typeParams: method.typeParams,
+        params: [
+          {
+            name: "self",
+            type: method.receiver.type,
+            isMutable: method.receiver.isMutable,
+          },
+          ...method.params,
+        ],
+        returnType: method.returnType,
+      },
     };
   }
 
-  private checkTupleLiteral(node: TupleLiteralExpression, scope: Scope): Type {
-    const elements = node.elements.map((e) => this.checkExpression(e, scope));
-    return { kind: "Tuple", elements, aliasable: false };
+  private checkTypeParamMember(
+    node: MemberExpression,
+    objectType: TypeParamRefType,
+    scope: Scope,
+  ): Type {
+    const matches: MethodInfo[] = [];
+    for (const bound of objectType.bounds) {
+      if (!bound.symbol || bound.symbol.kind !== "Trait") continue;
+      const methods = this.resolveTraitMethodsForReference(
+        bound.symbol,
+        bound,
+        objectType,
+        scope,
+      );
+      const method = methods.get(node.property.name);
+      if (method) matches.push(method);
+    }
+    if (matches.length === 1) return this.methodCallType(matches[0]);
+    if (matches.length > 1) {
+      this.report(
+        `Ambiguous trait method '${node.property.name}'.`,
+        node.property.span,
+        "E2819",
+      );
+      return this.errorType();
+    }
+    this.report(`Unknown member '${node.property.name}'.`, node.property.span, "E2104");
+    return this.errorType();
   }
 
-  private checkMapLiteral(node: MapLiteralExpression, scope: Scope): Type {
-    const keys = node.entries.map((e) => this.checkExpression(e.key, scope));
-    const values = node.entries.map((e) =>
-      this.checkExpression(e.value, scope),
+  private checkTupleMember(node: TupleMemberExpression, scope: Scope): Type {
+    const objectType = this.checkExpression(node.object, scope);
+    if (objectType.kind !== "Tuple") {
+      this.report("Tuple member access requires a tuple value.", node.span, "E2104");
+      return this.errorType();
+    }
+    if (node.index < 0 || node.index >= objectType.elements.length) {
+      this.report("Tuple index out of range.", node.span, "E2104");
+      return this.errorType();
+    }
+    return objectType.elements[node.index];
+  }
+
+  private checkIndex(node: IndexExpression, scope: Scope): Type {
+    const objectType = this.checkExpression(node.object, scope);
+    const indexType = this.checkExpression(node.index, scope, this.primitive("i32"));
+    if (!this.typeEquals(indexType, this.primitive("i32"))) {
+      this.report("Index must be i32.", node.index.span, "E2101");
+    }
+    if (objectType.kind === "Named" && objectType.name === "Array") {
+      return objectType.typeArgs?.[0] ?? this.unknownType();
+    }
+    if (this.isStringType(objectType)) return this.primitive("string");
+    this.report("Indexing is only supported on arrays and strings.", node.span, "E2104");
+    return this.errorType();
+  }
+
+  private checkArrayLiteral(
+    node: ArrayLiteralExpression,
+    scope: Scope,
+    expected?: Type,
+  ): Type {
+    const expectedElement =
+      expected?.kind === "Named" && expected.name === "Array"
+        ? expected.typeArgs?.[0]
+        : undefined;
+    const elementTypes = node.elements.map((element) =>
+      this.checkExpression(element, scope, expectedElement),
     );
-    const keyType = keys.length ? this.makeUnion(keys) : this.unknownType();
-    const valueType = values.length
-      ? this.makeUnion(values)
-      : this.unknownType();
+    let elementType = expectedElement ?? this.unknownType();
+    if (!expectedElement && elementTypes.length > 0) elementType = elementTypes[0];
+    for (const current of elementTypes) {
+      if (!this.isUnknownType(elementType) && !this.typeEquals(current, elementType)) {
+        this.report("Array literal elements must have a single type.", node.span, "E2101");
+      }
+    }
+    return this.namedType("Array", this.lookupType("Array", scope), [elementType]);
+  }
+
+  private checkTupleLiteral(node: TupleLiteralExpression, scope: Scope): Type {
     return {
-      kind: "Named",
-      name: "Map",
-      symbol: this.lookupTypeSymbol("Map", scope),
-      typeArgs: [keyType, valueType],
-      aliasable: true,
+      kind: "Tuple",
+      elements: node.elements.map((element) => this.checkExpression(element, scope)),
     };
   }
 
@@ -2762,225 +1504,1226 @@ export class Checker {
     scope: Scope,
     expected?: Type,
   ): Type {
-    const structName = node.name.name;
-    const symbol = this.lookupTypeSymbol(structName, scope);
+    const symbol =
+      node.name.name === "Self" && scope.selfType?.kind === "Named"
+        ? scope.selfType.symbol
+        : this.lookupType(node.name.name, scope);
     if (!symbol || symbol.kind !== "Struct") {
-      this.report(`Unknown struct '${structName}'.`, node.span, "E2003");
+      this.report(`Unknown struct '${node.name.name}'.`, node.name.span, "E2003");
       return this.errorType();
     }
-    const structNode = symbol.node as StructDeclaration;
-    const explicitTypeArgs = node.typeArgs?.map((t) =>
-      this.resolveType(t, scope),
-    );
-    const expectedTypeParamCount = structNode.typeParams?.length ?? 0;
-    if (explicitTypeArgs && explicitTypeArgs.length !== expectedTypeParamCount)
-      this.report(
-        `Type argument count mismatch for '${structName}'.`,
-        node.name.span,
-        "E2005",
-      );
 
-    const typeParamBindings = new Map<string, Type>();
-    if (explicitTypeArgs && structNode.typeParams)
-      for (
-        let i = 0;
-        i < Math.min(structNode.typeParams.length, explicitTypeArgs.length);
-        i++
-      ) {
-        typeParamBindings.set(
-          structNode.typeParams[i].name.name,
-          explicitTypeArgs[i],
-        );
-        for (const bound of structNode.typeParams[i].bounds ?? [])
-          if (
-            !this.typeSatisfiesTrait(
-              explicitTypeArgs[i],
-              bound.name.name,
-              scope,
-            )
-          )
-            this.report(
-              `Type argument does not satisfy trait bound '${bound.name.name}'.`,
-              node.name.span,
-              "E2816",
-            );
-      }
-    else if (
-      expected?.kind === "Named" &&
-      expected.name === structName &&
-      expected.typeArgs &&
-      structNode.typeParams
-    ) {
-      for (
-        let i = 0;
-        i < Math.min(structNode.typeParams.length, expected.typeArgs.length);
-        i++
-      )
-        typeParamBindings.set(
-          structNode.typeParams[i].name.name,
-          expected.typeArgs[i],
-        );
-    }
-    if (
-      explicitTypeArgs &&
-      expected?.kind === "Named" &&
-      expected.name === structName &&
-      expected.typeArgs
-    ) {
-      const explicitNamed = this.namedType(
-        structName,
-        symbol,
-        explicitTypeArgs,
-      );
-      if (!this.isAssignable(explicitNamed, expected))
-        this.report("Struct field type mismatch.", node.name.span, "E2101");
-    }
-    const provided = new Set<string>();
+    const typeArgs =
+      expected?.kind === "Named" && expected.symbol === symbol
+        ? expected.typeArgs
+        : this.inferStructTypeArgs(symbol, node, scope);
+    const structType = this.namedType(symbol.name, symbol, typeArgs);
+
+    const seen = new Set<string>();
     for (const field of node.fields) {
-      provided.add(field.name.name);
-      const target = structNode.fields.find(
-        (f) => f.name.name === field.name.name,
-      );
-      if (!target) {
-        this.report(
-          `Unknown struct field '${field.name.name}'.`,
-          field.span,
-          "E2104",
-        );
+      if (seen.has(field.name.name)) {
+        this.report(`Duplicate field '${field.name.name}'.`, field.span, "E2002");
         continue;
       }
-      const targetType = this.resolveTypeWithBindings(
-        target.type,
-        scope,
-        typeParamBindings,
-      );
+      seen.add(field.name.name);
+      const target = symbol.fields?.get(field.name.name);
+      if (!target) {
+        this.report(`Unknown struct field '${field.name.name}'.`, field.span, "E2104");
+        continue;
+      }
+      const targetType = this.resolveTypeWithOwnerBindings(target.type, symbol, typeArgs, scope);
       const valueType = this.checkExpression(field.value, scope, targetType);
-      if (!this.isAssignable(valueType, targetType))
+      if (!this.isAssignable(valueType, targetType)) {
         this.report("Struct field type mismatch.", field.span, "E2101");
-      this.enforceTypeParamBounds(valueType, targetType, scope, field.span);
-    }
-    for (const field of structNode.fields) {
-      if (!provided.has(field.name.name)) {
-        this.report(
-          `Missing struct field '${field.name.name}'.`,
-          node.span,
-          "E2103",
-        );
       }
     }
-    if (
-      expected?.kind === "Named" &&
-      expected.name === structName &&
-      !explicitTypeArgs
-    )
-      return expected;
-    return this.namedType(structName, symbol, explicitTypeArgs);
-  }
 
-  private substituteTypeParams(type: Type, bindings: Map<string, Type>): Type {
-    if (type.kind === "TypeParam") return bindings.get(type.name) ?? type;
-    if (type.kind === "Union")
-      return this.makeUnion(
-        type.types.map((t) => this.substituteTypeParams(t, bindings)),
-      );
-    if (type.kind === "Tuple")
-      return {
-        kind: "Tuple",
-        elements: type.elements.map((t) =>
-          this.substituteTypeParams(t, bindings),
-        ),
-        aliasable: false,
-      };
-    if (type.kind === "Function")
-      return {
-        kind: "Function",
-        params: type.params.map((t) => this.substituteTypeParams(t, bindings)),
-        returnType: this.substituteTypeParams(type.returnType, bindings),
-        aliasable: false,
-      };
-    if (type.kind === "Named" && type.typeArgs)
-      return {
-        ...type,
-        typeArgs: type.typeArgs.map((t) =>
-          this.substituteTypeParams(t, bindings),
-        ),
-      };
-    return type;
-  }
-
-  private resolveTypeWithBindings(
-    node: TypeNode,
-    scope: Scope,
-    bindings: Map<string, Type>,
-  ): Type {
-    if (node.kind === "NamedType") {
-      const name = node.name.name;
-      const bound = bindings.get(name);
-      if (bound) return bound;
+    for (const [name] of symbol.fields ?? []) {
+      if (!seen.has(name)) {
+        this.report(`Missing struct field '${name}'.`, node.span, "E2103");
+      }
     }
-    const resolved = this.resolveType(node, scope);
-    return this.substituteTypeParams(resolved, bindings);
+
+    return structType;
+  }
+
+  private inferStructTypeArgs(
+    symbol: TypeSymbol,
+    node: StructLiteralExpression,
+    scope: Scope,
+  ): Type[] | undefined {
+    if (symbol.typeParams.length === 0) return undefined;
+    const bindings = new Map<string, Type>();
+    for (const field of node.fields) {
+      const target = symbol.fields?.get(field.name.name);
+      if (!target) continue;
+      const valueType = this.checkExpression(field.value, scope);
+      this.inferBindingsFromAstType(target.type, valueType, bindings, this.createTypeScope(symbol, scope));
+    }
+    const resolved: Type[] = [];
+    for (const param of symbol.typeParams) {
+      const inferred = bindings.get(param.name.name);
+      if (!inferred) {
+        this.report(`Cannot infer type argument for '${param.name.name}'.`, node.span, "E2820");
+        resolved.push(this.unknownType());
+      } else {
+        resolved.push(inferred);
+      }
+    }
+    return resolved;
+  }
+
+  private inferBindingsFromAstType(
+    template: TypeNode,
+    actual: Type,
+    bindings: Map<string, Type>,
+    scope: Scope,
+  ) {
+    if (template.kind === "NamedType" && scope.typeParams.has(template.name.name)) {
+      if (!bindings.has(template.name.name)) bindings.set(template.name.name, actual);
+      return;
+    }
+
+    if (template.kind === "ArrayType" && actual.kind === "Named" && actual.name === "Array") {
+      this.inferBindingsFromAstType(template.element, actual.typeArgs?.[0] ?? this.unknownType(), bindings, scope);
+      return;
+    }
+
+    if (template.kind === "NullableType" && actual.kind === "Nullable") {
+      this.inferBindingsFromAstType(template.base, actual.base, bindings, scope);
+      return;
+    }
+
+    if (template.kind === "TupleType" && actual.kind === "Tuple") {
+      for (let i = 0; i < Math.min(template.elements.length, actual.elements.length); i++) {
+        this.inferBindingsFromAstType(template.elements[i], actual.elements[i], bindings, scope);
+      }
+    }
   }
 
   private checkFunctionExpression(
     node: FunctionExpression,
     scope: Scope,
+    expected?: Type,
   ): Type {
-    const params = this.resolveParameters(node.params, scope);
-    const returnType = node.returnType
-      ? this.resolveType(node.returnType, scope)
-      : this.unknownType();
-    const fnType: FunctionRefType = {
-      kind: "Function",
-      params: params.map((p) => p.type),
-      returnType,
-      aliasable: false,
-    };
-    const fnSymbol: Symbol = {
-      kind: "Function",
-      name: "<lambda>",
-      node,
-      type: fnType,
-      params,
-    };
-    const bodyScope = this.createScope(scope);
-    this.declareParameters(params, bodyScope);
-    const returns: Type[] = [];
-    const prevFunction = this.currentFunction;
-    this.currentFunction = fnSymbol;
-    this.checkBlockStatement(node.body, bodyScope, returns);
-    this.currentFunction = prevFunction;
-    if (!node.returnType)
-      fnType.returnType =
-        returns.length === 0 ? this.primitive("void") : this.makeUnion(returns);
-    return fnType;
+    const functionType = this.resolveAnonymousFunctionSignature(node, scope, expected);
+    const bodyScope = this.createScope(scope, scope.selfType);
+    bodyScope.typeParams = new Map(scope.typeParams);
+    for (const param of functionType.params) {
+      if (!param.name) continue;
+      this.declareValue(bodyScope, {
+        kind: "Value",
+        name: param.name,
+        node,
+        type: param.type,
+        functionDepth: this.currentFunctionDepth + 1,
+        isGlobal: false,
+        isMutableParam: param.isMutable,
+      });
+    }
+    const previousReturnType = this.currentFunctionReturnType;
+    const previousDepth = this.currentFunctionDepth;
+    this.currentFunctionReturnType = functionType.returnType;
+    this.currentFunctionDepth++;
+    this.checkBlockStatement(node.body, bodyScope);
+    this.currentFunctionDepth = previousDepth;
+    this.currentFunctionReturnType = previousReturnType;
+    return functionType;
   }
 
-  private checkCastExpression(node: CastExpression, scope: Scope): Type {
+  private checkCast(node: CastExpression, scope: Scope): Type {
     const from = this.checkExpression(node.expression, scope);
     const to = this.resolveType(node.type, scope);
-
     if (from.kind === "Primitive" && to.kind === "Primitive") return to;
-
     this.report("Invalid cast.", node.span, "E2105");
     return to;
   }
+
+  private checkMatchExpression(
+    node: MatchExpression,
+    scope: Scope,
+    expected?: Type,
+  ): Type {
+    const matchedType = this.checkExpression(node.expression, scope);
+    let resultType: Type | null = expected ?? null;
+    let hasWildcard = false;
+
+    for (const arm of node.arms) {
+      if (arm.pattern.kind === "WildcardPattern") hasWildcard = true;
+      const armScope = this.createScope(scope, scope.selfType);
+      armScope.typeParams = new Map(scope.typeParams);
+      this.bindPattern(arm.pattern, matchedType, armScope, scope);
+      const armType = this.checkExpression(arm.expression, armScope, expected);
+      if (!resultType) resultType = armType;
+      else if (!this.typeEquals(resultType, armType)) {
+        this.report("Match expression arms must have a single type.", arm.span, "E2101");
+      }
+    }
+
+    if (!hasWildcard) {
+      this.report("Match expressions require a catch-all '_' arm.", node.span, "E2606");
+    }
+
+    return resultType ?? this.primitive("void");
+  }
+
+  private bindPattern(
+    pattern: Pattern,
+    matchedType: Type,
+    targetScope: Scope,
+    checkScope: Scope,
+    coverage?: CoverageTracker,
+  ) {
+    if (pattern.kind === "WildcardPattern") {
+      coverage?.seen.add("_");
+      return;
+    }
+
+    if (pattern.kind === "IdentifierPattern") {
+      const unitVariant = this.matchUnitVariant(pattern.name.name, matchedType, checkScope);
+      if (unitVariant) {
+        coverage?.seen.add(unitVariant);
+        return;
+      }
+      this.declareValue(targetScope, {
+        kind: "Value",
+        name: pattern.name.name,
+        node: pattern,
+        type: matchedType,
+        functionDepth: this.currentFunctionDepth,
+        isGlobal: false,
+      });
+      return;
+    }
+
+    if (pattern.kind === "LiteralPattern") {
+      const literalType = this.checkExpression(pattern.literal, checkScope);
+      if (!this.isAssignable(literalType, matchedType)) {
+        this.report("Pattern type mismatch.", pattern.span, "E2602");
+      }
+      const label = this.patternLabel(pattern);
+      if (label) coverage?.seen.add(label);
+      return;
+    }
+
+    if (pattern.kind === "TuplePattern") {
+      if (matchedType.kind !== "Tuple") {
+        this.report("Pattern type mismatch.", pattern.span, "E2602");
+        return;
+      }
+      if (pattern.elements.length !== matchedType.elements.length) {
+        this.report("Tuple pattern arity mismatch.", pattern.span, "E2601");
+      }
+      for (let i = 0; i < pattern.elements.length; i++) {
+        this.bindPattern(
+          pattern.elements[i],
+          matchedType.elements[i] ?? this.unknownType(),
+          targetScope,
+          checkScope,
+          coverage,
+        );
+      }
+      return;
+    }
+
+    const enumInfo = this.resolveEnumVariantPattern(pattern, matchedType, checkScope);
+    if (!enumInfo) return;
+    coverage?.seen.add(enumInfo.name);
+    for (let i = 0; i < pattern.args.length; i++) {
+      this.bindPattern(
+        pattern.args[i],
+        enumInfo.payload[i] ?? this.unknownType(),
+        targetScope,
+        checkScope,
+        coverage,
+      );
+    }
+  }
+
+  private resolveEnumVariantPattern(
+    pattern: EnumPattern,
+    matchedType: Type,
+    scope: Scope,
+  ): { name: string; payload: Type[] } | null {
+    const enumType = this.extractEnumType(matchedType);
+    if (!enumType) {
+      this.report("Enum pattern used with non-enum match target.", pattern.span, "E2604");
+      return null;
+    }
+    const variant = enumType.symbol?.variants?.get(pattern.name.name);
+    if (!variant) {
+      this.report(`Unknown enum variant '${pattern.name.name}'.`, pattern.span, "E2603");
+      return null;
+    }
+    const payload = (variant.payload ?? []).map((node) =>
+      this.resolveTypeWithOwnerBindings(node, enumType.symbol!, enumType.typeArgs, scope),
+    );
+    if (payload.length !== pattern.args.length) {
+      this.report("Enum payload arity mismatch.", pattern.span, "E2601");
+    }
+    return { name: pattern.name.name, payload };
+  }
+
+  private createCoverageTracker(matchedType: Type): CoverageTracker {
+    return {
+      kind: this.coverageKind(matchedType),
+      seen: new Set(),
+      enumType: this.extractEnumType(matchedType),
+    };
+  }
+
+  private coverageKind(type: Type): "enum" | "bool" | "nullable" | "other" {
+    if (this.extractEnumType(type)) return "enum";
+    if (this.isBooleanType(type)) return "bool";
+    if (type.kind === "Nullable" && this.typeEquals(type.base, this.primitive("null")) === false) {
+      return "nullable";
+    }
+    return "other";
+  }
+
+  private coverageMissing(tracker: CoverageTracker): string[] {
+    if (tracker.seen.has("_")) return [];
+    if (tracker.kind === "enum" && tracker.enumType?.symbol?.variants) {
+      return Array.from(tracker.enumType.symbol.variants.keys()).filter(
+        (name) => !tracker.seen.has(name),
+      );
+    }
+    if (tracker.kind === "bool") {
+      return ["true", "false"].filter((name) => !tracker.seen.has(name));
+    }
+    return [];
+  }
+
+  private patternLabel(pattern: Pattern): string | null {
+    if (pattern.kind !== "LiteralPattern") return null;
+    if (pattern.literal.literalType === "Boolean") return pattern.literal.value;
+    if (pattern.literal.literalType === "Null") return "null";
+    return null;
+  }
+
+  private patternCovers(
+    previous: Pattern,
+    current: Pattern,
+    matchedType: Type,
+    scope: Scope,
+  ): boolean {
+    if (previous.kind === "WildcardPattern") return true;
+    if (previous.kind === "IdentifierPattern") {
+      return !this.matchUnitVariant(previous.name.name, matchedType, scope);
+    }
+    if (previous.kind === "LiteralPattern" && current.kind === "LiteralPattern") {
+      return previous.literal.literalType === current.literal.literalType && previous.literal.value === current.literal.value;
+    }
+    if (previous.kind === "EnumPattern" && current.kind === "EnumPattern") {
+      return previous.name.name === current.name.name;
+    }
+    return false;
+  }
+
+  private narrowNullComparison(
+    condition: Expression,
+    truthy: boolean,
+    scope: Scope,
+  ): Map<string, Type> {
+    const result = new Map<string, Type>();
+    if (condition.kind !== "BinaryExpression") return result;
+    if (condition.operator !== "==" && condition.operator !== "!=") return result;
+
+    const isNull = (expr: Expression) =>
+      expr.kind === "LiteralExpression" && expr.literalType === "Null";
+
+    const left = condition.left;
+    const right = condition.right;
+
+    if (left.kind === "IdentifierExpression" && isNull(right)) {
+      const original = this.lookupValueType(left.name, scope);
+      if (!original) return result;
+      result.set(
+        left.name,
+        this.computeNarrowedNullType(original, condition.operator, truthy),
+      );
+    } else if (right.kind === "IdentifierExpression" && isNull(left)) {
+      const original = this.lookupValueType(right.name, scope);
+      if (!original) return result;
+      result.set(
+        right.name,
+        this.computeNarrowedNullType(original, condition.operator, truthy),
+      );
+    }
+
+    return result;
+  }
+
+  private computeNarrowedNullType(
+    original: Type,
+    operator: "==" | "!=",
+    truthy: boolean,
+  ): Type {
+    const positive = operator === "!=" ? this.removeNull(original) : this.primitive("null");
+    const negative = operator === "!=" ? this.primitive("null") : this.removeNull(original);
+    return truthy ? positive : negative;
+  }
+
+  private removeNull(type: Type): Type {
+    if (type.kind === "Nullable") return type.base;
+    return type;
+  }
+
+  private resolveType(node: TypeNode, scope: Scope): Type {
+    if (node.kind === "SelfType") {
+      if (!scope.selfType) {
+        this.report("Self is only valid inside type declarations.", node.span, "E2003");
+        return this.errorType();
+      }
+      return scope.selfType;
+    }
+
+    if (node.kind === "NamedType") return this.resolveNamedType(node, scope);
+    if (node.kind === "ArrayType") {
+      const element = this.resolveType(node.element, scope);
+      return this.namedType("Array", this.lookupType("Array", scope), [element]);
+    }
+    if (node.kind === "NullableType") {
+      return { kind: "Nullable", base: this.resolveType(node.base, scope) };
+    }
+    if (node.kind === "TupleType") {
+      return {
+        kind: "Tuple",
+        elements: node.elements.map((element) => this.resolveType(element, scope)),
+      };
+    }
+    if (node.kind === "FunctionType") {
+      const typeScope = this.createScope(scope, scope.selfType);
+      typeScope.typeParams = new Map(scope.typeParams);
+      const typeParams = this.resolveTypeParams(node.typeParams, node.whereClause, scope);
+      for (const param of typeParams) typeScope.typeParams.set(param.name, param);
+      return {
+        kind: "Function",
+        typeParams,
+        params: node.params.map((param) => ({
+          type: this.resolveType(param.type, typeScope),
+          isMutable: param.isMutable,
+        })),
+        returnType: this.resolveType(node.returnType, typeScope),
+      };
+    }
+
+    return this.errorType();
+  }
+
+  private resolveNamedType(node: NamedType, scope: Scope): NamedRefType {
+    if (scope.typeParams.has(node.name.name)) {
+      const spec = scope.typeParams.get(node.name.name)!;
+      return this.typeParamType(spec.name, spec.bounds);
+    }
+
+    if (primitiveNames.includes(node.name.name as PrimitiveName)) {
+      return this.primitive(node.name.name as PrimitiveName) as NamedRefType;
+    }
+
+    const symbol = this.lookupType(node.name.name, scope);
+    if (!symbol) {
+      this.report(`Unknown type '${node.name.name}'.`, node.span, "E2003");
+      return this.namedType(node.name.name, undefined);
+    }
+
+    if (symbol.kind === "Alias" && symbol.aliasTarget) {
+      return this.resolveAliasType(symbol, scope);
+    }
+
+    const typeArgs = node.typeArgs?.map((arg) => this.resolveType(arg, scope));
+    const expected = symbol.typeParams.length;
+    if ((typeArgs?.length ?? 0) !== expected) {
+      if (expected !== 0 || (typeArgs?.length ?? 0) !== 0) {
+        this.report(`Type argument count mismatch for '${node.name.name}'.`, node.span, "E2005");
+      }
+    }
+
+    const named = this.namedType(node.name.name, symbol, typeArgs);
+    if (typeArgs) {
+      const ownerScope = this.createTypeScope(symbol, scope);
+      const bounds = this.resolveTypeParams(symbol.typeParams, undefined, scope);
+      for (let i = 0; i < Math.min(bounds.length, typeArgs.length); i++) {
+        for (const bound of bounds[i].bounds) {
+          const concrete = this.substituteNamedType(bound, new Map([[bounds[i].name, typeArgs[i]]]));
+          if (!this.typeSatisfiesTrait(typeArgs[i], concrete, ownerScope)) {
+            this.report(
+              `Type does not satisfy trait bound '${this.displayType(concrete)}'.`,
+              node.span,
+              "E2816",
+            );
+          }
+        }
+      }
+    }
+    return named;
+  }
+
+  private resolveAliasType(symbol: TypeSymbol, scope: Scope): NamedRefType {
+    if (!symbol.aliasTarget) return this.namedType(symbol.name, symbol);
+    const resolved = this.resolveType(symbol.aliasTarget.type, scope);
+    if (resolved.kind === "Named") return resolved;
+    return this.namedType(symbol.name, symbol);
+  }
+
+  private resolveTypeParams(
+    typeParams: TypeParameter[] | undefined,
+    whereClause: WhereConstraint[] | undefined,
+    scope: Scope,
+  ): TypeParamSpec[] {
+    const resolved = new Map<string, TypeParamSpec>();
+    for (const param of typeParams ?? []) {
+      const bounds = (param.bounds ?? []).map((bound) =>
+        this.resolveNamedType(bound, scope),
+      );
+      resolved.set(param.name.name, { name: param.name.name, bounds });
+    }
+    for (const clause of whereClause ?? []) {
+      const target =
+        resolved.get(clause.typeName.name) ??
+        (() => {
+          this.report(
+            `Unknown type parameter '${clause.typeName.name}' in where clause.`,
+            clause.span,
+            "E2812",
+          );
+          const spec = { name: clause.typeName.name, bounds: [] as NamedRefType[] };
+          resolved.set(clause.typeName.name, spec);
+          return spec;
+        })();
+      target.bounds.push(this.resolveNamedType(clause.trait, scope));
+    }
+    return Array.from(resolved.values());
+  }
+
+  private resolveFunctionDeclarationSignature(
+    node: FunctionDeclaration,
+    scope: Scope,
+  ): FunctionRefType {
+    const typeScope = this.createScope(scope, scope.selfType);
+    const typeParams = this.resolveTypeParams(node.typeParams, node.whereClause, scope);
+    for (const param of typeParams) typeScope.typeParams.set(param.name, param);
+
+    const params = node.params.map((param) => this.resolveParameter(param, typeScope));
+    const returnType = node.returnType
+      ? this.resolveType(node.returnType, typeScope)
+      : this.primitive("void");
+
+    return {
+      kind: "Function",
+      typeParams,
+      params,
+      returnType,
+      target: {
+        kind: "function",
+        name: node.name.name,
+        typeParams,
+        params,
+        returnType,
+      },
+    };
+  }
+
+  private resolveAnonymousFunctionSignature(
+    node: FunctionExpression,
+    scope: Scope,
+    expected?: Type,
+  ): FunctionRefType {
+    const params = node.params.map((param, index) =>
+      this.resolveParameter(param, scope, expected?.kind === "Function" ? expected.params[index] : undefined),
+    );
+    const returnType = node.returnType
+      ? this.resolveType(node.returnType, scope)
+      : expected?.kind === "Function"
+        ? expected.returnType
+        : this.primitive("void");
+    return {
+      kind: "Function",
+      typeParams: [],
+      params,
+      returnType,
+    };
+  }
+
+  private resolveParameter(
+    param: Parameter,
+    scope: Scope,
+    _expected?: FunctionParamType,
+  ): FunctionParamType {
+    if (param.kind === "SelfParameter") {
+      if (!scope.selfType) {
+        this.report("self is only valid inside methods.", param.span, "E2813");
+        return {
+          name: "self",
+          type: this.errorType(),
+          isMutable: param.isMutable,
+        };
+      }
+      return {
+        name: "self",
+        type: scope.selfType,
+        isMutable: param.isMutable,
+      };
+    }
+    return {
+      name: param.name.name,
+      type: this.resolveType(param.type, scope),
+      isMutable: param.isMutable,
+    };
+  }
+
+  private resolveMethod(
+    method: MethodDeclaration | TraitMethodSignature,
+    owner: TypeSymbol,
+    scope: Scope,
+  ): MethodInfo {
+    const selfType = this.namedType(owner.name, owner, this.ownerTypeArgs(owner, scope));
+    const methodScope = this.createScope(scope, selfType);
+    for (const param of this.resolveTypeParams(owner.typeParams, undefined, this.globalScope)) {
+      methodScope.typeParams.set(param.name, param);
+    }
+    const typeParams = this.resolveTypeParams(method.typeParams, method.whereClause, methodScope);
+    for (const param of typeParams) methodScope.typeParams.set(param.name, param);
+
+    let receiver: MethodInfo["receiver"];
+    const params: FunctionParamType[] = [];
+    method.params.forEach((param, index) => {
+      const resolved = this.resolveParameter(param, methodScope);
+      if (param.kind === "SelfParameter") {
+        if (index !== 0) {
+          this.report("self must be the first parameter.", param.span, "E2813");
+        }
+        receiver = { type: resolved.type, isMutable: resolved.isMutable };
+      } else {
+        params.push(resolved);
+      }
+    });
+
+    const returnType = method.returnType
+      ? this.resolveType(method.returnType, methodScope)
+      : this.primitive("void");
+
+    return {
+      name: method.name.name,
+      node: method,
+      receiver,
+      typeParams,
+      params,
+      returnType,
+    };
+  }
+
+  private resolveTraitMethod(
+    method: TraitMethodSignature,
+    trait: TypeSymbol,
+    scope: Scope,
+  ) {
+    return this.resolveMethod(method, trait, scope);
+  }
+
+  private resolveTraitMethodsForReference(
+    trait: TypeSymbol,
+    reference: NamedRefType,
+    selfType: Type,
+    scope: Scope,
+  ): Map<string, MethodInfo> {
+    const methods = new Map<string, MethodInfo>();
+    if (!trait.traitDecl) return methods;
+
+    const traitScope = this.createScope(scope, selfType.kind === "Named" ? selfType : scope.selfType);
+    const traitParams = this.resolveTypeParams(trait.typeParams, undefined, scope);
+    const bindings = new Map<string, Type>();
+    for (let i = 0; i < Math.min(traitParams.length, reference.typeArgs?.length ?? 0); i++) {
+      bindings.set(traitParams[i].name, reference.typeArgs![i]);
+      traitScope.typeParams.set(traitParams[i].name, {
+        name: traitParams[i].name,
+        bounds: traitParams[i].bounds,
+      });
+    }
+    if (selfType.kind === "Named") traitScope.selfType = selfType;
+
+    for (const method of trait.traitDecl.methods) {
+      const resolved = this.resolveMethod(method, trait, traitScope);
+      methods.set(method.name.name, {
+        ...resolved,
+        receiver: resolved.receiver
+          ? {
+              ...resolved.receiver,
+              type: selfType,
+            }
+          : undefined,
+        params: resolved.params.map((param) => ({
+          ...param,
+          type: this.substituteType(param.type, bindings),
+        })),
+        returnType: this.substituteType(resolved.returnType, bindings),
+      });
+    }
+
+    return methods;
+  }
+
+  private methodEquals(left: MethodInfo, right: MethodInfo): boolean {
+    if (!!left.receiver !== !!right.receiver) return false;
+    if (left.receiver && right.receiver) {
+      if (left.receiver.isMutable !== right.receiver.isMutable) return false;
+      if (!this.typeEquals(left.receiver.type, right.receiver.type)) return false;
+    }
+    if (left.typeParams.length !== right.typeParams.length) return false;
+    if (left.params.length !== right.params.length) return false;
+    if (!this.typeEquals(left.returnType, right.returnType)) return false;
+    return left.params.every(
+      (param, index) =>
+        param.isMutable === right.params[index].isMutable &&
+        this.typeEquals(param.type, right.params[index].type),
+    );
+  }
+
+  private methodCallType(method: MethodInfo): FunctionRefType {
+    return {
+      kind: "Function",
+      typeParams: method.typeParams,
+      params: method.params,
+      returnType: method.returnType,
+      target: {
+        kind: "method",
+        name: method.name,
+        typeParams: method.typeParams,
+        params: method.params,
+        returnType: method.returnType,
+      },
+    };
+  }
+
+  private lookupInstanceMethod(
+    owner: NamedRefType,
+    name: string,
+    scope: Scope,
+  ): MethodInfo | null {
+    if (!owner.symbol) return null;
+    const direct = owner.symbol.methods?.get(name);
+    if (direct) return this.resolveMethod(direct, owner.symbol, this.createOwnerScope(owner, scope));
+
+    for (const satisfaction of owner.symbol.satisfactions ?? []) {
+      const impl = satisfaction.methods.get(name);
+      if (impl) return this.resolveMethod(impl, owner.symbol, this.createOwnerScope(owner, scope));
+    }
+
+    return null;
+  }
+
+  private lookupTraitMethodOnType(
+    type: Type,
+    memberName: string,
+    scope: Scope,
+  ): MethodInfo | null {
+    const candidates: NamedRefType[] = [];
+
+    if (this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Formattable", []), scope)) {
+      candidates.push(this.resolveBuiltinTrait("Formattable", []));
+    }
+    if (this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Hashable", []), scope)) {
+      candidates.push(this.resolveBuiltinTrait("Hashable", []));
+    }
+    if (this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Cloneable", []), scope)) {
+      candidates.push(this.resolveBuiltinTrait("Cloneable", []));
+    }
+    if (this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Defaultable", []), scope)) {
+      candidates.push(this.resolveBuiltinTrait("Defaultable", []));
+    }
+    if (this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Equal", [type]), scope)) {
+      candidates.push(this.resolveBuiltinTrait("Equal", [type]));
+    }
+    if (this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Ordered", [type]), scope)) {
+      candidates.push(this.resolveBuiltinTrait("Ordered", [type]));
+    }
+    if (type.kind === "Named" && type.name === "Array" && type.typeArgs?.[0]) {
+      candidates.push(this.resolveBuiltinTrait("Iterable", [type.typeArgs[0]]));
+    }
+    if (type.kind === "Named" && type.name === "Result" && type.typeArgs?.[0]) {
+      candidates.push(this.resolveBuiltinTrait("Unwrappable", [type.typeArgs[0]]));
+    }
+
+    for (const candidate of candidates) {
+      if (!candidate.symbol || candidate.symbol.kind !== "Trait") continue;
+      const methods = this.resolveTraitMethodsForReference(
+        candidate.symbol,
+        candidate,
+        type,
+        scope,
+      );
+      const method = methods.get(memberName);
+      if (method) return method;
+    }
+
+    return null;
+  }
+
+  private lookupStaticOrQualifiedMethod(
+    owner: TypeSymbol,
+    name: string,
+    scope: Scope,
+  ): MethodInfo | null {
+    const method = owner.methods?.get(name);
+    if (method) return this.resolveMethod(method, owner, this.createTypeScope(owner, scope));
+
+    for (const satisfaction of owner.satisfactions ?? []) {
+      const impl = satisfaction.methods.get(name);
+      if (impl) return this.resolveMethod(impl, owner, this.createTypeScope(owner, scope));
+    }
+
+    return null;
+  }
+
+  private createOwnerScope(owner: NamedRefType, scope: Scope) {
+    const ownerScope = this.createScope(scope, owner);
+    if (owner.symbol) {
+      const params = this.resolveTypeParams(owner.symbol.typeParams, undefined, this.globalScope);
+      for (let i = 0; i < Math.min(params.length, owner.typeArgs?.length ?? 0); i++) {
+        ownerScope.typeParams.set(params[i].name, {
+          name: params[i].name,
+          bounds: params[i].bounds,
+        });
+      }
+    }
+    return ownerScope;
+  }
+
+  private resolveTypeWithOwnerBindings(
+    node: TypeNode,
+    owner: TypeSymbol,
+    ownerArgs: Type[] | undefined,
+    scope: Scope,
+  ): Type {
+    const ownerScope = this.createTypeScope(owner, scope);
+    const params = this.resolveTypeParams(owner.typeParams, undefined, scope);
+    for (let i = 0; i < Math.min(params.length, ownerArgs?.length ?? 0); i++) {
+      ownerScope.typeParams.set(params[i].name, {
+        name: params[i].name,
+        bounds: params[i].bounds,
+      });
+      ownerScope.overrides.set(params[i].name, ownerArgs![i]);
+    }
+    return this.substituteType(this.resolveType(node, ownerScope), new Map(
+      params.map((param, index) => [param.name, ownerArgs?.[index] ?? this.unknownType()]),
+    ));
+  }
+
+  private substituteType(type: Type, bindings: Map<string, Type>): Type {
+    if (type.kind === "TypeParam") return bindings.get(type.name) ?? type;
+    if (type.kind === "Nullable") {
+      return { kind: "Nullable", base: this.substituteType(type.base, bindings) };
+    }
+    if (type.kind === "Tuple") {
+      return {
+        kind: "Tuple",
+        elements: type.elements.map((element) => this.substituteType(element, bindings)),
+      };
+    }
+    if (type.kind === "Named") {
+      return {
+        ...type,
+        typeArgs: type.typeArgs?.map((arg) => this.substituteType(arg, bindings)),
+      };
+    }
+    if (type.kind === "Function") {
+      return {
+        ...type,
+        params: type.params.map((param) => ({
+          ...param,
+          type: this.substituteType(param.type, bindings),
+        })),
+        returnType: this.substituteType(type.returnType, bindings),
+      };
+    }
+    return type;
+  }
+
+  private substituteNamedType(type: NamedRefType, bindings: Map<string, Type>): NamedRefType {
+    return this.substituteType(type, bindings) as NamedRefType;
+  }
+
+  private ownerTypeArgs(owner: TypeSymbol, scope: Scope): Type[] | undefined {
+    const params = this.resolveTypeParams(owner.typeParams, undefined, scope);
+    if (params.length === 0) return undefined;
+    return params.map((param) => this.typeParamType(param.name, param.bounds));
+  }
+
+  private iterableItemType(type: Type, scope: Scope): Type | null {
+    if (type.kind === "Named" && type.name === "Array") return type.typeArgs?.[0] ?? this.unknownType();
+    const iterable = this.resolveBuiltinTrait("Iterable", [
+      type.kind === "Named" && type.typeArgs?.[0] ? type.typeArgs[0] : this.unknownType(),
+    ]);
+    if (this.typeSatisfiesTrait(type, iterable, scope)) {
+      return iterable.typeArgs?.[0] ?? this.unknownType();
+    }
+    return null;
+  }
+
+  private canCompareForEquality(left: Type, right: Type, scope: Scope): boolean {
+    if (this.typeEquals(left, right)) {
+      if (left.kind === "Named") {
+        const equalTrait = this.resolveBuiltinTrait("Equal", [left]);
+        return this.typeSatisfiesTrait(left, equalTrait, scope);
+      }
+      if (left.kind === "Tuple") return left.elements.every((element) => this.canCompareForEquality(element, element, scope));
+      return true;
+    }
+    if (left.kind === "Nullable" && this.typeEquals(right, this.primitive("null"))) return true;
+    if (right.kind === "Nullable" && this.typeEquals(left, this.primitive("null"))) return true;
+    return false;
+  }
+
+  private typeSatisfiesTrait(type: Type, trait: NamedRefType, scope: Scope): boolean {
+    if (type.kind === "TypeParam") {
+      return type.bounds.some((bound) => this.namedTypeEquals(bound, trait));
+    }
+    if (type.kind === "Named") {
+      if (type.name === "Array" && trait.name === "Iterable") return true;
+      if (trait.name === "Formattable" && this.isFormattable(type)) return true;
+      if (trait.name === "Equal" && this.isBuiltinEquatable(type, trait)) return true;
+      return (
+        type.symbol?.satisfactions?.some((entry) => this.namedTypeEquals(entry.trait, trait)) ??
+        false
+      );
+    }
+    if (type.kind === "Primitive") {
+      if (trait.name === "Formattable") return this.isFormattable(type);
+      if (trait.name === "Equal") return this.isBuiltinEquatable(type, trait);
+    }
+    if (type.kind === "Tuple" && trait.name === "Equal") {
+      return type.elements.every((element) =>
+        this.typeSatisfiesTrait(element, this.resolveBuiltinTrait("Equal", [element]), scope),
+      );
+    }
+    return false;
+  }
+
+  private isBuiltinEquatable(type: Type, trait: NamedRefType): boolean {
+    if (trait.typeArgs?.length !== 1) return false;
+    if (!this.typeEquals(type, trait.typeArgs[0])) return false;
+    return type.kind === "Primitive" || (type.kind === "Named" && type.name === "string");
+  }
+
+  private isFormattable(type: Type): boolean {
+    return (
+      (type.kind === "Primitive" &&
+        ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "string"].includes(type.name)) ||
+      (type.kind === "Named" && type.name === "string")
+    );
+  }
+
+  private resolveBuiltinTrait(name: string, typeArgs: Type[]): NamedRefType {
+    return this.namedType(name, this.globalScope.types.get(name), typeArgs);
+  }
+
+  private extractEnumType(type: Type): NamedRefType | null {
+    return type.kind === "Named" && type.symbol?.kind === "Enum" ? type : null;
+  }
+
+  private matchUnitVariant(name: string, matchedType: Type, _scope: Scope): string | null {
+    const enumType = this.extractEnumType(matchedType);
+    if (!enumType?.symbol?.variants?.has(name)) return null;
+    const variant = enumType.symbol.variants.get(name)!;
+    return (variant.payload?.length ?? 0) === 0 ? name : null;
+  }
+
+  private primitive(name: PrimitiveName): PrimitiveType {
+    return { kind: "Primitive", name };
+  }
+
+  private namedType(
+    name: string,
+    symbol?: TypeSymbol,
+    typeArgs?: Type[],
+  ): NamedRefType {
+    return { kind: "Named", name, symbol, typeArgs };
+  }
+
+  private typeParamType(name: string, bounds: NamedRefType[]): TypeParamRefType {
+    return { kind: "TypeParam", name, bounds };
+  }
+
+  private unknownType(): UnknownType {
+    return { kind: "Unknown" };
+  }
+
+  private errorType(): ErrorType {
+    return { kind: "Error" };
+  }
+
+  private isUnknownType(type: Type): type is UnknownType {
+    return type.kind === "Unknown";
+  }
+
+  private isIntegerType(type: Type): type is PrimitiveType {
+    return (
+      type.kind === "Primitive" &&
+      ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(type.name)
+    );
+  }
+
+  private isFloatType(type: Type): type is PrimitiveType {
+    return (
+      type.kind === "Primitive" &&
+      ["f16", "f32", "f64"].includes(type.name)
+    );
+  }
+
+  private isNumericType(type: Type) {
+    return this.isIntegerType(type) || this.isFloatType(type);
+  }
+
+  private isBooleanType(type: Type) {
+    return type.kind === "Primitive" && type.name === "bool";
+  }
+
+  private isStringType(type: Type) {
+    return (
+      (type.kind === "Primitive" && type.name === "string") ||
+      (type.kind === "Named" && type.name === "string")
+    );
+  }
+
+  private typeEquals(left: Type, right: Type): boolean {
+    if (left.kind !== right.kind) return false;
+    if (left.kind === "Primitive" && right.kind === "Primitive") return left.name === right.name;
+    if (left.kind === "Named" && right.kind === "Named") return this.namedTypeEquals(left, right);
+    if (left.kind === "Nullable" && right.kind === "Nullable") return this.typeEquals(left.base, right.base);
+    if (left.kind === "Tuple" && right.kind === "Tuple") {
+      return (
+        left.elements.length === right.elements.length &&
+        left.elements.every((element, index) => this.typeEquals(element, right.elements[index]))
+      );
+    }
+    if (left.kind === "Function" && right.kind === "Function") {
+      return (
+        left.typeParams.length === right.typeParams.length &&
+        left.params.length === right.params.length &&
+        left.params.every(
+          (param, index) =>
+            param.isMutable === right.params[index].isMutable &&
+            this.typeEquals(param.type, right.params[index].type),
+        ) &&
+        this.typeEquals(left.returnType, right.returnType)
+      );
+    }
+    if (left.kind === "TypeParam" && right.kind === "TypeParam") return left.name === right.name;
+    if (left.kind === "Unknown" && right.kind === "Unknown") return true;
+    if (left.kind === "Error" && right.kind === "Error") return true;
+    return false;
+  }
+
+  private namedTypeEquals(left: NamedRefType, right: NamedRefType): boolean {
+    return (
+      left.name === right.name &&
+      (left.typeArgs?.length ?? 0) === (right.typeArgs?.length ?? 0) &&
+      (left.typeArgs ?? []).every((arg, index) => this.typeEquals(arg, right.typeArgs?.[index] ?? this.errorType()))
+    );
+  }
+
+  private isAssignable(from: Type, to: Type): boolean {
+    if (from.kind === "Error" || to.kind === "Error" || from.kind === "Unknown" || to.kind === "Unknown") {
+      return true;
+    }
+    if (this.typeEquals(from, to)) return true;
+    if (to.kind === "Nullable") {
+      return this.typeEquals(from, this.primitive("null")) || this.isAssignable(from, to.base);
+    }
+    return false;
+  }
+
+  private displayType(type: Type): string {
+    if (type.kind === "Primitive") return type.name;
+    if (type.kind === "Named") {
+      if (!type.typeArgs?.length) return type.name;
+      return `${type.name}<${type.typeArgs.map((arg) => this.displayType(arg)).join(", ")}>`;
+    }
+    if (type.kind === "Nullable") return `${this.displayType(type.base)}?`;
+    if (type.kind === "Tuple") return `(${type.elements.map((element) => this.displayType(element)).join(", ")})`;
+    if (type.kind === "Function") {
+      const params = type.params
+        .map((param) => `${param.isMutable ? "mut " : ""}${this.displayType(param.type)}`)
+        .join(", ");
+      return `fn(${params}) -> ${this.displayType(type.returnType)}`;
+    }
+    if (type.kind === "TypeParam") return type.name;
+    return type.kind.toLowerCase();
+  }
+
+  private lookupValue(name: string, scope: Scope): ValueSymbol | undefined {
+    let current: Scope | undefined = scope;
+    while (current) {
+      const override = current.overrides.get(name);
+      if (override) {
+        return {
+          kind: "Value",
+          name,
+          node: this.program,
+          type: override,
+          functionDepth: this.currentFunctionDepth,
+          isGlobal: false,
+        };
+      }
+      const value = current.values.get(name);
+      if (value) return value;
+      current = current.parent;
+    }
+    return undefined;
+  }
+
+  private lookupValueType(name: string, scope: Scope): Type | undefined {
+    const symbol = this.lookupValue(name, scope);
+    return symbol?.type;
+  }
+
+  private lookupType(name: string, scope: Scope): TypeSymbol | undefined {
+    let current: Scope | undefined = scope;
+    while (current) {
+      const type = current.types.get(name);
+      if (type) return type;
+      current = current.parent;
+    }
+    return undefined;
+  }
+
+  private lookupOverride(name: string, scope: Scope): Type | undefined {
+    let current: Scope | undefined = scope;
+    while (current) {
+      const override = current.overrides.get(name);
+      if (override) return override;
+      current = current.parent;
+    }
+    return undefined;
+  }
+
+  private requireTypeSymbol(name: string, scope: Scope) {
+    return this.lookupType(name, scope);
+  }
+
+  private declareType(scope: Scope, symbol: TypeSymbol) {
+    if (scope.types.has(symbol.name)) {
+      this.report(`Duplicate type '${symbol.name}'.`, symbol.node.span, "E2002");
+      return;
+    }
+    scope.types.set(symbol.name, symbol);
+  }
+
+  private declareValue(scope: Scope, symbol: ValueSymbol) {
+    if (scope.values.has(symbol.name)) {
+      this.report(`Duplicate symbol '${symbol.name}'.`, symbol.node.span, "E2002");
+      return;
+    }
+    scope.values.set(symbol.name, symbol);
+  }
+
+  private lookupTypeParamBounds(name: string, scope: Scope): NamedRefType[] {
+    let current: Scope | undefined = scope;
+    while (current) {
+      const found = current.typeParams.get(name);
+      if (found) return found.bounds;
+      current = current.parent;
+    }
+    return [];
+  }
+
+  private syntheticIdentifier(name: string) {
+    return {
+      kind: "Identifier" as const,
+      span: this.program.span,
+      name,
+    };
+  }
+
+  private syntheticTypeParam(name: string): TypeParameter {
+    return {
+      kind: "TypeParameter",
+      span: this.program.span,
+      name: this.syntheticIdentifier(name),
+    };
+  }
+
+  private syntheticNamedType(name: string): NamedType {
+    return {
+      kind: "NamedType",
+      span: this.program.span,
+      name: this.syntheticIdentifier(name),
+    };
+  }
+
+  private syntheticSelfType(): SelfType {
+    return {
+      kind: "SelfType",
+      span: this.program.span,
+    };
+  }
+
+  private syntheticNullableType(base: TypeNode): NullableType {
+    return {
+      kind: "NullableType",
+      span: this.program.span,
+      base,
+    };
+  }
+
+  private syntheticSelfParam(isMutable: boolean): SelfParameter {
+    return {
+      kind: "SelfParameter",
+      span: this.program.span,
+      isMutable,
+    };
+  }
+
+  private syntheticNamedParam(name: string, type: TypeNode): NamedParameter {
+    return {
+      kind: "NamedParameter",
+      span: this.program.span,
+      name: this.syntheticIdentifier(name),
+      type,
+      isMutable: false,
+    };
+  }
+
+  private syntheticTraitMethod(
+    name: string,
+    params: Parameter[],
+    returnType: TypeNode,
+  ): TraitMethodSignature {
+    return {
+      kind: "TraitMethodSignature",
+      span: this.program.span,
+      name: this.syntheticIdentifier(name),
+      params,
+      returnType,
+    };
+  }
+
+  private syntheticEnumVariant(name: string, payload?: TypeNode[]): EnumVariant {
+    return {
+      kind: "EnumVariant",
+      span: this.program.span,
+      name: this.syntheticIdentifier(name),
+      payload,
+    };
+  }
+
+  private report(message: string, span: Span, code: string) {
+    const key = `error|${code}|${message}|${span.start.index}:${span.end.index}`;
+    if (this.diagnosticSet.has(key)) return;
+    this.diagnosticSet.add(key);
+    this.diagnostics.push({ severity: "error", message, span, code });
+  }
+
+  private warn(message: string, span: Span, code: string) {
+    const key = `warning|${code}|${message}|${span.start.index}:${span.end.index}`;
+    if (this.diagnosticSet.has(key)) return;
+    this.diagnosticSet.add(key);
+    this.diagnostics.push({ severity: "warning", message, span, code });
+  }
 }
 
-interface ParamInfo {
-  name: string;
-  type: Type;
-  isNamedOnly: boolean;
-  hasDefault: boolean;
-  isVariadic: boolean;
-  isKwVariadic: boolean;
-  isMutable: boolean;
-  span: Span;
-}
-
-interface ResolvedMethod {
-  node: Node;
-  callType: FunctionRefType;
-  params: ParamInfo[];
-  receiverMutable: boolean;
+interface CoverageTracker {
+  kind: "enum" | "bool" | "nullable" | "other";
+  seen: Set<string>;
+  enumType: NamedRefType | null;
 }

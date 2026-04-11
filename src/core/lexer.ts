@@ -13,7 +13,8 @@ const operatorCandidates: Operator[] = [
   ">=",
   "&&",
   "||",
-  "**",
+  "<<",
+  ">>",
   "+",
   "-",
   "!",
@@ -23,6 +24,8 @@ const operatorCandidates: Operator[] = [
   "=",
   ">",
   "<",
+  "&",
+  "^",
   "|",
 ];
 
@@ -46,27 +49,19 @@ export interface LexResult {
 }
 
 export class Lexer {
-  private source: string;
   private tokens: Token[] = [];
   private diagnostics: Diagnostic[] = [];
   private index = 0;
   private line = 1;
   private column = 1;
 
-  constructor(source: string) {
-    this.source = source;
-  }
+  constructor(private source: string) {}
 
   public lex(): LexResult {
     while (!this.isAtEnd()) {
       const ch = this.peek();
 
-      if (ch === " " || ch === "\r" || ch === "\t") {
-        this.advance();
-        continue;
-      }
-
-      if (ch === "\n") {
+      if (ch === " " || ch === "\r" || ch === "\t" || ch === "\n") {
         this.advance();
         continue;
       }
@@ -144,14 +139,14 @@ export class Lexer {
 
   private scanNumber() {
     const start = this.position();
-    let isFloat = false;
 
     if (this.peek() === "0" && (this.peek(1) === "x" || this.peek(1) === "X")) {
       this.advance();
       this.advance();
       const digitsStart = this.position();
-      while (this.isHexDigit(this.peek()) || this.peek() === "_")
+      while (this.isHexDigit(this.peek()) || this.peek() === "_") {
         this.advance();
+      }
       const end = this.position();
       const lexeme = this.source.slice(start.index, end.index);
       if (digitsStart.index === end.index) {
@@ -194,23 +189,20 @@ export class Lexer {
     while (this.isDigit(this.peek()) || this.peek() === "_") this.advance();
 
     if (this.peek() === "." && this.isDigit(this.peek(1))) {
-      isFloat = true;
       this.advance();
       while (this.isDigit(this.peek()) || this.peek() === "_") this.advance();
     }
 
     if (this.peek() === "e" || this.peek() === "E") {
-      isFloat = true;
       this.advance();
       if (this.peek() === "+" || this.peek() === "-") this.advance();
       const exponentStart = this.position();
       while (this.isDigit(this.peek()) || this.peek() === "_") this.advance();
       if (exponentStart.index === this.position().index) {
-        const end = this.position();
         this.diagnostics.push({
           severity: "error",
           message: "Invalid exponent in numeric literal.",
-          span: { start, end },
+          span: { start, end: this.position() },
           code: "E0013",
         });
       }
@@ -219,21 +211,11 @@ export class Lexer {
     const end = this.position();
     const lexeme = this.source.slice(start.index, end.index);
     this.tokens.push(this.makeToken("Number", lexeme, { start, end }));
-
-    if (!isFloat && lexeme.includes(".")) {
-      this.diagnostics.push({
-        severity: "error",
-        message: "Invalid numeric literal.",
-        span: { start, end },
-        code: "E0012",
-      });
-    }
   }
 
   private scanString() {
     const start = this.position();
     this.advance();
-    // keep raw lexeme; validate escapes by consuming them
 
     while (!this.isAtEnd()) {
       const ch = this.peek();
@@ -253,16 +235,9 @@ export class Lexer {
         if (next === "u") {
           this.advance();
           if (this.peek() !== "{") {
-            const end = this.position();
-            this.diagnostics.push({
-              severity: "error",
-              message: "Invalid unicode escape in string literal.",
-              span: { start: escapeStart, end },
-              code: "E0004",
-            });
+            this.invalidEscape(escapeStart);
             continue;
           }
-
           this.advance();
           const digitsStart = this.position();
           let sawDigit = false;
@@ -276,37 +251,18 @@ export class Lexer {
             this.advance();
           }
           if (this.isAtEnd() || this.peek() !== "}") {
-            const end = this.position();
-            this.diagnostics.push({
-              severity: "error",
-              message: "Unterminated unicode escape in string literal.",
-              span: { start: escapeStart, end },
-              code: "E0004",
-            });
+            this.invalidEscape(escapeStart);
             continue;
           }
-          if (!sawDigit || invalidDigit) {
-            const end = this.position();
-            this.diagnostics.push({
-              severity: "error",
-              message: "Invalid unicode escape in string literal.",
-              span: { start: digitsStart, end },
-              code: "E0004",
-            });
-          } else {
+          if (!sawDigit || invalidDigit) this.invalidEscape(digitsStart);
+          if (sawDigit && !invalidDigit) {
             const codePoint = Number.parseInt(hexDigits, 16);
             if (
               Number.isNaN(codePoint) ||
               codePoint > 0x10ffff ||
               (codePoint >= 0xd800 && codePoint <= 0xdfff)
             ) {
-              const end = this.position();
-              this.diagnostics.push({
-                severity: "error",
-                message: "Invalid unicode escape in string literal.",
-                span: { start: digitsStart, end },
-                code: "E0004",
-              });
+              this.invalidEscape(digitsStart);
             }
           }
           this.advance();
@@ -326,35 +282,37 @@ export class Lexer {
         }
 
         if (this.isAtEnd()) {
-          const end = this.position();
           this.diagnostics.push({
             severity: "error",
             message: "Unterminated string literal.",
-            span: { start, end },
+            span: { start, end: this.position() },
             code: "E0002",
           });
           return;
         }
 
-        const end = this.position();
-        this.diagnostics.push({
-          severity: "error",
-          message: "Invalid escape sequence in string literal.",
-          span: { start: escapeStart, end },
-          code: "E0004",
-        });
+        this.invalidEscape(escapeStart);
         this.advance();
         continue;
       }
+
       this.advance();
     }
 
-    const end = this.position();
     this.diagnostics.push({
       severity: "error",
       message: "Unterminated string literal.",
-      span: { start, end },
+      span: { start, end: this.position() },
       code: "E0002",
+    });
+  }
+
+  private invalidEscape(start: Position) {
+    this.diagnostics.push({
+      severity: "error",
+      message: "Invalid escape sequence in string literal.",
+      span: { start, end: this.position() },
+      code: "E0004",
     });
   }
 
@@ -363,13 +321,6 @@ export class Lexer {
     while (!this.isAtEnd() && this.isAlphaNumeric(this.peek())) this.advance();
     const end = this.position();
     const lexeme = this.source.slice(start.index, end.index);
-
-    if (lexeme === "is") {
-      this.tokens.push(
-        this.makeToken("Operator", lexeme, { start, end }, { operator: "is" }),
-      );
-      return;
-    }
 
     if (keywords.includes(lexeme as never)) {
       this.tokens.push(
@@ -405,8 +356,6 @@ export class Lexer {
     });
   }
 
-  // no literal coercion at lex time
-
   private makeToken(
     kind: Token["kind"],
     lexeme: string,
@@ -429,7 +378,9 @@ export class Lexer {
     if (ch === "\n") {
       this.line++;
       this.column = 1;
-    } else this.column++;
+    } else {
+      this.column++;
+    }
     return ch;
   }
 

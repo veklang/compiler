@@ -1,72 +1,47 @@
 import type {
-  Argument,
   ArrayLiteralExpression,
-  AssignmentExpression,
-  BinaryExpression,
-  BindingPattern,
+  AssignableExpression,
   BlockStatement,
-  CallExpression,
-  CastExpression,
+  ContinueStatement,
   EnumDeclaration,
-  EnumPattern,
-  EnumVariant,
-  ExportDefaultDeclaration,
+  EnumMember,
   Expression,
-  ExpressionStatement,
   ForStatement,
   FunctionDeclaration,
   FunctionExpression,
   FunctionType,
+  FunctionTypeParameter,
   Identifier,
   IdentifierExpression,
-  IdentifierPattern,
   IfStatement,
-  ImplDeclaration,
-  ImplMethod,
   ImportDeclaration,
-  KwSpreadArgument,
-  KwVariadicParameter,
   LiteralExpression,
-  LiteralPattern,
-  MapEntry,
-  MapLiteralExpression,
-  MatchArm,
+  MatchExpression,
+  MatchExpressionArm,
   MatchStatement,
-  MemberExpression,
-  NamedArgument,
+  MatchStatementArm,
+  MethodDeclaration,
   NamedType,
   Node,
   Parameter,
-  ParameterNode,
-  ParameterSeparator,
   Pattern,
-  PositionalArgument,
   Program,
   ReturnStatement,
-  SpreadArgument,
   Statement,
   StringLiteralExpression,
   StructDeclaration,
-  StructField,
   StructLiteralExpression,
   StructLiteralField,
-  StructPattern,
-  StructPatternField,
+  StructMember,
   TraitDeclaration,
   TraitMethodSignature,
-  TupleBinding,
-  TupleLiteralExpression,
-  TuplePattern,
-  TupleType,
+  TraitSatisfiesDeclaration,
   TypeAliasDeclaration,
   TypeNode,
   TypeParameter,
-  UnaryExpression,
-  UnionType,
   VariableDeclaration,
-  VariadicParameter,
+  WhereConstraint,
   WhileStatement,
-  WildcardPattern,
 } from "@/types/ast";
 import type { Diagnostic } from "@/types/diagnostic";
 import type { Span } from "@/types/position";
@@ -79,14 +54,11 @@ export interface ParseResult {
 }
 
 export class Parser {
-  private tokens: Token[];
   private diagnostics: Diagnostic[] = [];
   private current = 0;
   private structLiteralEnabled = true;
 
-  constructor(tokens: Token[]) {
-    this.tokens = tokens;
-  }
+  constructor(private tokens: Token[]) {}
 
   public parseProgram(): ParseResult {
     const body: Statement[] = [];
@@ -95,163 +67,96 @@ export class Parser {
       const before = this.current;
       const statement = this.parseStatement();
       if (statement) body.push(statement);
-      else this.advance();
       if (this.current === before) {
         this.report("Parser made no progress.", this.currentSpan(), "E1099");
         this.advance();
       }
     }
 
-    const program: Program = {
-      kind: "Program",
-      span: this.spanFromNodes(body) ?? this.emptySpan(),
-      body,
+    return {
+      program: {
+        kind: "Program",
+        span: this.spanFromNodes(body) ?? this.emptySpan(),
+        body,
+      },
+      diagnostics: this.diagnostics,
     };
-
-    return { program, diagnostics: this.diagnostics };
   }
 
   private parseStatement(): Statement | null {
-    if (this.matchKeyword("pub")) {
-      if (this.matchKeyword("default")) return this.parseExportDefault();
-      return this.parseDeclaration(true);
-    }
-
     if (this.checkKeyword("import")) return this.parseImport();
 
-    return (
-      this.parseDeclaration(false) ??
-      this.parseControlStatement() ??
-      this.parseExpressionStatement()
-    );
-  }
+    let isPublic = false;
+    if (this.matchKeyword("pub")) isPublic = true;
 
-  private parseDeclaration(isPublic: boolean): Statement | null {
-    if (this.matchKeyword("inline"))
-      return this.parseFunctionDeclaration(isPublic, true);
-    if (this.checkKeyword("fn"))
-      return this.parseFunctionDeclaration(isPublic, false);
-    if (this.checkKeyword("let") || this.checkKeyword("const"))
-      return this.parseVariableDeclaration(isPublic);
-    if (this.checkKeyword("type")) return this.parseTypeAlias(isPublic);
-    if (this.checkKeyword("struct"))
-      return this.parseStructDeclaration(isPublic);
-    if (this.checkKeyword("trait")) return this.parseTraitDeclaration(isPublic);
-    if (this.checkKeyword("impl")) return this.parseImplDeclaration(isPublic);
-    if (this.checkKeyword("enum")) return this.parseEnumDeclaration(isPublic);
-    return null;
-  }
+    const declaration =
+      this.parseFunctionDeclaration(isPublic) ??
+      this.parseVariableDeclaration(isPublic) ??
+      this.parseTypeAlias(isPublic) ??
+      this.parseStructDeclaration(isPublic) ??
+      this.parseTraitDeclaration(isPublic) ??
+      this.parseEnumDeclaration(isPublic);
 
-  private parseControlStatement(): Statement | null {
-    if (this.checkKeyword("return")) return this.parseReturnStatement();
-    if (this.checkKeyword("if")) return this.parseIfStatement();
-    if (this.checkKeyword("while")) return this.parseWhileStatement();
-    if (this.checkKeyword("for")) return this.parseForStatement();
-    if (this.checkKeyword("match")) return this.parseMatchStatement();
-    if (this.checkKeyword("break")) return this.parseBreakStatement();
-    if (this.checkKeyword("continue")) return this.parseContinueStatement();
-    if (this.checkPunctuator("{")) return this.parseBlockStatement();
-    return null;
+    if (declaration) return declaration;
+
+    return this.parseNonDeclarationStatement();
   }
 
   private parseImport(): ImportDeclaration {
     const start = this.expectKeyword("import");
 
-    let defaultImport: Identifier | undefined;
-    let namedImports: Identifier[] | undefined;
+    if (this.checkKind("String")) {
+      const source = this.stringLiteralFromToken(this.advance());
+      this.expectKeyword("as");
+      const namespace =
+        this.parseIdentifier() ?? this.placeholderIdentifier(source.span);
+      this.expectSemicolon();
+      return {
+        kind: "ImportDeclaration",
+        span: this.spanFrom(start?.span, namespace.span),
+        source,
+        namespace,
+      };
+    }
 
-    if (this.matchPunctuator("{")) {
-      namedImports = [];
-      while (!this.isAtEnd() && !this.checkPunctuator("}")) {
-        const name = this.parseIdentifier();
-        if (name) namedImports.push(name);
-        if (!this.matchPunctuator(",")) break;
-      }
-      this.expectPunctuator("}");
-    } else
-      defaultImport =
-        this.parseIdentifier() ??
-        this.placeholderIdentifier(this.currentSpan());
-
+    const names: Identifier[] = [];
+    const first =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    names.push(first);
+    while (this.matchPunctuator(",")) {
+      const name =
+        this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+      names.push(name);
+    }
     this.expectKeyword("from");
-    const sourceToken = this.expectKind("String");
-    const source = this.stringLiteralFromToken(sourceToken);
-
+    const source = this.stringLiteralFromToken(this.expectKind("String"));
     this.expectSemicolon();
 
     return {
       kind: "ImportDeclaration",
       span: this.spanFrom(start?.span, source.span),
-      defaultImport,
-      namedImports,
       source,
-    };
-  }
-
-  private parseExportDefault(): ExportDefaultDeclaration {
-    const start = this.previousSpan() ?? this.currentSpan();
-    if (this.matchOperator("*")) {
-      this.expectSemicolon();
-      return {
-        kind: "ExportDefaultDeclaration",
-        span: this.spanFrom(start, this.previousSpan()),
-        exportAll: true,
-      };
-    }
-
-    if (this.peek()?.kind === "Identifier") {
-      const startIndex = this.current;
-      const symbols: Identifier[] = [];
-      const first = this.parseIdentifier();
-      if (first) symbols.push(first);
-      let sawComma = false;
-      while (this.matchPunctuator(",")) {
-        sawComma = true;
-        if (!this.checkIdentifierStart()) {
-          this.report(
-            "Default export list must contain only identifiers.",
-            this.currentSpan(),
-            "E1070",
-          );
-          break;
-        }
-        const symbol = this.parseIdentifier();
-        if (symbol) symbols.push(symbol);
-      }
-      if (sawComma) {
-        this.expectSemicolon();
-        return {
-          kind: "ExportDefaultDeclaration",
-          span: this.spanFrom(
-            start,
-            symbols[symbols.length - 1]?.span ?? start,
-          ),
-          symbols,
-        };
-      }
-      this.current = startIndex;
-    }
-
-    const expression = this.parseExpression();
-    this.expectSemicolon();
-
-    return {
-      kind: "ExportDefaultDeclaration",
-      span: this.spanFrom(start, expression?.span ?? start),
-      expression: expression ?? this.placeholderExpression(start),
+      namedImports: names,
     };
   }
 
   private parseFunctionDeclaration(
     isPublic: boolean,
-    isInline: boolean,
-  ): FunctionDeclaration {
+  ): FunctionDeclaration | null {
+    const before = this.current;
+    const isInline = !!this.matchKeyword("inline");
+    if (!this.checkKeyword("fn")) {
+      this.current = before;
+      return null;
+    }
+
     const start = this.expectKeyword("fn");
     const name =
-      this.parseIdentifier() ?? this.placeholderIdentifier(start?.span);
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     const typeParams = this.parseTypeParams();
     const params = this.parseParameterList();
-    const returnType = this.matchPunctuator(":") ? this.parseType() : undefined;
+    const returnType = this.matchOperator("->") ? this.parseType() : undefined;
+    const whereClause = this.parseWhereClause();
     const body = this.parseBlockStatement();
 
     return {
@@ -261,25 +166,25 @@ export class Parser {
       typeParams,
       params,
       returnType: returnType ?? undefined,
+      whereClause,
       body,
       isInline,
       isPublic,
     };
   }
 
-  private parseVariableDeclaration(isPublic: boolean): VariableDeclaration {
-    const keywordToken = this.advance();
-    const declarationKind = keywordToken?.lexeme === "const" ? "const" : "let";
+  private parseVariableDeclaration(
+    isPublic: boolean,
+  ): VariableDeclaration | null {
+    if (!this.checkKeyword("let") && !this.checkKeyword("const")) return null;
+    const start = this.advance();
+    const declarationKind = start?.lexeme === "const" ? "const" : "let";
     const name =
-      this.parseBindingPattern() ??
-      this.placeholderIdentifier(keywordToken?.span);
-    let typeAnnotation: TypeNode | undefined;
-    let initializer: Expression | undefined;
-
-    if (this.matchPunctuator(":"))
-      typeAnnotation = this.parseType() ?? undefined;
-    if (this.matchOperator("="))
-      initializer = this.parseExpression() ?? undefined;
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const typeAnnotation = this.matchPunctuator(":") ? this.parseType() : undefined;
+    const initializer = this.matchOperator("=")
+      ? this.parseExpression()
+      : undefined;
 
     if (declarationKind === "const" && !initializer)
       this.report(
@@ -292,23 +197,23 @@ export class Parser {
 
     return {
       kind: "VariableDeclaration",
-      span: this.spanFrom(keywordToken?.span, initializer?.span ?? name.span),
+      span: this.spanFrom(start?.span, initializer?.span ?? name.span),
       declarationKind,
       name,
-      typeAnnotation,
-      initializer,
+      typeAnnotation: typeAnnotation ?? undefined,
+      initializer: initializer ?? undefined,
       isPublic,
     };
   }
 
-  private parseTypeAlias(isPublic: boolean): TypeAliasDeclaration {
+  private parseTypeAlias(isPublic: boolean): TypeAliasDeclaration | null {
+    if (!this.checkKeyword("type")) return null;
     const start = this.expectKeyword("type");
     const name =
-      this.parseIdentifier() ?? this.placeholderIdentifier(start?.span);
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     this.expectOperator("=");
-    const type = this.parseType() ?? this.placeholderType(start?.span);
+    const type = this.parseType() ?? this.placeholderType(this.currentSpan());
     this.expectSemicolon();
-
     return {
       kind: "TypeAliasDeclaration",
       span: this.spanFrom(start?.span, type.span),
@@ -318,112 +223,119 @@ export class Parser {
     };
   }
 
-  private parseStructDeclaration(isPublic: boolean): StructDeclaration {
+  private parseStructDeclaration(isPublic: boolean): StructDeclaration | null {
+    if (!this.checkKeyword("struct")) return null;
     const start = this.expectKeyword("struct");
     const name =
-      this.parseIdentifier() ?? this.placeholderIdentifier(start?.span);
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     const typeParams = this.parseTypeParams();
     this.expectPunctuator("{");
 
-    const fields: StructField[] = [];
+    const members: StructMember[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
-      const fieldName = this.parseIdentifier();
-      this.expectPunctuator(":");
-      const type = this.parseType() ?? this.placeholderType(this.currentSpan());
-      fields.push({
-        kind: "StructField",
-        span: this.spanFrom(fieldName?.span, type.span),
-        name: fieldName ?? this.placeholderIdentifier(this.currentSpan()),
-        type,
-      });
-      if (!this.matchPunctuator(",")) break;
+      const member = this.parseStructMember();
+      if (member) members.push(member);
     }
 
     const end = this.expectPunctuator("}");
-
     return {
       kind: "StructDeclaration",
       span: this.spanFrom(start?.span, end?.span ?? name.span),
       name,
       typeParams,
-      fields,
+      members,
       isPublic,
     };
   }
 
-  private parseEnumDeclaration(isPublic: boolean): EnumDeclaration {
+  private parseStructMember(): StructMember | null {
+    const method = this.parseMethodDeclaration();
+    if (method) return method;
+
+    const satisfies = this.parseTraitSatisfiesDeclaration();
+    if (satisfies) return satisfies;
+
+    const fieldName =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    this.expectPunctuator(":");
+    const type = this.parseType() ?? this.placeholderType(this.currentSpan());
+    this.expectSemicolon();
+    return {
+      kind: "StructField",
+      span: this.spanFrom(fieldName.span, type.span),
+      name: fieldName,
+      type,
+    };
+  }
+
+  private parseEnumDeclaration(isPublic: boolean): EnumDeclaration | null {
+    if (!this.checkKeyword("enum")) return null;
     const start = this.expectKeyword("enum");
     const name =
-      this.parseIdentifier() ?? this.placeholderIdentifier(start?.span);
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     const typeParams = this.parseTypeParams();
     this.expectPunctuator("{");
 
-    const variants: EnumVariant[] = [];
+    const members: EnumMember[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
-      const variantName = this.parseIdentifier();
-      let payload: TypeNode[] | undefined;
-      if (this.matchPunctuator("(")) {
-        payload = [];
-        if (!this.checkPunctuator(")")) {
-          do {
-            const type = this.parseType();
-            if (type) payload.push(type);
-          } while (this.matchPunctuator(","));
-        }
-        this.expectPunctuator(")");
-      }
-      const variant: EnumVariant = {
-        kind: "EnumVariant",
-        span: this.spanFrom(
-          variantName?.span,
-          payload?.[payload.length - 1]?.span ?? variantName?.span,
-        ),
-        name: variantName ?? this.placeholderIdentifier(this.currentSpan()),
-        payload,
-      };
-      variants.push(variant);
-      if (!this.matchPunctuator(",")) break;
+      const member = this.parseEnumMember();
+      if (member) members.push(member);
     }
 
     const end = this.expectPunctuator("}");
-
     return {
       kind: "EnumDeclaration",
       span: this.spanFrom(start?.span, end?.span ?? name.span),
       name,
       typeParams,
-      variants,
+      members,
       isPublic,
     };
   }
 
-  private parseTraitDeclaration(isPublic: boolean): TraitDeclaration {
+  private parseEnumMember(): EnumMember | null {
+    const method = this.parseMethodDeclaration();
+    if (method) return method;
+
+    const satisfies = this.parseTraitSatisfiesDeclaration();
+    if (satisfies) return satisfies;
+
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    let payload: TypeNode[] | undefined;
+    if (this.matchPunctuator("(")) {
+      payload = [];
+      if (!this.checkPunctuator(")")) {
+        do {
+          const type = this.parseType();
+          if (type) payload.push(type);
+        } while (this.matchPunctuator(","));
+      }
+      this.expectPunctuator(")");
+    }
+    this.expectSemicolon();
+    return {
+      kind: "EnumVariant",
+      span: this.spanFrom(
+        name.span,
+        payload?.[payload.length - 1]?.span ?? name.span,
+      ),
+      name,
+      payload,
+    };
+  }
+
+  private parseTraitDeclaration(isPublic: boolean): TraitDeclaration | null {
+    if (!this.checkKeyword("trait")) return null;
     const start = this.expectKeyword("trait");
     const name =
-      this.parseIdentifier() ?? this.placeholderIdentifier(start?.span);
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const typeParams = this.parseTypeParams();
     this.expectPunctuator("{");
 
     const methods: TraitMethodSignature[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
-      const methodStart = this.expectKeyword("fn");
-      const methodName =
-        this.parseIdentifier() ??
-        this.placeholderIdentifier(methodStart?.span ?? this.currentSpan());
-      const params = this.parseParameterList();
-      const returnType = this.matchPunctuator(":")
-        ? this.parseType()
-        : undefined;
-      this.expectSemicolon();
-      methods.push({
-        kind: "TraitMethodSignature",
-        span: this.spanFrom(
-          methodStart?.span,
-          returnType?.span ?? methodName.span,
-        ),
-        name: methodName,
-        params,
-        returnType: returnType ?? undefined,
-      });
+      methods.push(this.parseTraitMethodSignature());
     }
 
     const end = this.expectPunctuator("}");
@@ -431,95 +343,121 @@ export class Parser {
       kind: "TraitDeclaration",
       span: this.spanFrom(start?.span, end?.span ?? name.span),
       name,
+      typeParams,
       methods,
       isPublic,
     };
   }
 
-  private parseImplDeclaration(isPublic: boolean): ImplDeclaration {
-    const start = this.expectKeyword("impl");
-    const firstType = this.parsePrimaryType();
+  private parseTraitMethodSignature(): TraitMethodSignature {
+    const start = this.expectKeyword("fn");
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const typeParams = this.parseTypeParams();
+    const params = this.parseParameterList();
+    const returnType = this.matchOperator("->") ? this.parseType() : undefined;
+    const whereClause = this.parseWhereClause();
+    this.expectSemicolon();
+    return {
+      kind: "TraitMethodSignature",
+      span: this.spanFrom(start?.span, returnType?.span ?? name.span),
+      name,
+      typeParams,
+      params,
+      returnType: returnType ?? undefined,
+      whereClause,
+    };
+  }
 
-    let trait: NamedType | undefined;
-    let target: NamedType;
-    if (firstType?.kind === "NamedType" && this.matchKeyword("for")) {
-      trait = firstType;
-      const targetType = this.parsePrimaryType();
-      target =
-        targetType?.kind === "NamedType"
-          ? targetType
-          : this.placeholderNamedType(this.currentSpan());
-    } else {
-      target =
-        firstType?.kind === "NamedType"
-          ? firstType
-          : this.placeholderNamedType(this.currentSpan());
+  private parseMethodDeclaration(): MethodDeclaration | null {
+    const before = this.current;
+    const isInline = !!this.matchKeyword("inline");
+    if (!this.checkKeyword("fn")) {
+      this.current = before;
+      return null;
     }
 
-    this.expectPunctuator("{");
-    const methods: ImplMethod[] = [];
-    while (!this.isAtEnd() && !this.checkPunctuator("}")) {
-      const methodStart = this.expectKeyword("fn");
-      const methodName =
-        this.parseIdentifier() ??
-        this.placeholderIdentifier(methodStart?.span ?? this.currentSpan());
-      const params = this.parseParameterList();
-      const returnType = this.matchPunctuator(":")
-        ? this.parseType()
-        : undefined;
-      const body = this.parseBlockStatement();
-      methods.push({
-        kind: "ImplMethod",
-        span: this.spanFrom(methodStart?.span, body.span),
-        name: methodName,
-        params,
-        returnType: returnType ?? undefined,
-        body,
-      });
-    }
-    const end = this.expectPunctuator("}");
+    const start = this.expectKeyword("fn");
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const typeParams = this.parseTypeParams();
+    const params = this.parseParameterList();
+    const returnType = this.matchOperator("->") ? this.parseType() : undefined;
+    const whereClause = this.parseWhereClause();
+    const body = this.parseBlockStatement();
 
     return {
-      kind: "ImplDeclaration",
-      span: this.spanFrom(start?.span, end?.span ?? target.span),
-      target,
+      kind: "MethodDeclaration",
+      span: this.spanFrom(start?.span, body.span),
+      name,
+      typeParams,
+      params,
+      returnType: returnType ?? undefined,
+      whereClause,
+      body,
+      isInline,
+    };
+  }
+
+  private parseTraitSatisfiesDeclaration(): TraitSatisfiesDeclaration | null {
+    if (!this.checkKeyword("satisfies")) return null;
+    const start = this.expectKeyword("satisfies");
+    const trait = this.parseNamedType() ?? this.placeholderNamedType(start?.span);
+    this.expectPunctuator("{");
+
+    const methods: MethodDeclaration[] = [];
+    while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      const method = this.parseMethodDeclaration();
+      if (method) methods.push(method);
+      else this.advance();
+    }
+
+    const end = this.expectPunctuator("}");
+    return {
+      kind: "TraitSatisfiesDeclaration",
+      span: this.spanFrom(start?.span, end?.span ?? trait.span),
       trait,
       methods,
-      isPublic,
+    };
+  }
+
+  private parseNonDeclarationStatement(): Statement | null {
+    if (this.checkKeyword("return")) return this.parseReturnStatement();
+    if (this.checkKeyword("if")) return this.parseIfStatement();
+    if (this.checkKeyword("while")) return this.parseWhileStatement();
+    if (this.checkKeyword("for")) return this.parseForStatement();
+    if (this.checkKeyword("match")) return this.parseMatchStatement();
+    if (this.checkKeyword("break")) return this.parseBreakStatement();
+    if (this.checkKeyword("continue")) return this.parseContinueStatement();
+    if (this.checkPunctuator("{")) return this.parseBlockStatement();
+
+    const expression = this.parseExpression();
+    if (!expression) return null;
+
+    if (this.matchOperator("=")) {
+      const value =
+        this.parseExpression() ?? this.placeholderExpression(this.currentSpan());
+      this.expectSemicolon();
+      return {
+        kind: "AssignmentStatement",
+        span: this.spanFrom(expression.span, value.span),
+        target: expression as AssignableExpression,
+        value,
+      };
+    }
+
+    this.expectSemicolon();
+    return {
+      kind: "ExpressionStatement",
+      span: expression.span,
+      expression,
     };
   }
 
   private parseReturnStatement(): ReturnStatement {
     const start = this.expectKeyword("return");
-
-    if (this.checkPunctuator(";")) {
-      this.advance();
-      return {
-        kind: "ReturnStatement",
-        span: this.spanFrom(start?.span, start?.span),
-      };
-    }
-
-    let value = this.parseExpression();
-    if (this.matchPunctuator(",")) {
-      const elements: Expression[] = value ? [value] : [];
-      do {
-        const next = this.parseExpression();
-        if (next) elements.push(next);
-      } while (this.matchPunctuator(","));
-      const tuple: TupleLiteralExpression = {
-        kind: "TupleLiteralExpression",
-        span: this.spanFrom(
-          elements[0]?.span,
-          elements[elements.length - 1]?.span,
-        ),
-        elements,
-      };
-      value = tuple;
-    }
-
+    const value = this.checkPunctuator(";") ? undefined : this.parseExpression();
     this.expectSemicolon();
-
     return {
       kind: "ReturnStatement",
       span: this.spanFrom(start?.span, value?.span ?? start?.span),
@@ -555,7 +493,6 @@ export class Parser {
       this.withStructLiteral(false, () => this.parseExpression()) ??
       this.placeholderExpression(this.currentSpan());
     const body = this.parseBlockStatement();
-
     return {
       kind: "WhileStatement",
       span: this.spanFrom(start?.span, body.span),
@@ -573,7 +510,6 @@ export class Parser {
       this.withStructLiteral(false, () => this.parseExpression()) ??
       this.placeholderExpression(this.currentSpan());
     const body = this.parseBlockStatement();
-
     return {
       kind: "ForStatement",
       span: this.spanFrom(start?.span, body.span),
@@ -589,26 +525,20 @@ export class Parser {
       this.withStructLiteral(false, () => this.parseExpression()) ??
       this.placeholderExpression(this.currentSpan());
     this.expectPunctuator("{");
-
-    const arms: MatchArm[] = [];
+    const arms: MatchStatementArm[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
       const pattern = this.parsePattern();
       this.expectOperator("=>");
-      const body = this.checkPunctuator("{")
-        ? this.parseBlockStatement()
-        : (this.parseExpression() ??
-          this.placeholderExpression(this.currentSpan()));
+      const body = this.parseBlockStatement();
       arms.push({
-        kind: "MatchArm",
+        kind: "MatchStatementArm",
         span: this.spanFrom(pattern.span, body.span),
         pattern,
         body,
       });
-      if (!this.matchPunctuator(",")) break;
+      this.matchPunctuator(",");
     }
-
     const end = this.expectPunctuator("}");
-
     return {
       kind: "MatchStatement",
       span: this.spanFrom(start?.span, end?.span ?? expression.span),
@@ -617,136 +547,13 @@ export class Parser {
     };
   }
 
-  private parsePattern(): Pattern {
-    const token = this.advance();
-    if (!token) return this.placeholderPattern(this.currentSpan());
-    return this.parsePatternFromToken(token);
-  }
-
-  private parsePatternFromToken(token: Token): Pattern {
-    if (token.kind === "Identifier" && token.lexeme === "_")
-      return {
-        kind: "WildcardPattern",
-        span: token.span,
-      } satisfies WildcardPattern;
-
-    if (token.kind === "Identifier") {
-      const name = this.identifierFromToken(token);
-      if (this.matchPunctuator("(")) {
-        const args = this.parsePatternList(")");
-        const end = this.expectPunctuator(")");
-        return {
-          kind: "EnumPattern",
-          span: this.spanFrom(token.span, end?.span ?? token.span),
-          name,
-          args,
-        } satisfies EnumPattern;
-      }
-      if (this.matchPunctuator("{")) {
-        const fields: StructPatternField[] = [];
-        if (!this.checkPunctuator("}")) {
-          do {
-            const fieldName =
-              this.parseIdentifier() ??
-              this.placeholderIdentifier(this.currentSpan());
-            let fieldPattern: Pattern;
-            if (this.matchPunctuator(":")) {
-              fieldPattern = this.parsePattern();
-            } else {
-              fieldPattern = {
-                kind: "IdentifierPattern",
-                span: fieldName.span,
-                name: fieldName,
-              } satisfies IdentifierPattern;
-            }
-            fields.push({
-              kind: "StructPatternField",
-              span: this.spanFrom(fieldName.span, fieldPattern.span),
-              name: fieldName,
-              pattern: fieldPattern,
-            });
-          } while (this.matchPunctuator(","));
-        }
-        const end = this.expectPunctuator("}");
-        return {
-          kind: "StructPattern",
-          span: this.spanFrom(token.span, end?.span ?? token.span),
-          name,
-          fields,
-        } satisfies StructPattern;
-      }
-      return {
-        kind: "IdentifierPattern",
-        span: token.span,
-        name,
-      } satisfies IdentifierPattern;
-    }
-
-    if (token.kind === "Number" || token.kind === "String") {
-      const literal = this.literalFromToken(token);
-      return {
-        kind: "LiteralPattern",
-        span: literal.span,
-        literal,
-      } satisfies LiteralPattern;
-    }
-
-    if (token.kind === "Operator" && token.lexeme === "=>") {
-      this.report("Unexpected '=>' outside match arm.", token.span, "E1042");
-      return this.placeholderPattern(token.span);
-    }
-
-    if (token.kind === "Keyword") {
-      if (
-        token.lexeme === "true" ||
-        token.lexeme === "false" ||
-        token.lexeme === "null"
-      ) {
-        const literal = this.literalFromToken(token);
-        return {
-          kind: "LiteralPattern",
-          span: literal.span,
-          literal,
-        } satisfies LiteralPattern;
-      }
-      this.report(
-        `Unexpected keyword '${token.lexeme}' in pattern.`,
-        token.span,
-        "E1030",
-      );
-      return this.placeholderPattern(token.span);
-    }
-
-    if (token.kind === "Punctuator" && token.lexeme === "(") {
-      const elements = this.parsePatternList(")");
-      const end = this.expectPunctuator(")");
-      return {
-        kind: "TuplePattern",
-        span: this.spanFrom(token.span, end?.span ?? token.span),
-        elements,
-      } satisfies TuplePattern;
-    }
-
-    this.report("Invalid match pattern.", token.span, "E1030");
-    return this.placeholderPattern(token.span);
-  }
-
-  private parsePatternList(terminator: ")" | "}"): Pattern[] {
-    const patterns: Pattern[] = [];
-    if (!this.checkPunctuator(terminator))
-      do {
-        patterns.push(this.parsePattern());
-      } while (this.matchPunctuator(","));
-    return patterns;
-  }
-
   private parseBreakStatement(): Statement {
     const start = this.expectKeyword("break");
     this.expectSemicolon();
     return { kind: "BreakStatement", span: start?.span ?? this.currentSpan() };
   }
 
-  private parseContinueStatement(): Statement {
+  private parseContinueStatement(): ContinueStatement {
     const start = this.expectKeyword("continue");
     this.expectSemicolon();
     return {
@@ -758,15 +565,11 @@ export class Parser {
   private parseBlockStatement(): BlockStatement {
     const start = this.expectPunctuator("{");
     const body: Statement[] = [];
-
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
       const statement = this.parseStatement();
       if (statement) body.push(statement);
-      else this.advance();
     }
-
     const end = this.expectPunctuator("}");
-
     return {
       kind: "BlockStatement",
       span: this.spanFrom(start?.span, end?.span ?? start?.span),
@@ -774,157 +577,104 @@ export class Parser {
     };
   }
 
-  private parseExpressionStatement(): ExpressionStatement | null {
-    const expression = this.parseExpression();
-    if (!expression) return null;
-    this.expectSemicolon();
-    return {
-      kind: "ExpressionStatement",
-      span: expression.span,
-      expression,
-    };
-  }
-
   private parseExpression(): Expression | null {
-    return this.parseAssignment();
+    return this.parseCast();
   }
 
-  private parseAssignment(): Expression | null {
-    const left = this.parseLogicalOr();
-    if (!left) return null;
-
-    if (this.matchOperator("=")) {
-      const right =
-        this.parseAssignment() ??
-        this.placeholderExpression(this.currentSpan());
-      const assignment: AssignmentExpression = {
-        kind: "AssignmentExpression",
-        span: this.spanFrom(left.span, right.span),
-        left,
-        right,
+  private parseCast(): Expression | null {
+    let expression = this.parseLogicalOr();
+    if (!expression) return null;
+    while (this.matchKeyword("as")) {
+      const type = this.parseType() ?? this.placeholderType(this.currentSpan());
+      expression = {
+        kind: "CastExpression",
+        span: this.spanFrom(expression.span, type.span),
+        expression,
+        type,
       };
-      return assignment;
     }
-
-    return left;
+    return expression;
   }
 
   private parseLogicalOr(): Expression | null {
-    let expression = this.parseLogicalAnd();
-    if (!expression) return null;
-    while (this.matchOperator("||")) {
-      const operatorToken = this.previous();
-      const right =
-        this.parseLogicalAnd() ??
-        this.placeholderExpression(this.currentSpan());
-      expression = this.binaryFrom(operatorToken, expression, right);
-    }
-    return expression;
+    return this.parseLeftAssociative(() => this.parseLogicalAnd(), ["||"]);
   }
 
   private parseLogicalAnd(): Expression | null {
-    let expression = this.parseBitwiseOr();
-    if (!expression) return null;
-    while (this.matchOperator("&&")) {
-      const operatorToken = this.previous();
-      const right =
-        this.parseBitwiseOr() ?? this.placeholderExpression(this.currentSpan());
-      expression = this.binaryFrom(operatorToken, expression, right);
-    }
-    return expression;
+    return this.parseLeftAssociative(() => this.parseBitwiseOr(), ["&&"]);
   }
 
   private parseBitwiseOr(): Expression | null {
-    let expression = this.parseEquality();
-    if (!expression) return null;
-    while (this.matchOperator("|")) {
-      const operatorToken = this.previous();
-      const right =
-        this.parseEquality() ?? this.placeholderExpression(this.currentSpan());
-      expression = this.binaryFrom(operatorToken, expression, right);
-    }
-    return expression;
+    return this.parseLeftAssociative(() => this.parseBitwiseXor(), ["|"]);
+  }
+
+  private parseBitwiseXor(): Expression | null {
+    return this.parseLeftAssociative(() => this.parseBitwiseAnd(), ["^"]);
+  }
+
+  private parseBitwiseAnd(): Expression | null {
+    return this.parseLeftAssociative(() => this.parseEquality(), ["&"]);
   }
 
   private parseEquality(): Expression | null {
-    let expression = this.parseComparison();
-    if (!expression) return null;
-    while (
-      this.matchOperator("==") ||
-      this.matchOperator("!=") ||
-      this.matchOperator("is")
-    ) {
-      const operatorToken = this.previous();
-      const right =
-        this.parseComparison() ??
-        this.placeholderExpression(this.currentSpan());
-      expression = this.binaryFrom(operatorToken, expression, right);
-    }
-    return expression;
+    return this.parseLeftAssociative(() => this.parseComparison(), [
+      "==",
+      "!=",
+    ]);
   }
 
   private parseComparison(): Expression | null {
-    let expression = this.parseTerm();
-    if (!expression) return null;
-    while (
-      this.matchOperator("<") ||
-      this.matchOperator("<=") ||
-      this.matchOperator(">") ||
-      this.matchOperator(">=")
-    ) {
-      const operatorToken = this.previous();
-      const right =
-        this.parseTerm() ?? this.placeholderExpression(this.currentSpan());
-      expression = this.binaryFrom(operatorToken, expression, right);
-    }
-    return expression;
+    return this.parseLeftAssociative(() => this.parseShift(), [
+      "<",
+      "<=",
+      ">",
+      ">=",
+    ]);
+  }
+
+  private parseShift(): Expression | null {
+    return this.parseLeftAssociative(() => this.parseTerm(), ["<<", ">>"]);
   }
 
   private parseTerm(): Expression | null {
-    let expression = this.parseFactor();
-    if (!expression) return null;
-    while (this.matchOperator("+") || this.matchOperator("-")) {
-      const operatorToken = this.previous();
-      const right =
-        this.parseFactor() ?? this.placeholderExpression(this.currentSpan());
-      expression = this.binaryFrom(operatorToken, expression, right);
-    }
-    return expression;
+    return this.parseLeftAssociative(() => this.parseFactor(), ["+", "-"]);
   }
 
   private parseFactor(): Expression | null {
-    let expression = this.parseUnary();
+    return this.parseLeftAssociative(() => this.parseUnary(), ["*", "/", "%"]);
+  }
+
+  private parseLeftAssociative(
+    parser: () => Expression | null,
+    operators: Operator[],
+  ): Expression | null {
+    let expression = parser();
     if (!expression) return null;
-    while (
-      this.matchOperator("*") ||
-      this.matchOperator("/") ||
-      this.matchOperator("%")
-    ) {
-      const operatorToken = this.previous();
-      const right =
-        this.parseUnary() ?? this.placeholderExpression(this.currentSpan());
-      expression = this.binaryFrom(operatorToken, expression, right);
+    while (operators.some((operator) => this.checkOperator(operator))) {
+      const operatorToken = this.advance();
+      const right = parser() ?? this.placeholderExpression(this.currentSpan());
+      expression = {
+        kind: "BinaryExpression",
+        span: this.spanFrom(expression.span, right.span),
+        operator: (operatorToken?.operator ?? operatorToken?.lexeme) as Operator,
+        left: expression,
+        right,
+      };
     }
     return expression;
   }
 
   private parseUnary(): Expression | null {
-    if (
-      this.matchOperator("-") ||
-      this.matchOperator("+") ||
-      this.matchOperator("!")
-    ) {
+    if (this.matchOperator("!") || this.matchOperator("-")) {
       const operatorToken = this.previous();
       const argument =
         this.parseUnary() ?? this.placeholderExpression(this.currentSpan());
-      const expression: UnaryExpression = {
+      return {
         kind: "UnaryExpression",
         span: this.spanFrom(operatorToken?.span, argument.span),
-        operator: (operatorToken?.operator ??
-          operatorToken?.lexeme) as Operator,
+        operator: (operatorToken?.operator ?? operatorToken?.lexeme) as Operator,
         argument,
       };
-      return expression;
     }
     return this.parsePostfix();
   }
@@ -934,63 +684,72 @@ export class Parser {
     if (!expression) return null;
 
     while (true) {
+      if (this.structLiteralEnabled && expression.kind === "IdentifierExpression") {
+        if (this.checkPunctuator("{")) {
+          expression = this.parseStructLiteral(expression);
+          continue;
+        }
+      }
+
+      if (this.checkOperator("<") && this.looksLikeCallTypeArgs()) {
+        const typeArgs = this.parseCallTypeArgs();
+        this.expectPunctuator("(");
+        const args = this.parseExpressionList(")");
+        const end = this.expectPunctuator(")");
+        expression = {
+          kind: "CallExpression",
+          span: this.spanFrom(expression.span, end?.span ?? expression.span),
+          callee: expression,
+          typeArgs,
+          args,
+        };
+        continue;
+      }
+
       if (this.matchPunctuator("(")) {
-        const args = this.parseArgumentList();
+        const args = this.parseExpressionList(")");
         const end = this.expectPunctuator(")");
         expression = {
           kind: "CallExpression",
           span: this.spanFrom(expression.span, end?.span ?? expression.span),
           callee: expression,
           args,
-        } satisfies CallExpression;
+        };
+        continue;
+      }
+
+      if (this.matchPunctuator("[")) {
+        const index =
+          this.parseExpression() ?? this.placeholderExpression(this.currentSpan());
+        const end = this.expectPunctuator("]");
+        expression = {
+          kind: "IndexExpression",
+          span: this.spanFrom(expression.span, end?.span ?? index.span),
+          object: expression,
+          index,
+        };
         continue;
       }
 
       if (this.matchPunctuator(".")) {
+        if (this.checkKind("Number")) {
+          const token = this.advance();
+          expression = {
+            kind: "TupleMemberExpression",
+            span: this.spanFrom(expression.span, token?.span ?? expression.span),
+            object: expression,
+            index: Number.parseInt(token?.lexeme ?? "0", 10),
+          };
+          continue;
+        }
         const property =
-          this.parseIdentifier() ??
-          this.placeholderIdentifier(this.currentSpan());
+          this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
         expression = {
           kind: "MemberExpression",
           span: this.spanFrom(expression.span, property.span),
           object: expression,
           property,
-        } satisfies MemberExpression;
-        continue;
-      }
-
-      if (expression.kind === "IdentifierExpression") {
-        let typeArgs: TypeNode[] | undefined;
-        if (this.checkOperator("<") && this.looksLikeStructLiteralTypeArgs()) {
-          this.advance();
-          typeArgs = [];
-          if (!this.checkOperator(">")) {
-            do {
-              const type = this.parseType();
-              if (type) typeArgs.push(type);
-            } while (this.matchPunctuator(","));
-          }
-          this.expectOperator(">");
-        }
-
-        if (this.structLiteralEnabled && this.checkPunctuator("{")) {
-          expression = this.parseStructLiteral(
-            expression as IdentifierExpression,
-            typeArgs,
-          );
-          continue;
-        }
-      }
-
-      if (this.matchKeyword("as")) {
-        const type =
-          this.parseType() ?? this.placeholderType(this.currentSpan());
-        expression = {
-          kind: "CastExpression",
-          span: this.spanFrom(expression.span, type.span),
-          expression,
-          type,
-        } satisfies CastExpression;
+        };
         continue;
       }
 
@@ -1001,12 +760,10 @@ export class Parser {
   }
 
   private parsePrimary(): Expression | null {
+    if (this.checkKeyword("match")) return this.parseMatchExpression();
+    if (this.checkKeyword("fn")) return this.parseFunctionExpression();
     if (this.checkPunctuator("(")) return this.parseGroupingOrTuple();
-
     if (this.matchPunctuator("[")) return this.parseArrayLiteral();
-    if (this.matchPunctuator("{")) return this.parseMapLiteral();
-
-    if (this.matchKeyword("fn")) return this.parseFunctionExpression();
 
     const token = this.advance();
     if (!token) return null;
@@ -1021,34 +778,115 @@ export class Parser {
         token.lexeme === "null" ||
         token.lexeme === "NaN" ||
         token.lexeme === "Infinity"
-      )
+      ) {
         return this.literalFromToken(token);
+      }
+      if (token.lexeme === "Self") {
+        return {
+          kind: "IdentifierExpression",
+          span: token.span,
+          name: "Self",
+        };
+      }
       this.report(`Unexpected keyword '${token.lexeme}'.`, token.span, "E1040");
       return this.placeholderExpression(token.span);
     }
 
     if (token.kind === "Identifier") {
-      const identifier: IdentifierExpression = {
+      return {
         kind: "IdentifierExpression",
         span: token.span,
         name: token.lexeme,
       };
-      return identifier;
     }
 
     this.report(`Unexpected token '${token.lexeme}'.`, token.span, "E1041");
     return this.placeholderExpression(token.span);
   }
 
+  private parseMatchExpression(): MatchExpression {
+    const start = this.expectKeyword("match");
+    const expression =
+      this.withStructLiteral(false, () => this.parseExpression()) ??
+      this.placeholderExpression(this.currentSpan());
+    this.expectPunctuator("{");
+    const arms: MatchExpressionArm[] = [];
+    while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      const pattern = this.parsePattern();
+      this.expectOperator("=>");
+      const armExpression =
+        this.parseExpression() ?? this.placeholderExpression(this.currentSpan());
+      arms.push({
+        kind: "MatchExpressionArm",
+        span: this.spanFrom(pattern.span, armExpression.span),
+        pattern,
+        expression: armExpression,
+      });
+      this.matchPunctuator(",");
+    }
+    const end = this.expectPunctuator("}");
+    return {
+      kind: "MatchExpression",
+      span: this.spanFrom(start?.span, end?.span ?? expression.span),
+      expression,
+      arms,
+    };
+  }
+
+  private parseFunctionExpression(): FunctionExpression {
+    const start = this.expectKeyword("fn");
+    const params = this.parseParameterList();
+    const returnType = this.matchOperator("->") ? this.parseType() : undefined;
+    const body = this.parseBlockStatement();
+    return {
+      kind: "FunctionExpression",
+      span: this.spanFrom(start?.span, body.span),
+      params,
+      returnType: returnType ?? undefined,
+      body,
+    };
+  }
+
+  private parseGroupingOrTuple(): Expression {
+    const start = this.expectPunctuator("(");
+    const elements: Expression[] = [];
+    let sawComma = false;
+
+    if (!this.checkPunctuator(")")) {
+      const first =
+        this.withStructLiteral(true, () => this.parseExpression()) ??
+        this.placeholderExpression(this.currentSpan());
+      elements.push(first);
+      while (this.matchPunctuator(",")) {
+        sawComma = true;
+        if (this.checkPunctuator(")")) break;
+        const next =
+          this.withStructLiteral(true, () => this.parseExpression()) ??
+          this.placeholderExpression(this.currentSpan());
+        elements.push(next);
+      }
+    }
+
+    const end = this.expectPunctuator(")");
+
+    if (elements.length === 0 || sawComma) {
+      return {
+        kind: "TupleLiteralExpression",
+        span: this.spanFrom(start?.span, end?.span ?? start?.span),
+        elements,
+      };
+    }
+
+    return {
+      kind: "GroupingExpression",
+      span: this.spanFrom(start?.span, end?.span ?? elements[0].span),
+      expression: elements[0],
+    };
+  }
+
   private parseArrayLiteral(): ArrayLiteralExpression {
     const start = this.previousSpan();
-    const elements: Expression[] = [];
-    if (!this.checkPunctuator("]")) {
-      do {
-        const element = this.parseExpression();
-        if (element) elements.push(element);
-      } while (this.matchPunctuator(","));
-    }
+    const elements = this.parseExpressionList("]");
     const end = this.expectPunctuator("]");
     return {
       kind: "ArrayLiteralExpression",
@@ -1057,80 +895,20 @@ export class Parser {
     };
   }
 
-  private parseMapLiteral(): MapLiteralExpression {
-    const start = this.previousSpan();
-    const entries: MapEntry[] = [];
-
-    if (!this.checkPunctuator("}")) {
-      do {
-        if (
-          this.checkIdentifierStart() &&
-          (this.peek(1)?.lexeme === "," || this.peek(1)?.lexeme === "}")
-        ) {
-          const name =
-            this.parseIdentifier() ??
-            this.placeholderIdentifier(this.currentSpan());
-          const key: LiteralExpression = {
-            kind: "LiteralExpression",
-            span: name.span,
-            literalType: "String",
-            value: name.name,
-          };
-          const value: IdentifierExpression = {
-            kind: "IdentifierExpression",
-            span: name.span,
-            name: name.name,
-          };
-          entries.push({
-            kind: "MapEntry",
-            span: this.spanFrom(key.span, value.span),
-            key,
-            value,
-          });
-        } else {
-          const key =
-            this.parseExpression() ??
-            this.placeholderExpression(this.currentSpan());
-          this.expectPunctuator(":");
-          const value =
-            this.parseExpression() ??
-            this.placeholderExpression(this.currentSpan());
-          entries.push({
-            kind: "MapEntry",
-            span: this.spanFrom(key.span, value.span),
-            key,
-            value,
-          });
-        }
-      } while (this.matchPunctuator(","));
-    }
-
-    const end = this.expectPunctuator("}");
-    return {
-      kind: "MapLiteralExpression",
-      span: this.spanFrom(start, end?.span ?? start),
-      entries,
-    };
-  }
-
   private parseStructLiteral(
     name: IdentifierExpression,
-    typeArgs?: TypeNode[],
   ): StructLiteralExpression {
     const start = name.span;
     this.expectPunctuator("{");
     const fields: StructLiteralField[] = [];
-
     if (!this.checkPunctuator("}")) {
       do {
         const fieldName =
-          this.parseIdentifier() ??
-          this.placeholderIdentifier(this.currentSpan());
+          this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
         let value: Expression;
         if (this.matchPunctuator(":")) {
           value =
-            this.parseExpression() ??
-            this.placeholderExpression(this.currentSpan());
+            this.parseExpression() ?? this.placeholderExpression(this.currentSpan());
         } else {
           value = {
             kind: "IdentifierExpression",
@@ -1146,536 +924,414 @@ export class Parser {
         });
       } while (this.matchPunctuator(","));
     }
-
     const end = this.expectPunctuator("}");
     return {
       kind: "StructLiteralExpression",
       span: this.spanFrom(start, end?.span ?? start),
       name,
-      typeArgs,
       fields,
     };
   }
 
-  private parseGroupingOrTuple(): Expression {
-    const start = this.expectPunctuator("(");
-    const elements: Expression[] = [];
-
-    if (!this.checkPunctuator(")")) {
-      do {
-        const element = this.withStructLiteral(true, () =>
-          this.parseExpression(),
-        );
-        if (element) elements.push(element);
-      } while (this.matchPunctuator(","));
-    }
-
-    const end = this.expectPunctuator(")");
-
-    if (elements.length === 1) {
+  private parsePattern(): Pattern {
+    if (this.matchPunctuator("(")) {
+      const elements: Pattern[] = [];
+      if (!this.checkPunctuator(")")) {
+        do {
+          elements.push(this.parsePattern());
+        } while (this.matchPunctuator(","));
+      }
+      const end = this.expectPunctuator(")");
       return {
-        kind: "GroupingExpression",
-        span: this.spanFrom(start?.span, end?.span ?? elements[0].span),
-        expression: elements[0],
+        kind: "TuplePattern",
+        span: this.spanFrom(this.previousSpan(), end?.span ?? this.currentSpan()),
+        elements,
       };
     }
 
-    return {
-      kind: "TupleLiteralExpression",
-      span: this.spanFrom(start?.span, end?.span ?? start?.span),
-      elements,
-    };
+    const token = this.advance();
+    if (!token) return this.placeholderPattern(this.currentSpan());
+
+    if (token.kind === "Identifier") {
+      if (token.lexeme === "_") {
+        return {
+          kind: "WildcardPattern",
+          span: token.span,
+        };
+      }
+
+      const name = this.identifierFromToken(token);
+      if (this.matchPunctuator("(")) {
+        const args: Pattern[] = [];
+        if (!this.checkPunctuator(")")) {
+          do {
+            args.push(this.parsePattern());
+          } while (this.matchPunctuator(","));
+        }
+        const end = this.expectPunctuator(")");
+        return {
+          kind: "EnumPattern",
+          span: this.spanFrom(name.span, end?.span ?? name.span),
+          name,
+          args,
+        };
+      }
+
+      return {
+        kind: "IdentifierPattern",
+        span: token.span,
+        name,
+      };
+    }
+
+    if (token.kind === "Number" || token.kind === "String") {
+      const literal = this.literalFromToken(token);
+      return {
+        kind: "LiteralPattern",
+        span: literal.span,
+        literal,
+      };
+    }
+
+    if (
+      token.kind === "Keyword" &&
+      (token.lexeme === "true" ||
+        token.lexeme === "false" ||
+        token.lexeme === "null" ||
+        token.lexeme === "NaN" ||
+        token.lexeme === "Infinity")
+    ) {
+      const literal = this.literalFromToken(token);
+      return {
+        kind: "LiteralPattern",
+        span: literal.span,
+        literal,
+      };
+    }
+
+    this.report("Invalid match pattern.", token.span, "E1030");
+    return this.placeholderPattern(token.span);
   }
 
-  private parseFunctionExpression(): FunctionExpression {
-    const start = this.previousSpan();
-    const params = this.parseParameterList();
-    const returnType = this.matchPunctuator(":") ? this.parseType() : undefined;
-    const body = this.parseBlockStatement();
-    return {
-      kind: "FunctionExpression",
-      span: this.spanFrom(start, body.span),
-      params,
-      returnType: returnType ?? undefined,
-      body,
-    };
-  }
-
-  private parseArgumentList(): Argument[] {
-    const args: Argument[] = [];
-    let seenNamed = false;
-    let seenKwSpread = false;
-    const seenNamedArgs = new Set<string>();
+  private parseParameterList(): Parameter[] {
+    this.expectPunctuator("(");
+    const params: Parameter[] = [];
     if (!this.checkPunctuator(")")) {
       do {
-        if (this.matchOperator("**")) {
-          if (seenKwSpread)
-            this.report(
-              "Multiple '**kwargs' arguments are not allowed.",
-              this.previousSpan(),
-              "E1068",
-            );
-          const value =
-            this.parseExpression() ??
-            this.placeholderExpression(this.currentSpan());
-          const arg: KwSpreadArgument = {
-            kind: "KwSpreadArgument",
-            span: this.spanFrom(this.previousSpan(), value.span),
-            value,
-          };
-          args.push(arg);
-          seenNamed = true;
-          seenKwSpread = true;
-          continue;
-        }
-
-        if (this.matchOperator("*")) {
-          const value =
-            this.parseExpression() ??
-            this.placeholderExpression(this.currentSpan());
-          const arg: SpreadArgument = {
-            kind: "SpreadArgument",
-            span: this.spanFrom(this.previousSpan(), value.span),
-            value,
-          };
-          args.push(arg);
-          continue;
-        }
-
-        if (this.checkArgumentNamed()) {
-          const name =
-            this.parseIdentifier() ??
-            this.placeholderIdentifier(this.currentSpan());
-          if (seenNamedArgs.has(name.name)) {
-            this.report(
-              `Duplicate keyword argument '${name.name}'.`,
-              name.span,
-              "E1069",
-            );
-          }
-          seenNamedArgs.add(name.name);
-          this.expectOperator("=");
-          const value =
-            this.parseExpression() ??
-            this.placeholderExpression(this.currentSpan());
-          const arg: NamedArgument = {
-            kind: "NamedArgument",
-            span: this.spanFrom(name.span, value.span),
-            name,
-            value,
-          };
-          args.push(arg);
-          seenNamed = true;
-          continue;
-        }
-
-        if (seenNamed)
-          this.report(
-            "Positional arguments cannot follow named arguments.",
-            this.currentSpan(),
-            "E1060",
-          );
-
-        const value = this.parseExpression();
-        if (value) {
-          const arg: PositionalArgument = {
-            kind: "PositionalArgument",
-            span: value.span,
-            value,
-          };
-          args.push(arg);
-        }
+        const parameter = this.parseParameter();
+        if (parameter) params.push(parameter);
       } while (this.matchPunctuator(","));
     }
-    return args;
-  }
-
-  private parseParameterList(): ParameterNode[] {
-    this.expectPunctuator("(");
-    const params = this.parseParameterListInner();
     this.expectPunctuator(")");
     return params;
   }
 
-  private parseParameterListInner(): ParameterNode[] {
-    const params: ParameterNode[] = [];
-    let namedOnly = false;
-    let seenDefault = false;
-    let seenVariadic = false;
-    let seenKwVariadic = false;
-    let seenSeparator = false;
-    if (!this.checkPunctuator(")")) {
-      do {
-        const parsed = this.parseParameter({
-          namedOnly,
-          seenDefault,
-          seenVariadic,
-          seenKwVariadic,
-          seenSeparator,
-        });
-        if (parsed) {
-          params.push(parsed.node);
-          if (parsed.makesNamedOnly) namedOnly = true;
-          if (parsed.hasDefault) seenDefault = true;
-          if (parsed.seenVariadic) seenVariadic = true;
-          if (parsed.seenKwVariadic) seenKwVariadic = true;
-          if (parsed.seenSeparator) seenSeparator = true;
-        }
-      } while (this.matchPunctuator(","));
-    }
-    return params;
-  }
-
-  private parseParameter(context: {
-    namedOnly: boolean;
-    seenDefault: boolean;
-    seenVariadic: boolean;
-    seenKwVariadic: boolean;
-    seenSeparator: boolean;
-  }): {
-    node: ParameterNode;
-    makesNamedOnly: boolean;
-    hasDefault: boolean;
-    seenVariadic: boolean;
-    seenKwVariadic: boolean;
-    seenSeparator: boolean;
-  } | null {
-    if (this.matchOperator("*")) {
-      if (this.checkPunctuator(",") || this.checkPunctuator(")")) {
-        if (
-          context.seenSeparator ||
-          context.seenVariadic ||
-          context.seenKwVariadic
-        )
-          this.report(
-            "Multiple '*' separators or varargs are not allowed.",
-            this.previousSpan(),
-            "E1063",
-          );
-        const sep: ParameterSeparator = {
-          kind: "ParameterSeparator",
-          span: this.previousSpan(),
-          separator: "*",
-        };
-        return {
-          node: sep,
-          makesNamedOnly: true,
-          hasDefault: false,
-          seenVariadic: false,
-          seenKwVariadic: false,
-          seenSeparator: true,
-        };
-      }
-
-      if (context.seenVariadic)
-        this.report(
-          "Multiple '*args' parameters are not allowed.",
-          this.previousSpan(),
-          "E1064",
-        );
-
-      const name =
-        this.parseIdentifier() ??
-        this.placeholderIdentifier(this.currentSpan());
-      this.expectPunctuator(":");
-      const type = this.parseType() ?? this.placeholderType(name.span);
-      const node: VariadicParameter = {
-        kind: "VariadicParameter",
-        span: this.spanFrom(name.span, type.span),
-        name,
-        type,
-      };
+  private parseParameter(): Parameter | null {
+    const mutToken = this.matchKeyword("mut");
+    const maybeSelf = this.peek();
+    const afterSelf = this.peek(1);
+    if (
+      maybeSelf?.kind === "Identifier" &&
+      maybeSelf.lexeme === "self" &&
+      afterSelf?.kind === "Punctuator" &&
+      (afterSelf.lexeme === "," || afterSelf.lexeme === ")")
+    ) {
+      const token = this.advance();
       return {
-        node,
-        makesNamedOnly: true,
-        hasDefault: false,
-        seenVariadic: true,
-        seenKwVariadic: false,
-        seenSeparator: false,
+        kind: "SelfParameter",
+        span: this.spanFrom(mutToken?.span, token?.span),
+        isMutable: !!mutToken,
       };
     }
 
-    if (this.matchOperator("**")) {
-      if (this.checkPunctuator(",") || this.checkPunctuator(")")) {
-        if (
-          context.seenSeparator ||
-          context.seenVariadic ||
-          context.seenKwVariadic
-        )
-          this.report(
-            "Multiple '**' separators or kwargs are not allowed.",
-            this.previousSpan(),
-            "E1065",
-          );
-        const sep: ParameterSeparator = {
-          kind: "ParameterSeparator",
-          span: this.previousSpan(),
-          separator: "**",
-        };
-        return {
-          node: sep,
-          makesNamedOnly: true,
-          hasDefault: false,
-          seenVariadic: false,
-          seenKwVariadic: false,
-          seenSeparator: true,
-        };
-      }
-
-      if (context.seenKwVariadic)
-        this.report(
-          "Multiple '**kwargs' parameters are not allowed.",
-          this.previousSpan(),
-          "E1066",
-        );
-
-      const name =
-        this.parseIdentifier() ??
-        this.placeholderIdentifier(this.currentSpan());
-      this.expectPunctuator(":");
-      const type = this.parseType() ?? this.placeholderType(name.span);
-      const node: KwVariadicParameter = {
-        kind: "KwVariadicParameter",
-        span: this.spanFrom(name.span, type.span),
-        name,
-        type,
-      };
-      return {
-        node,
-        makesNamedOnly: true,
-        hasDefault: false,
-        seenVariadic: false,
-        seenKwVariadic: true,
-        seenSeparator: false,
-      };
-    }
-
-    let leadingMut = false;
-    if (this.checkKeyword("mut")) {
-      this.advance();
-      leadingMut = true;
-    }
-    const name = this.parseIdentifier();
-    if (!name) return null;
-
-    if (context.seenKwVariadic)
-      this.report(
-        "No parameters allowed after '**kwargs'.",
-        name.span,
-        "E1067",
-      );
-
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     this.expectPunctuator(":");
-    const trailingMut = this.matchKeyword("mut");
-    if (leadingMut && trailingMut)
-      this.report("Duplicate 'mut' on parameter.", name.span, "E1068");
-    const isMutable = leadingMut || trailingMut;
-    const type = this.parseType() ?? this.placeholderType(name.span);
-    let defaultValue: Expression | undefined;
-    let hasDefault = false;
-
-    if (this.matchOperator("=")) {
-      if (isMutable)
-        this.report(
-          "Default values are not allowed for mut parameters.",
-          name.span,
-          "E1061",
-        );
-      defaultValue =
-        this.parseExpression() ??
-        this.placeholderExpression(this.currentSpan());
-      hasDefault = true;
-    }
-
-    if (!hasDefault && context.seenDefault)
-      this.report(
-        "Required parameters cannot follow default parameters.",
-        name.span,
-        "E1062",
-      );
-
-    const node: Parameter = {
-      kind: "Parameter",
-      span: this.spanFrom(name.span, defaultValue?.span ?? type.span),
+    const type = this.parseType() ?? this.placeholderType(this.currentSpan());
+    return {
+      kind: "NamedParameter",
+      span: this.spanFrom(mutToken?.span ?? name.span, type.span),
       name,
       type,
-      isMutable: !!isMutable,
-      isNamedOnly: context.namedOnly,
-      defaultValue,
-    };
-    return {
-      node,
-      makesNamedOnly: false,
-      hasDefault,
-      seenVariadic: false,
-      seenKwVariadic: false,
-      seenSeparator: false,
+      isMutable: !!mutToken,
     };
   }
 
   private parseTypeParams(): TypeParameter[] | undefined {
     if (!this.matchOperator("<")) return undefined;
     const params: TypeParameter[] = [];
-
     if (!this.checkOperator(">")) {
       do {
-        const name = this.parseIdentifier();
-        if (name) {
-          let bounds: NamedType[] | undefined;
-          if (this.matchPunctuator(":")) {
-            bounds = [];
-            do {
-              const bound = this.parsePrimaryType();
-              if (bound?.kind === "NamedType") bounds.push(bound);
-              else
-                this.report(
-                  "Type parameter bounds must be named traits.",
-                  this.currentSpan(),
-                  "E1051",
-                );
-            } while (this.matchOperator("+"));
-          }
-          params.push({
-            kind: "TypeParameter",
-            span: this.spanFrom(name.span, bounds?.[bounds.length - 1]?.span),
-            name,
-            bounds,
-          });
+        const name =
+          this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+        let bounds: NamedType[] | undefined;
+        if (this.matchPunctuator(":")) {
+          const bound = this.parseNamedType();
+          bounds = bound ? [bound] : [];
         }
+        params.push({
+          kind: "TypeParameter",
+          span: this.spanFrom(name.span, bounds?.[bounds.length - 1]?.span),
+          name,
+          bounds,
+        });
       } while (this.matchPunctuator(","));
     }
-
     this.expectOperator(">");
     return params;
   }
 
-  private parseBindingPattern(): BindingPattern | null {
-    if (this.matchPunctuator("(")) {
-      const elements: Identifier[] = [];
-      if (!this.checkPunctuator(")")) {
-        do {
-          const id = this.parseIdentifier();
-          if (id) elements.push(id);
-        } while (this.matchPunctuator(","));
-      }
-      const end = this.expectPunctuator(")");
-      const span = this.spanFrom(
-        elements[0]?.span,
-        end?.span ?? this.currentSpan(),
-      );
-      const tuple: TupleBinding = { kind: "TupleBinding", span, elements };
-      return tuple;
-    }
-
-    const first = this.parseIdentifier();
-    if (!first) return null;
-    if (!this.checkPunctuator(",")) return first;
-
-    const elements: Identifier[] = [first];
-    while (this.matchPunctuator(",")) {
-      const id = this.parseIdentifier();
-      if (id) elements.push(id);
-      else break;
-    }
-    const span = this.spanFrom(
-      elements[0]?.span,
-      elements[elements.length - 1]?.span,
-    );
-    return { kind: "TupleBinding", span, elements };
+  private parseWhereClause(): WhereConstraint[] | undefined {
+    if (!this.matchKeyword("where")) return undefined;
+    const clauses: WhereConstraint[] = [];
+    do {
+      const typeName =
+        this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+      this.expectPunctuator(":");
+      const trait = this.parseNamedType() ?? this.placeholderNamedType(typeName.span);
+      clauses.push({
+        kind: "WhereConstraint",
+        span: this.spanFrom(typeName.span, trait.span),
+        typeName,
+        trait,
+      });
+    } while (this.matchPunctuator(","));
+    return clauses;
   }
 
   private parseType(): TypeNode | null {
-    return this.parseUnionType();
+    const primary = this.parsePrimaryType();
+    if (!primary) return null;
+    return this.parseTypePostfix(primary);
   }
 
-  private parseUnionType(): TypeNode | null {
-    const left = this.parsePrimaryType();
-    if (!left) return null;
-    const types: TypeNode[] = [left];
-
-    while (this.matchOperator("|")) {
-      const right = this.parsePrimaryType();
-      if (right) types.push(right);
+  private parseTypePostfix(type: TypeNode): TypeNode {
+    let current = type;
+    while (true) {
+      if (this.matchPunctuator("[")) {
+        const end = this.expectPunctuator("]");
+        current = {
+          kind: "ArrayType",
+          span: this.spanFrom(current.span, end?.span ?? current.span),
+          element: current,
+        };
+        continue;
+      }
+      if (this.matchPunctuator("?")) {
+        current = {
+          kind: "NullableType",
+          span: this.spanFrom(current.span, this.previousSpan()),
+          base: current,
+        };
+        continue;
+      }
+      break;
     }
-
-    if (types.length === 1) return left;
-    return {
-      kind: "UnionType",
-      span: this.spanFrom(types[0].span, types[types.length - 1].span),
-      types,
-    } satisfies UnionType;
+    return current;
   }
 
   private parsePrimaryType(): TypeNode | null {
-    if (this.matchKeyword("fn")) return this.parseFunctionType();
+    if (this.checkKeyword("fn")) return this.parseFunctionType();
 
     if (this.matchPunctuator("(")) {
       const elements: TypeNode[] = [];
+      let sawComma = false;
       if (!this.checkPunctuator(")")) {
-        do {
-          const type = this.parseType();
-          if (type) elements.push(type);
-        } while (this.matchPunctuator(","));
+        const first = this.parseType() ?? this.placeholderType(this.currentSpan());
+        elements.push(first);
+        while (this.matchPunctuator(",")) {
+          sawComma = true;
+          if (this.checkPunctuator(")")) break;
+          const next = this.parseType() ?? this.placeholderType(this.currentSpan());
+          elements.push(next);
+        }
       }
       const end = this.expectPunctuator(")");
-      if (elements.length === 1) return elements[0];
-      return {
-        kind: "TupleType",
-        span: this.spanFrom(elements[0]?.span, end?.span ?? elements[0]?.span),
-        elements,
-      } satisfies TupleType;
-    }
-
-    const token = this.advance();
-    if (!token) return null;
-
-    if (token.kind === "Identifier" || token.kind === "Keyword") {
-      const name = this.identifierFromToken(token);
-      let typeArgs: TypeNode[] | undefined;
-      if (this.matchOperator("<")) {
-        typeArgs = [];
-        if (!this.checkOperator(">")) {
-          do {
-            const type = this.parseType();
-            if (type) typeArgs.push(type);
-          } while (this.matchPunctuator(","));
-        }
-        this.expectOperator(">");
+      if (elements.length === 0 || sawComma) {
+        return {
+          kind: "TupleType",
+          span: this.spanFrom(this.previousSpan(), end?.span ?? this.currentSpan()),
+          elements,
+        };
       }
-      return {
-        kind: "NamedType",
-        span: this.spanFrom(
-          name.span,
-          typeArgs?.[typeArgs.length - 1]?.span ?? name.span,
-        ),
-        name,
-        typeArgs,
-      } satisfies NamedType;
+      return elements[0];
     }
 
-    this.report("Expected type.", token.span, "E1050");
-    return this.placeholderType(token.span);
+    if (this.matchKeyword("Self")) {
+      return {
+        kind: "SelfType",
+        span: this.previousSpan(),
+      };
+    }
+
+    return this.parseNamedType();
   }
 
-  private parseFunctionType(): TypeNode {
+  private parseNamedType(): NamedType | null {
+    const token = this.advance();
+    if (!token) return null;
+    if (token.kind !== "Identifier" && token.kind !== "Keyword") {
+      this.report("Expected type.", token.span, "E1050");
+      return this.placeholderNamedType(token.span);
+    }
+
+    const name = this.identifierFromToken(token);
+    let typeArgs: TypeNode[] | undefined;
+    if (this.matchOperator("<")) {
+      typeArgs = [];
+      if (!this.checkOperator(">")) {
+        do {
+          const type = this.parseType();
+          if (type) typeArgs.push(type);
+        } while (this.matchPunctuator(","));
+      }
+      this.expectOperator(">");
+    }
+    return {
+      kind: "NamedType",
+      span: this.spanFrom(name.span, typeArgs?.[typeArgs.length - 1]?.span ?? name.span),
+      name,
+      typeArgs,
+    };
+  }
+
+  private parseFunctionType(): FunctionType {
+    const start = this.expectKeyword("fn");
+    const typeParams = this.parseTypeParams();
     this.expectPunctuator("(");
-    const params: TypeNode[] = [];
+    const params: FunctionTypeParameter[] = [];
     if (!this.checkPunctuator(")")) {
       do {
-        const param = this.parseType();
-        if (param) params.push(param);
+        const mutToken = this.matchKeyword("mut");
+        const type = this.parseType() ?? this.placeholderType(this.currentSpan());
+        params.push({
+          kind: "FunctionTypeParameter",
+          span: this.spanFrom(mutToken?.span ?? type.span, type.span),
+          type,
+          isMutable: !!mutToken,
+        });
       } while (this.matchPunctuator(","));
     }
     this.expectPunctuator(")");
     this.expectOperator("->");
-    const returnType =
-      this.parseType() ?? this.placeholderType(this.currentSpan());
+    const returnType = this.parseType() ?? this.placeholderType(this.currentSpan());
+    const whereClause = this.parseWhereClause();
     return {
       kind: "FunctionType",
-      span: this.spanFrom(params[0]?.span ?? returnType.span, returnType.span),
+      span: this.spanFrom(start?.span, returnType.span),
+      typeParams,
       params,
       returnType,
-    } satisfies FunctionType;
+      whereClause,
+    };
+  }
+
+  private parseExpressionList(terminator: ")" | "]"): Expression[] {
+    const expressions: Expression[] = [];
+    if (!this.checkPunctuator(terminator)) {
+      do {
+        const expression = this.parseExpression();
+        if (expression) expressions.push(expression);
+      } while (this.matchPunctuator(","));
+    }
+    return expressions;
+  }
+
+  private parseCallTypeArgs(): TypeNode[] {
+    const typeArgs: TypeNode[] = [];
+    this.expectOperator("<");
+    if (!this.checkOperator(">")) {
+      do {
+        const type = this.parseType();
+        if (type) typeArgs.push(type);
+      } while (this.matchPunctuator(","));
+    }
+    this.expectOperator(">");
+    return typeArgs;
+  }
+
+  private literalFromToken(
+    token: Token,
+    forcedType?: LiteralType,
+  ): LiteralExpression {
+    let literalType: LiteralType = forcedType ?? "Integer";
+    let value =
+      token.kind === "String"
+        ? this.unescapeStringLiteral(token.lexeme)
+        : token.lexeme;
+
+    if (!forcedType && token.kind === "Number") {
+      if (
+        token.lexeme.includes(".") ||
+        token.lexeme.includes("e") ||
+        token.lexeme.includes("E")
+      ) {
+        literalType = "Float";
+      }
+    }
+
+    if (token.kind === "Keyword") {
+      if (token.lexeme === "true" || token.lexeme === "false")
+        literalType = "Boolean";
+      if (token.lexeme === "null") literalType = "Null";
+      if (token.lexeme === "NaN" || token.lexeme === "Infinity")
+        literalType = "Float";
+    }
+
+    if (token.kind === "String") literalType = "String";
+    if (token.kind === "Number") value = token.lexeme.replaceAll("_", "");
+
+    return {
+      kind: "LiteralExpression",
+      span: token.span,
+      literalType,
+      value,
+    };
+  }
+
+  private stringLiteralFromToken(token: Token): StringLiteralExpression {
+    const literal = this.literalFromToken(token, "String");
+    return {
+      ...literal,
+      literalType: "String",
+    };
+  }
+
+  private unescapeStringLiteral(lexeme: string): string {
+    if (lexeme.length < 2) return lexeme;
+    const inner = lexeme.slice(1, -1);
+    let out = "";
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i];
+      if (ch !== "\\") {
+        out += ch;
+        continue;
+      }
+      const next = inner[i + 1] ?? "";
+      if (next === "n") out += "\n";
+      else if (next === "r") out += "\r";
+      else if (next === "t") out += "\t";
+      else if (next === "0") out += "\0";
+      else if (next === '"') out += '"';
+      else if (next === "\\") out += "\\";
+      else if (next === "u" && inner[i + 2] === "{") {
+        let j = i + 3;
+        let hex = "";
+        while (j < inner.length && inner[j] !== "}") {
+          hex += inner[j];
+          j++;
+        }
+        if (j < inner.length && hex.length > 0) {
+          out += String.fromCodePoint(Number.parseInt(hex, 16));
+          i = j;
+          continue;
+        }
+      } else {
+        out += next;
+      }
+      i++;
+    }
+    return out;
   }
 
   private parseIdentifier(): Identifier | null {
@@ -1694,114 +1350,9 @@ export class Parser {
     };
   }
 
-  private literalFromToken(
-    token: Token,
-    forcedType?: LiteralType,
-  ): LiteralExpression {
-    let literalType: LiteralType = forcedType ?? "Integer";
-    let value: string =
-      token.kind === "String"
-        ? this.unescapeStringLiteral(token.lexeme)
-        : token.lexeme;
-
-    if (!forcedType && token.kind === "Number") {
-      if (
-        token.lexeme.includes(".") ||
-        token.lexeme.includes("e") ||
-        token.lexeme.includes("E")
-      ) {
-        literalType = "Float";
-      } else literalType = "Integer";
-    }
-
-    if (token.kind === "Keyword") {
-      if (token.lexeme === "true" || token.lexeme === "false")
-        literalType = "Boolean";
-      if (token.lexeme === "null") literalType = "Null";
-      if (token.lexeme === "NaN") literalType = "Float";
-      if (token.lexeme === "Infinity") literalType = "Float";
-    }
-
-    if (token.kind === "String") literalType = "String";
-    if (token.kind === "Number") value = token.lexeme.replace(/_/g, "");
-
-    return {
-      kind: "LiteralExpression",
-      span: token.span,
-      literalType,
-      value,
-    };
-  }
-
-  private unescapeStringLiteral(lexeme: string): string {
-    if (lexeme.length < 2) return lexeme;
-    const inner = lexeme.slice(1, -1);
-    let out = "";
-    for (let i = 0; i < inner.length; i++) {
-      const ch = inner[i];
-      if (ch !== "\\") {
-        out += ch;
-        continue;
-      }
-      const next = inner[i + 1] ?? "";
-      if (next === "n") out += "\n";
-      else if (next === "t") out += "\t";
-      else if (next === "r") out += "\r";
-      else if (next === "0") out += "\0";
-      else if (next === '"') out += '"';
-      else if (next === "\\") out += "\\";
-      else if (next === "u" && inner[i + 2] === "{") {
-        let j = i + 3;
-        let hex = "";
-        while (j < inner.length && inner[j] !== "}") {
-          hex += inner[j];
-          j++;
-        }
-        if (j < inner.length && inner[j] === "}" && hex.length > 0) {
-          const codePoint = Number.parseInt(hex, 16);
-          if (
-            !Number.isNaN(codePoint) &&
-            codePoint <= 0x10ffff &&
-            (codePoint < 0xd800 || codePoint > 0xdfff)
-          ) {
-            out += String.fromCodePoint(codePoint);
-            i = j;
-            continue;
-          } else out += "u";
-        } else out += "u";
-      } else out += next;
-      i++;
-    }
-    return out;
-  }
-
-  private stringLiteralFromToken(token: Token): StringLiteralExpression {
-    const literal = this.literalFromToken(token, "String");
-    return {
-      ...literal,
-      literalType: "String",
-      value: literal.value,
-    };
-  }
-
-  private binaryFrom(
-    operatorToken: Token | null,
-    left: Expression,
-    right: Expression,
-  ): BinaryExpression {
-    return {
-      kind: "BinaryExpression",
-      span: this.spanFrom(left.span, right.span),
-      operator: (operatorToken?.operator ?? operatorToken?.lexeme) as Operator,
-      left,
-      right,
-    };
-  }
-
   private expectSemicolon() {
-    if (!this.matchPunctuator(";")) {
+    if (!this.matchPunctuator(";"))
       this.report("Expected ';'.", this.currentSpan(), "E1020");
-    }
   }
 
   private expectKind(kind: Token["kind"]): Token {
@@ -1871,6 +1422,10 @@ export class Parser {
     return null;
   }
 
+  private checkKind(kind: Token["kind"]) {
+    return this.peek()?.kind === kind;
+  }
+
   private checkKeyword(keyword: string) {
     const token = this.peek();
     return token?.kind === "Keyword" && token.lexeme === keyword;
@@ -1913,7 +1468,7 @@ export class Parser {
     return this.peek()?.span ?? this.previousSpan();
   }
 
-  private isAtEnd(): boolean {
+  private isAtEnd() {
     return this.peek()?.kind === "EOF";
   }
 
@@ -1921,7 +1476,7 @@ export class Parser {
     this.diagnostics.push({ severity: "error", message, span, code });
   }
 
-  private spanFrom(start?: Span, end?: Span): Span {
+  private spanFrom(start?: Span | null, end?: Span | null): Span {
     if (!start && !end) return this.emptySpan();
     if (start && end) return { start: start.start, end: end.end };
     if (start) return { start: start.start, end: start.end };
@@ -1950,28 +1505,31 @@ export class Parser {
 
   private placeholderIdentifier(span?: Span): Identifier {
     const safeSpan = span ?? this.emptySpan();
-    return { kind: "Identifier", span: safeSpan, name: "<error>" };
+    return {
+      kind: "Identifier",
+      span: safeSpan,
+      name: "<error>",
+    };
   }
 
   private placeholderType(span?: Span): TypeNode {
+    return this.placeholderNamedType(span);
+  }
+
+  private placeholderNamedType(span?: Span): NamedType {
     const safeSpan = span ?? this.emptySpan();
     return {
       kind: "NamedType",
       span: safeSpan,
-      name: { kind: "Identifier", span: safeSpan, name: "<error>" },
-    } satisfies NamedType;
-  }
-
-  private placeholderNamedType(span?: Span): NamedType {
-    return {
-      kind: "NamedType",
-      span: span ?? this.emptySpan(),
-      name: this.placeholderIdentifier(span),
+      name: this.placeholderIdentifier(safeSpan),
     };
   }
 
   private placeholderPattern(span?: Span): Pattern {
-    return { kind: "WildcardPattern", span: span ?? this.emptySpan() };
+    return {
+      kind: "WildcardPattern",
+      span: span ?? this.emptySpan(),
+    };
   }
 
   private placeholderToken(): Token {
@@ -1982,49 +1540,26 @@ export class Parser {
     };
   }
 
-  private checkArgumentNamed(): boolean {
-    const current = this.peek();
-    const next = this.peek(1);
-    return (
-      current?.kind === "Identifier" &&
-      next?.kind === "Operator" &&
-      next.operator === "="
-    );
-  }
-
-  private checkIdentifierStart(): boolean {
-    return this.peek()?.kind === "Identifier";
-  }
-
-  private looksLikeStructLiteralTypeArgs(): boolean {
+  private looksLikeCallTypeArgs(): boolean {
     if (!this.checkOperator("<")) return false;
-    let i = this.current;
     let depth = 0;
-    while (i < this.tokens.length) {
-      const token = this.tokens[i];
+    let index = this.current;
+    while (index < this.tokens.length) {
+      const token = this.tokens[index];
       if (token.kind === "Operator" && token.operator === "<") {
         depth++;
-        i++;
-        continue;
-      }
-      if (token.kind === "Operator" && token.operator === ">") {
+      } else if (token.kind === "Operator" && token.operator === ">") {
         depth--;
-        if (depth === 0)
-          return this.tokens[i + 1]?.kind === "Punctuator"
-            ? this.tokens[i + 1].lexeme === "{"
-            : false;
-        i++;
-        continue;
+        if (depth === 0) {
+          return (
+            this.tokens[index + 1]?.kind === "Punctuator" &&
+            this.tokens[index + 1]?.lexeme === "("
+          );
+        }
+      } else if (token.kind === "EOF") {
+        return false;
       }
-      if (token.kind === "EOF" || token.kind === "Punctuator") {
-        if (
-          token.lexeme === ";" ||
-          token.lexeme === ")" ||
-          token.lexeme === "}"
-        )
-          return false;
-      }
-      i++;
+      index++;
     }
     return false;
   }

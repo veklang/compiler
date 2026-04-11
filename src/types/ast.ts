@@ -13,13 +13,11 @@ export interface Program extends Node {
 
 export type Statement =
   | ImportDeclaration
-  | ExportDefaultDeclaration
   | FunctionDeclaration
   | VariableDeclaration
   | TypeAliasDeclaration
   | StructDeclaration
   | TraitDeclaration
-  | ImplDeclaration
   | EnumDeclaration
   | ReturnStatement
   | IfStatement
@@ -28,17 +26,13 @@ export type Statement =
   | MatchStatement
   | BreakStatement
   | ContinueStatement
+  | AssignmentStatement
   | BlockStatement
   | ExpressionStatement;
 
 export interface Identifier extends Node {
   kind: "Identifier";
   name: string;
-}
-
-export interface StringLiteralExpression extends LiteralExpression {
-  literalType: "String";
-  value: string;
 }
 
 export interface BlockStatement extends Node {
@@ -48,60 +42,42 @@ export interface BlockStatement extends Node {
 
 export interface ImportDeclaration extends Node {
   kind: "ImportDeclaration";
-  defaultImport?: Identifier;
-  namedImports?: Identifier[];
   source: StringLiteralExpression;
-}
-
-export interface ExportDefaultDeclaration extends Node {
-  kind: "ExportDefaultDeclaration";
-  expression?: Expression;
-  symbols?: Identifier[];
-  exportAll?: boolean;
+  namespace?: Identifier;
+  namedImports?: Identifier[];
 }
 
 export interface FunctionDeclaration extends Node {
   kind: "FunctionDeclaration";
   name: Identifier;
   typeParams?: TypeParameter[];
-  params: ParameterNode[];
+  params: Parameter[];
   returnType?: TypeNode;
+  whereClause?: WhereConstraint[];
   body: BlockStatement;
   isInline: boolean;
   isPublic: boolean;
 }
 
-export interface Parameter extends Node {
-  kind: "Parameter";
+export interface MethodDeclaration extends Node {
+  kind: "MethodDeclaration";
   name: Identifier;
-  type: TypeNode;
-  isMutable: boolean;
-  isNamedOnly: boolean;
-  defaultValue?: Expression;
+  typeParams?: TypeParameter[];
+  params: Parameter[];
+  returnType?: TypeNode;
+  whereClause?: WhereConstraint[];
+  body: BlockStatement;
+  isInline: boolean;
 }
 
-export interface VariadicParameter extends Node {
-  kind: "VariadicParameter";
+export interface TraitMethodSignature extends Node {
+  kind: "TraitMethodSignature";
   name: Identifier;
-  type: TypeNode;
+  typeParams?: TypeParameter[];
+  params: Parameter[];
+  returnType?: TypeNode;
+  whereClause?: WhereConstraint[];
 }
-
-export interface KwVariadicParameter extends Node {
-  kind: "KwVariadicParameter";
-  name: Identifier;
-  type: TypeNode;
-}
-
-export interface ParameterSeparator extends Node {
-  kind: "ParameterSeparator";
-  separator: "*" | "**";
-}
-
-export type ParameterNode =
-  | Parameter
-  | VariadicParameter
-  | KwVariadicParameter
-  | ParameterSeparator;
 
 export interface VariableDeclaration extends Node {
   kind: "VariableDeclaration";
@@ -130,9 +106,14 @@ export interface StructDeclaration extends Node {
   kind: "StructDeclaration";
   name: Identifier;
   typeParams?: TypeParameter[];
-  fields: StructField[];
+  members: StructMember[];
   isPublic: boolean;
 }
+
+export type StructMember =
+  | StructField
+  | MethodDeclaration
+  | TraitSatisfiesDeclaration;
 
 export interface StructField extends Node {
   kind: "StructField";
@@ -144,9 +125,14 @@ export interface EnumDeclaration extends Node {
   kind: "EnumDeclaration";
   name: Identifier;
   typeParams?: TypeParameter[];
-  variants: EnumVariant[];
+  members: EnumMember[];
   isPublic: boolean;
 }
+
+export type EnumMember =
+  | EnumVariant
+  | MethodDeclaration
+  | TraitSatisfiesDeclaration;
 
 export interface EnumVariant extends Node {
   kind: "EnumVariant";
@@ -157,31 +143,41 @@ export interface EnumVariant extends Node {
 export interface TraitDeclaration extends Node {
   kind: "TraitDeclaration";
   name: Identifier;
+  typeParams?: TypeParameter[];
   methods: TraitMethodSignature[];
   isPublic: boolean;
 }
 
-export interface TraitMethodSignature extends Node {
-  kind: "TraitMethodSignature";
-  name: Identifier;
-  params: ParameterNode[];
-  returnType?: TypeNode;
+export interface TraitSatisfiesDeclaration extends Node {
+  kind: "TraitSatisfiesDeclaration";
+  trait: NamedType;
+  methods: MethodDeclaration[];
 }
 
-export interface ImplDeclaration extends Node {
-  kind: "ImplDeclaration";
-  target: NamedType;
-  trait?: NamedType;
-  methods: ImplMethod[];
-  isPublic: boolean;
+export interface TypeParameter extends Node {
+  kind: "TypeParameter";
+  name: Identifier;
+  bounds?: NamedType[];
 }
 
-export interface ImplMethod extends Node {
-  kind: "ImplMethod";
+export interface WhereConstraint extends Node {
+  kind: "WhereConstraint";
+  typeName: Identifier;
+  trait: NamedType;
+}
+
+export type Parameter = NamedParameter | SelfParameter;
+
+export interface NamedParameter extends Node {
+  kind: "NamedParameter";
   name: Identifier;
-  params: ParameterNode[];
-  returnType?: TypeNode;
-  body: BlockStatement;
+  type: TypeNode;
+  isMutable: boolean;
+}
+
+export interface SelfParameter extends Node {
+  kind: "SelfParameter";
+  isMutable: boolean;
 }
 
 export interface ReturnStatement extends Node {
@@ -212,13 +208,160 @@ export interface ForStatement extends Node {
 export interface MatchStatement extends Node {
   kind: "MatchStatement";
   expression: Expression;
-  arms: MatchArm[];
+  arms: MatchStatementArm[];
 }
 
-export interface MatchArm extends Node {
-  kind: "MatchArm";
+export interface MatchStatementArm extends Node {
+  kind: "MatchStatementArm";
   pattern: Pattern;
-  body: BlockStatement | Expression;
+  body: BlockStatement;
+}
+
+export interface AssignmentStatement extends Node {
+  kind: "AssignmentStatement";
+  target: AssignableExpression;
+  value: Expression;
+}
+
+export interface BreakStatement extends Node {
+  kind: "BreakStatement";
+}
+
+export interface ContinueStatement extends Node {
+  kind: "ContinueStatement";
+}
+
+export interface ExpressionStatement extends Node {
+  kind: "ExpressionStatement";
+  expression: Expression;
+}
+
+export type Expression =
+  | LiteralExpression
+  | IdentifierExpression
+  | BinaryExpression
+  | UnaryExpression
+  | CallExpression
+  | MemberExpression
+  | TupleMemberExpression
+  | IndexExpression
+  | ArrayLiteralExpression
+  | TupleLiteralExpression
+  | StructLiteralExpression
+  | GroupingExpression
+  | FunctionExpression
+  | CastExpression
+  | MatchExpression;
+
+export type AssignableExpression =
+  | IdentifierExpression
+  | MemberExpression
+  | TupleMemberExpression
+  | IndexExpression;
+
+export interface LiteralExpression extends Node {
+  kind: "LiteralExpression";
+  literalType: LiteralType;
+  value: string;
+}
+
+export interface StringLiteralExpression extends LiteralExpression {
+  literalType: "String";
+}
+
+export interface IdentifierExpression extends Node {
+  kind: "IdentifierExpression";
+  name: string;
+}
+
+export interface BinaryExpression extends Node {
+  kind: "BinaryExpression";
+  operator: Operator;
+  left: Expression;
+  right: Expression;
+}
+
+export interface UnaryExpression extends Node {
+  kind: "UnaryExpression";
+  operator: Operator;
+  argument: Expression;
+}
+
+export interface CallExpression extends Node {
+  kind: "CallExpression";
+  callee: Expression;
+  typeArgs?: TypeNode[];
+  args: Expression[];
+}
+
+export interface MemberExpression extends Node {
+  kind: "MemberExpression";
+  object: Expression;
+  property: Identifier;
+}
+
+export interface TupleMemberExpression extends Node {
+  kind: "TupleMemberExpression";
+  object: Expression;
+  index: number;
+}
+
+export interface IndexExpression extends Node {
+  kind: "IndexExpression";
+  object: Expression;
+  index: Expression;
+}
+
+export interface ArrayLiteralExpression extends Node {
+  kind: "ArrayLiteralExpression";
+  elements: Expression[];
+}
+
+export interface TupleLiteralExpression extends Node {
+  kind: "TupleLiteralExpression";
+  elements: Expression[];
+}
+
+export interface StructLiteralExpression extends Node {
+  kind: "StructLiteralExpression";
+  name: IdentifierExpression;
+  fields: StructLiteralField[];
+}
+
+export interface StructLiteralField extends Node {
+  kind: "StructLiteralField";
+  name: Identifier;
+  value: Expression;
+}
+
+export interface GroupingExpression extends Node {
+  kind: "GroupingExpression";
+  expression: Expression;
+}
+
+export interface FunctionExpression extends Node {
+  kind: "FunctionExpression";
+  params: Parameter[];
+  returnType?: TypeNode;
+  body: BlockStatement;
+}
+
+export interface CastExpression extends Node {
+  kind: "CastExpression";
+  expression: Expression;
+  type: TypeNode;
+}
+
+export interface MatchExpression extends Node {
+  kind: "MatchExpression";
+  expression: Expression;
+  arms: MatchExpressionArm[];
+}
+
+export interface MatchExpressionArm extends Node {
+  kind: "MatchExpressionArm";
+  pattern: Pattern;
+  expression: Expression;
 }
 
 export type Pattern =
@@ -226,8 +369,7 @@ export type Pattern =
   | LiteralPattern
   | WildcardPattern
   | EnumPattern
-  | TuplePattern
-  | StructPattern;
+  | TuplePattern;
 
 export interface IdentifierPattern extends Node {
   kind: "IdentifierPattern";
@@ -254,175 +396,13 @@ export interface TuplePattern extends Node {
   elements: Pattern[];
 }
 
-export interface StructPattern extends Node {
-  kind: "StructPattern";
-  name: Identifier;
-  fields: StructPatternField[];
-}
-
-export interface StructPatternField extends Node {
-  kind: "StructPatternField";
-  name: Identifier;
-  pattern: Pattern;
-}
-
-export interface BreakStatement extends Node {
-  kind: "BreakStatement";
-}
-
-export interface ContinueStatement extends Node {
-  kind: "ContinueStatement";
-}
-
-export interface ExpressionStatement extends Node {
-  kind: "ExpressionStatement";
-  expression: Expression;
-}
-
-export type Expression =
-  | LiteralExpression
-  | IdentifierExpression
-  | BinaryExpression
-  | UnaryExpression
-  | AssignmentExpression
-  | CallExpression
-  | MemberExpression
-  | ArrayLiteralExpression
-  | TupleLiteralExpression
-  | MapLiteralExpression
-  | StructLiteralExpression
-  | GroupingExpression
-  | FunctionExpression
-  | CastExpression;
-
-export interface LiteralExpression extends Node {
-  kind: "LiteralExpression";
-  literalType: LiteralType;
-  value: string;
-}
-
-export interface IdentifierExpression extends Node {
-  kind: "IdentifierExpression";
-  name: string;
-}
-
-export interface BinaryExpression extends Node {
-  kind: "BinaryExpression";
-  operator: Operator;
-  left: Expression;
-  right: Expression;
-}
-
-export interface AssignmentExpression extends Node {
-  kind: "AssignmentExpression";
-  left: Expression;
-  right: Expression;
-}
-
-export interface UnaryExpression extends Node {
-  kind: "UnaryExpression";
-  operator: Operator;
-  argument: Expression;
-}
-
-export interface CallExpression extends Node {
-  kind: "CallExpression";
-  callee: Expression;
-  args: Argument[];
-}
-
-export type Argument =
-  | PositionalArgument
-  | NamedArgument
-  | SpreadArgument
-  | KwSpreadArgument;
-
-export interface PositionalArgument extends Node {
-  kind: "PositionalArgument";
-  value: Expression;
-}
-
-export interface NamedArgument extends Node {
-  kind: "NamedArgument";
-  name: Identifier;
-  value: Expression;
-}
-
-export interface SpreadArgument extends Node {
-  kind: "SpreadArgument";
-  value: Expression;
-}
-
-export interface KwSpreadArgument extends Node {
-  kind: "KwSpreadArgument";
-  value: Expression;
-}
-
-export interface MemberExpression extends Node {
-  kind: "MemberExpression";
-  object: Expression;
-  property: Identifier;
-}
-
-export interface ArrayLiteralExpression extends Node {
-  kind: "ArrayLiteralExpression";
-  elements: Expression[];
-}
-
-export interface TupleLiteralExpression extends Node {
-  kind: "TupleLiteralExpression";
-  elements: Expression[];
-}
-
-export interface MapLiteralExpression extends Node {
-  kind: "MapLiteralExpression";
-  entries: MapEntry[];
-}
-
-export interface MapEntry extends Node {
-  kind: "MapEntry";
-  key: Expression;
-  value: Expression;
-}
-
-export interface StructLiteralExpression extends Node {
-  kind: "StructLiteralExpression";
-  name: IdentifierExpression;
-  typeArgs?: TypeNode[];
-  fields: StructLiteralField[];
-}
-
-export interface StructLiteralField extends Node {
-  kind: "StructLiteralField";
-  name: Identifier;
-  value: Expression;
-}
-
-export interface GroupingExpression extends Node {
-  kind: "GroupingExpression";
-  expression: Expression;
-}
-
-export interface FunctionExpression extends Node {
-  kind: "FunctionExpression";
-  params: ParameterNode[];
-  returnType?: TypeNode;
-  body: BlockStatement;
-}
-
-export interface CastExpression extends Node {
-  kind: "CastExpression";
-  expression: Expression;
-  type: TypeNode;
-}
-
-export type TypeNode = NamedType | UnionType | TupleType | FunctionType;
-
-export interface TypeParameter extends Node {
-  kind: "TypeParameter";
-  name: Identifier;
-  bounds?: NamedType[];
-}
+export type TypeNode =
+  | NamedType
+  | SelfType
+  | NullableType
+  | ArrayType
+  | TupleType
+  | FunctionType;
 
 export interface NamedType extends Node {
   kind: "NamedType";
@@ -430,9 +410,18 @@ export interface NamedType extends Node {
   typeArgs?: TypeNode[];
 }
 
-export interface UnionType extends Node {
-  kind: "UnionType";
-  types: TypeNode[];
+export interface SelfType extends Node {
+  kind: "SelfType";
+}
+
+export interface NullableType extends Node {
+  kind: "NullableType";
+  base: TypeNode;
+}
+
+export interface ArrayType extends Node {
+  kind: "ArrayType";
+  element: TypeNode;
 }
 
 export interface TupleType extends Node {
@@ -442,6 +431,14 @@ export interface TupleType extends Node {
 
 export interface FunctionType extends Node {
   kind: "FunctionType";
-  params: TypeNode[];
+  typeParams?: TypeParameter[];
+  params: FunctionTypeParameter[];
   returnType: TypeNode;
+  whereClause?: WhereConstraint[];
+}
+
+export interface FunctionTypeParameter extends Node {
+  kind: "FunctionTypeParameter";
+  type: TypeNode;
+  isMutable: boolean;
 }
