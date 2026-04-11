@@ -1037,10 +1037,10 @@ export class Checker {
         type = this.checkIdentifier(node, scope);
         break;
       case "BinaryExpression":
-        type = this.checkBinary(node, scope);
+        type = this.checkBinary(node, scope, expected);
         break;
       case "UnaryExpression":
-        type = this.checkUnary(node, scope);
+        type = this.checkUnary(node, scope, expected);
         break;
       case "CallExpression":
         type = this.checkCall(node, scope, expected);
@@ -1127,6 +1127,10 @@ export class Checker {
     return [min, max];
   }
 
+  private intBitWidth(name: PrimitiveName): bigint {
+    return BigInt(Number(name.slice(1)));
+  }
+
   private checkIdentifier(node: IdentifierExpression, scope: Scope): Type {
     const override = this.lookupOverride(node.name, scope);
     if (override) return override;
@@ -1153,11 +1157,10 @@ export class Checker {
     return symbol.type;
   }
 
-  private checkBinary(node: BinaryExpression, scope: Scope): Type {
-    const left = this.checkExpression(node.left, scope);
-    const right = this.checkExpression(node.right, scope);
-
+  private checkBinary(node: BinaryExpression, scope: Scope, expected?: Type): Type {
     if (node.operator === "&&" || node.operator === "||") {
+      const left = this.checkExpression(node.left, scope);
+      const right = this.checkExpression(node.right, scope);
       if (!this.isBooleanType(left) || !this.isBooleanType(right)) {
         this.report("Logical operators require bool operands.", node.span, "E2101");
       }
@@ -1165,6 +1168,8 @@ export class Checker {
     }
 
     if (node.operator === "==" || node.operator === "!=") {
+      const left = this.checkExpression(node.left, scope);
+      const right = this.checkExpression(node.right, scope);
       if (!this.canCompareForEquality(left, right, scope)) {
         this.report("Incompatible operands for equality.", node.span, "E2101");
       }
@@ -1172,11 +1177,17 @@ export class Checker {
     }
 
     if (["<", "<=", ">", ">="].includes(node.operator)) {
+      const left = this.checkExpression(node.left, scope);
+      const right = this.checkExpression(node.right, scope);
       if (!this.isNumericType(left) || !this.isNumericType(right) || !this.typeEquals(left, right)) {
         this.report("Comparison requires matching numeric types.", node.span, "E2101");
       }
       return this.primitive("bool");
     }
+
+    const numericExpected = expected?.kind === "Nullable" ? expected.base : expected;
+    const left = this.checkExpression(node.left, scope, numericExpected);
+    const right = this.checkExpression(node.right, scope, numericExpected);
 
     if (node.operator === "+") {
       if (this.isStringType(left) || this.isStringType(right)) {
@@ -1187,13 +1198,41 @@ export class Checker {
       }
     }
 
-    if (["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"].includes(node.operator)) {
+    if (["&", "|", "^"].includes(node.operator)) {
+      if (!this.isIntegerType(left) || !this.isIntegerType(right)) {
+        this.report("Bitwise operators require integer operands.", node.span, "E2101");
+        return this.errorType();
+      }
+      if (!this.typeEquals(left, right)) {
+        this.report("Bitwise operators require matching integer types.", node.span, "E2101");
+      } else {
+        this.validateIntegerBinary(node, left);
+      }
+      return left;
+    }
+
+    if (["<<", ">>"].includes(node.operator)) {
+      if (!this.isIntegerType(left) || !this.isIntegerType(right)) {
+        this.report("Shift operators require integer operands.", node.span, "E2101");
+        return this.errorType();
+      }
+      if (!this.typeEquals(left, right)) {
+        this.report("Shift operators require matching integer types.", node.span, "E2101");
+      } else {
+        this.validateIntegerBinary(node, left);
+      }
+      return left;
+    }
+
+    if (["+", "-", "*", "/", "%"].includes(node.operator)) {
       if (!this.isNumericType(left) || !this.isNumericType(right)) {
         this.report("Arithmetic requires numeric operands.", node.span, "E2101");
         return this.errorType();
       }
       if (!this.typeEquals(left, right)) {
         this.report("Arithmetic requires matching numeric types.", node.span, "E2101");
+      } else if (this.isIntegerType(left)) {
+        this.validateIntegerBinary(node, left);
       }
       return left;
     }
@@ -1201,8 +1240,15 @@ export class Checker {
     return this.errorType();
   }
 
-  private checkUnary(node: any, scope: Scope): Type {
-    const argument = this.checkExpression(node.argument, scope);
+  private checkUnary(node: any, scope: Scope, expected?: Type): Type {
+    const numericExpected = expected?.kind === "Nullable" ? expected.base : expected;
+    const argument =
+      node.operator === "-" &&
+      numericExpected &&
+      this.isSignedIntegerType(numericExpected) &&
+      this.evaluateIntegerConstant(node.argument) !== null
+        ? numericExpected
+        : this.checkExpression(node.argument, scope, numericExpected);
     if (node.operator === "!") {
       if (!this.isBooleanType(argument)) {
         this.report("Unary '!' requires a bool operand.", node.span, "E2101");
@@ -1211,8 +1257,60 @@ export class Checker {
     }
     if (!this.isNumericType(argument)) {
       this.report("Unary '-' requires a numeric operand.", node.span, "E2101");
+    } else if (this.isIntegerType(argument)) {
+      this.validateIntegerUnary(node, argument);
     }
     return argument;
+  }
+
+  private validateIntegerUnary(node: any, target: PrimitiveType) {
+    const value = this.evaluateIntegerConstant(node);
+    if (value === null) return;
+    const [min, max] = this.intRange(target.name);
+    if (value < min || value > max) {
+      this.report("Compile-time integer overflow.", node.span, "E2402");
+    }
+  }
+
+  private validateIntegerBinary(node: BinaryExpression, target: PrimitiveType) {
+    const left = this.evaluateIntegerConstant(node.left);
+    const right = this.evaluateIntegerConstant(node.right);
+    if (left === null || right === null) return;
+
+    if ((node.operator === "<<" || node.operator === ">>") && (right < 0 || right >= this.intBitWidth(target.name))) {
+      this.report("Compile-time invalid shift.", node.span, "E2403");
+      return;
+    }
+
+    let result: bigint | null = null;
+    if (node.operator === "+") result = left + right;
+    if (node.operator === "-") result = left - right;
+    if (node.operator === "*") result = left * right;
+    if (node.operator === "<<") result = left << right;
+    if (result === null) return;
+
+    const [min, max] = this.intRange(target.name);
+    if (result < min || result > max) {
+      this.report("Compile-time integer overflow.", node.span, "E2402");
+    }
+  }
+
+  private evaluateIntegerConstant(node: Expression): bigint | null {
+    if (node.kind === "LiteralExpression" && node.literalType === "Integer") {
+      try {
+        return BigInt(node.value);
+      } catch {
+        return null;
+      }
+    }
+    if (node.kind === "UnaryExpression" && node.operator === "-") {
+      const value = this.evaluateIntegerConstant(node.argument);
+      return value === null ? null : -value;
+    }
+    if (node.kind === "GroupingExpression") {
+      return this.evaluateIntegerConstant(node.expression);
+    }
+    return null;
   }
 
   private checkCall(node: CallExpression, scope: Scope, expected?: Type): Type {
@@ -2541,6 +2639,13 @@ export class Checker {
     return (
       type.kind === "Primitive" &&
       ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(type.name)
+    );
+  }
+
+  private isSignedIntegerType(type: Type): type is PrimitiveType {
+    return (
+      type.kind === "Primitive" &&
+      ["i8", "i16", "i32", "i64"].includes(type.name)
     );
   }
 

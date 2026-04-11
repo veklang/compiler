@@ -115,6 +115,42 @@ fn main() -> void {
 `);
   });
 
+  test("integer literals in expressions use the expected integer type", () => {
+    checkOk(`
+fn main() -> void {
+  let x: i8 = -128;
+  let y: i8 = 1 + 2;
+}
+`);
+  });
+
+  test("bitwise operators require integers", () => {
+    const result = check(`
+fn main() -> void {
+  let x = 1.0 & 2.0;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
+  test("compile-time invalid shifts are rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let x: i8 = 1 << 8;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2403"]);
+  });
+
+  test("compile-time integer overflow is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let x: i8 = 127 + 1;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2402"]);
+  });
+
   test("invalid index target is rejected", () => {
     const result = check(`
 fn main() -> void {
