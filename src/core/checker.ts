@@ -2493,6 +2493,7 @@ export class Checker {
   }
 
   private extractEnumType(type: Type): NamedRefType | null {
+    if (type.kind === "Nullable") return this.extractEnumType(type.base);
     return type.kind === "Named" && type.symbol?.kind === "Enum" ? type : null;
   }
 

@@ -166,6 +166,26 @@ fn main() -> void {
     );
   });
 
+  test("nullable enum matches accept enum and null patterns", () => {
+    checkOk(`
+fn main() -> void {
+  let value: Result<i32, string>? = Ok<i32, string>(1);
+
+  match value {
+    Ok(v) => {
+      let x: i32 = v;
+    },
+    Err(e) => {
+      let y: string = e;
+    },
+    null => {
+      return;
+    },
+  }
+}
+`);
+  });
+
   test("statement match warns on missing bool literals", () => {
     const result = check(`
 fn main() -> void {
