@@ -45,10 +45,47 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2501"]);
   });
 
+  test("const nested mutation is rejected", () => {
+    const result = check(`
+struct User {
+  id: i32;
+}
+
+fn main() -> void {
+  const user = User { id: 1 };
+  user.id = 2;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2501"]);
+  });
+
+  test("const array element assignment is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  const xs: i32[] = [1, 2, 3];
+  xs[0] = 9;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2501"]);
+  });
+
   test("readonly parameter assignment is rejected", () => {
     const result = check(`
 fn bump(x: i32) -> void {
   x = 2;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2503"]);
+  });
+
+  test("readonly parameter nested mutation is rejected", () => {
+    const result = check(`
+struct User {
+  id: i32;
+}
+
+fn bump(user: User) -> void {
+  user.id = 2;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2503"]);
