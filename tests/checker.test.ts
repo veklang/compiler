@@ -129,6 +129,40 @@ fn main() -> void {
     );
   });
 
+  test("statement match warns on missing bool literals", () => {
+    const result = check(`
+fn main() -> void {
+  let value: bool = true;
+  match value {
+    true => {
+      return;
+    },
+  }
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((diagnostic) => diagnostic.code === "W2601"),
+      true,
+    );
+  });
+
+  test("statement match warns on missing null arm for nullable values", () => {
+    const result = check(`
+fn main() -> void {
+  let value: i32? = 1;
+  match value {
+    1 => {
+      return;
+    },
+  }
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((diagnostic) => diagnostic.code === "W2601"),
+      true,
+    );
+  });
+
   test("generic function inference works", () => {
     checkOk(`
 fn id<T>(value: T) -> T {

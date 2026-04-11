@@ -1783,6 +1783,7 @@ export class Checker {
       kind: this.coverageKind(matchedType),
       seen: new Set(),
       enumType: this.extractEnumType(matchedType),
+      nullableBase: matchedType.kind === "Nullable" ? matchedType.base : null,
     };
   }
 
@@ -1805,6 +1806,20 @@ export class Checker {
     if (tracker.kind === "bool") {
       return ["true", "false"].filter((name) => !tracker.seen.has(name));
     }
+    if (tracker.kind === "nullable") {
+      return [
+        ...this.finiteCoverageLabels(tracker.nullableBase),
+        "null",
+      ].filter((name) => !tracker.seen.has(name));
+    }
+    return [];
+  }
+
+  private finiteCoverageLabels(type: Type | null): string[] {
+    if (!type) return [];
+    if (this.isBooleanType(type)) return ["true", "false"];
+    const enumType = this.extractEnumType(type);
+    if (enumType?.symbol?.variants) return Array.from(enumType.symbol.variants.keys());
     return [];
   }
 
@@ -2782,4 +2797,5 @@ interface CoverageTracker {
   kind: "enum" | "bool" | "nullable" | "other";
   seen: Set<string>;
   enumType: NamedRefType | null;
+  nullableBase: Type | null;
 }
