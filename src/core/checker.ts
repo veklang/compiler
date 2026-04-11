@@ -1655,8 +1655,13 @@ export class Checker {
       this.bindPattern(arm.pattern, matchedType, armScope, scope);
       const armType = this.checkExpression(arm.expression, armScope, expected);
       if (!resultType) resultType = armType;
-      else if (!this.typeEquals(resultType, armType)) {
-        this.report("Match expression arms must have a single type.", arm.span, "E2101");
+      else {
+        const merged = this.mergeBranchTypes(resultType, armType);
+        if (!merged) {
+          this.report("Match expression arms must have a single type.", arm.span, "E2101");
+        } else {
+          resultType = merged;
+        }
       }
     }
 
@@ -1665,6 +1670,15 @@ export class Checker {
     }
 
     return resultType ?? this.primitive("void");
+  }
+
+  private mergeBranchTypes(left: Type, right: Type): Type | null {
+    if (this.typeEquals(left, right)) return left;
+    if (this.isAssignable(left, right)) return right;
+    if (this.isAssignable(right, left)) return left;
+    if (this.typeEquals(left, this.primitive("null"))) return { kind: "Nullable", base: right };
+    if (this.typeEquals(right, this.primitive("null"))) return { kind: "Nullable", base: left };
+    return null;
   }
 
   private bindPattern(
@@ -1972,11 +1986,15 @@ export class Checker {
     scope: Scope,
   ): TypeParamSpec[] {
     const resolved = new Map<string, TypeParamSpec>();
+    const typeScope = this.createScope(scope, scope.selfType);
+    typeScope.typeParams = new Map(scope.typeParams);
     for (const param of typeParams ?? []) {
       const bounds = (param.bounds ?? []).map((bound) =>
-        this.resolveNamedType(bound, scope),
+        this.resolveNamedType(bound, typeScope),
       );
-      resolved.set(param.name.name, { name: param.name.name, bounds });
+      const spec = { name: param.name.name, bounds };
+      resolved.set(param.name.name, spec);
+      typeScope.typeParams.set(param.name.name, spec);
     }
     for (const clause of whereClause ?? []) {
       const target =
@@ -1989,9 +2007,10 @@ export class Checker {
           );
           const spec = { name: clause.typeName.name, bounds: [] as NamedRefType[] };
           resolved.set(clause.typeName.name, spec);
+          typeScope.typeParams.set(clause.typeName.name, spec);
           return spec;
         })();
-      target.bounds.push(this.resolveNamedType(clause.trait, scope));
+      target.bounds.push(this.resolveNamedType(clause.trait, typeScope));
     }
     return Array.from(resolved.values());
   }

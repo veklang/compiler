@@ -206,6 +206,51 @@ fn main() -> void {
 `);
   });
 
+  test("custom Equal<T> satisfactions drive ==", () => {
+    checkOk(`
+struct UserId {
+  value: i32;
+
+  fn new(value: i32) -> Self {
+    return Self { value };
+  }
+
+  satisfies Equal<UserId> {
+    fn equals(self, other: UserId) -> bool {
+      return self.value == other.value;
+    }
+  }
+}
+
+fn same<T>(left: T, right: T) -> bool
+where T: Equal<T>
+{
+  return left == right;
+}
+
+fn main() -> void {
+  let a = UserId.new(1);
+  let b = UserId.new(1);
+  let ok: bool = same(a, b);
+}
+`);
+  });
+
+  test("structs without Equal<T> cannot use ==", () => {
+    const result = check(`
+struct UserId {
+  value: i32;
+}
+
+fn main() -> void {
+  let left = UserId { value: 1 };
+  let right = UserId { value: 1 };
+  let same = left == right;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
   test("trait method mismatch is diagnosed", () => {
     const result = check(`
 trait Printable {
@@ -223,6 +268,31 @@ struct User {
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2815"]);
+  });
+
+  test("enum methods may use Self and enum payloads", () => {
+    checkOk(`
+enum State {
+  Idle;
+  Busy(i32);
+
+  fn busy(value: i32) -> Self {
+    return Busy(value);
+  }
+
+  fn value(self) -> i32? {
+    return match self {
+      Busy(value) => value,
+      _ => null,
+    };
+  }
+}
+
+fn main() -> void {
+  let state = State.busy(1);
+  let value: i32? = state.value();
+}
+`);
   });
 
   test("type-qualified method references work", () => {

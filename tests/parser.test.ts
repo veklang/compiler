@@ -89,6 +89,27 @@ struct User {
     ]);
   });
 
+  test("enum members may include methods using Self", () => {
+    const program = parseOk(`
+enum State {
+  Idle;
+  Busy(i32);
+
+  fn busy(value: i32) -> Self {
+    return Busy(value);
+  }
+
+  fn value(self) -> i32? {
+    return match self {
+      Busy(value) => value,
+      _ => null,
+    };
+  }
+}
+`);
+    assert.deepEqual(getProgramBodyKinds(program), ["EnumDeclaration"]);
+  });
+
   test("function types, array types, nullable types, and where clauses", () => {
     const program = parseOk(`
 trait Hashable {
