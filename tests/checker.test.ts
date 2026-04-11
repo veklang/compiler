@@ -196,6 +196,26 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2104"]);
   });
 
+  test("member access on invalid receivers is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let x: i32 = 1;
+  let y = x.name;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2104"]);
+  });
+
+  test("bad arguments are still checked when the callee is not callable", () => {
+    const result = check(`
+fn main() -> void {
+  let x: i32 = 1;
+  x(1 + true);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2207", "E2101"]);
+  });
+
   test("struct literals require complete known fields", () => {
     const result = check(`
 struct User {
