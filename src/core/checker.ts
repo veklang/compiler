@@ -1270,7 +1270,12 @@ export class Checker {
         const argType = this.checkExpression(node.args[i], scope, callable.params[i].type);
         this.inferBindingsFromTypes(callable.params[i].type, argType, bindings);
       }
-      if (expected) this.inferBindingsFromTypes(callable.returnType, expected, bindings);
+      if (expected) {
+        this.inferBindingsFromTypes(callable.returnType, expected, bindings);
+        if (expected.kind === "Nullable") {
+          this.inferBindingsFromTypes(callable.returnType, expected.base, bindings);
+        }
+      }
     }
 
     for (const typeParam of callable.typeParams) {
