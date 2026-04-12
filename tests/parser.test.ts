@@ -48,7 +48,7 @@ fn main() -> void {
   test("imports", () => {
     const program = parseOk(`
 import "std:io" as io;
-import Map from "std:collections";
+import Map, Set from "std:collections";
 import add, sub from "./math";
 `);
     assert.deepEqual(getProgramBodyKinds(program), [

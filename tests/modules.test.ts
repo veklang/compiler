@@ -26,16 +26,15 @@ const codes = (entry: string) =>
   checkModuleGraph(entry).diagnostics.map((d) => d.code ?? "");
 
 describe("modules", () => {
-  test("resolves relative imports with extensionless path", () => {
+  test("resolves namespace imports with extensionless relative paths", () => {
     withProject(
       {
         "main.vek": `
-import math from "./math";
-fn main(): void { return; }
+import "./math" as math;
+fn main() -> void { return; }
 `,
         "math/index.vek": `
-pub fn add(a: i32, b: i32): i32 { return a + b; }
-pub default add;
+pub fn add(a: i32, b: i32) -> i32 { return a + b; }
 `,
       },
       (entry) => {
@@ -48,8 +47,8 @@ pub default add;
     withProject(
       {
         "main.vek": `
-import x from "foo:bar";
-fn main(): void { return; }
+import "foo:bar" as x;
+fn main() -> void { return; }
 `,
       },
       (entry) => {
@@ -62,8 +61,8 @@ fn main(): void { return; }
     withProject(
       {
         "main.vek": `
-import x from "./missing";
-fn main(): void { return; }
+import "./missing" as x;
+fn main() -> void { return; }
 `,
       },
       (entry) => {
@@ -76,8 +75,8 @@ fn main(): void { return; }
     withProject(
       {
         "main.vek": `
-import { hidden, shown } from "./lib";
-fn main(): void { return; }
+import hidden, shown from "./lib";
+fn main() -> void { return; }
 `,
         "lib.vek": `
 const hidden: i32 = 1;
@@ -90,52 +89,16 @@ pub const shown: i32 = 2;
     );
   });
 
-  test("default import requires default export", () => {
+  test("named imports require exported symbols only", () => {
     withProject(
       {
         "main.vek": `
-import lib from "./lib";
-fn main(): void { return; }
+import add, pi from "./lib";
+fn main() -> void { return; }
 `,
         "lib.vek": `
-pub fn add(a: i32, b: i32): i32 { return a + b; }
-`,
-      },
-      (entry) => {
-        assert.deepEqual(codes(entry), ["E2704"]);
-      },
-    );
-  });
-
-  test("default export list symbols must be public", () => {
-    withProject(
-      {
-        "main.vek": `
-import lib from "./lib";
-fn main(): void { return; }
-`,
-        "lib.vek": `
-fn hidden(): i32 { return 1; }
-pub default hidden;
-`,
-      },
-      (entry) => {
-        assert.deepEqual(codes(entry), ["E2705"]);
-      },
-    );
-  });
-
-  test("default export star is accepted and exports pub symbols snapshot", () => {
-    withProject(
-      {
-        "main.vek": `
-import lib from "./lib";
-fn main(): void { return; }
-`,
-        "lib.vek": `
-pub fn add(a: i32, b: i32): i32 { return a + b; }
-const hidden: i32 = 1;
-pub default *;
+pub fn add(a: i32, b: i32) -> i32 { return a + b; }
+pub const pi: i32 = 3;
 `,
       },
       (entry) => {
@@ -148,11 +111,11 @@ pub default *;
     withProject(
       {
         "main.vek": `
-import lib from "./lib";
-fn main(): void { return; }
+import shown from "./lib";
+fn main() -> void { return; }
 `,
         "lib.vek": `
-pub default 1;
+pub const shown: i32 = 1;
 `,
       },
       (entry) => {
@@ -165,11 +128,11 @@ pub default 1;
     withProject(
       {
         "main.vek": `
-import lib from "./lib";
-fn main(): void { return; }
+import "./lib" as lib;
+fn main() -> void { return; }
 `,
         "lib/index": `
-pub default 1;
+pub const shown: i32 = 1;
 `,
       },
       (entry) => {
@@ -182,41 +145,20 @@ pub default 1;
     withProject(
       {
         "main.vek": `
-import a from "./a";
-fn main(): void { return; }
+import "./a" as a;
+fn main() -> void { return; }
 `,
         "a.vek": `
-import b from "./b";
-pub fn a_fn(): i32 { return 1; }
-pub default a_fn;
+import "./b" as b;
+pub fn a_fn() -> i32 { return 1; }
 `,
         "b.vek": `
-import a from "./a";
-pub fn b_fn(): i32 { return 2; }
-pub default b_fn;
+import "./a" as a;
+pub fn b_fn() -> i32 { return 2; }
 `,
       },
       (entry) => {
         assert.deepEqual(codes(entry), []);
-      },
-    );
-  });
-
-  test("default export list with mixed visibility fails on private symbols", () => {
-    withProject(
-      {
-        "main.vek": `
-import lib from "./lib";
-fn main(): void { return; }
-`,
-        "lib.vek": `
-pub fn shown(): i32 { return 1; }
-fn hidden(): i32 { return 2; }
-pub default shown, hidden;
-`,
-      },
-      (entry) => {
-        assert.deepEqual(codes(entry), ["E2705"]);
       },
     );
   });
