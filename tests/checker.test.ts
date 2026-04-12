@@ -221,6 +221,25 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2104"]);
   });
 
+  test("tuple element assignment is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let pair: (i32, i32) = (1, 2);
+  pair.0 = 3;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2504"]);
+  });
+
+  test("empty arrays require contextual element types", () => {
+    const result = check(`
+fn main() -> void {
+  let xs = [];
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2102"]);
+  });
+
   test("bad arguments are still checked when the callee is not callable", () => {
     const result = check(`
 fn main() -> void {
@@ -335,6 +354,47 @@ fn main() -> void {
       result.checkDiagnostics.some((diagnostic) => diagnostic.code === "W2601"),
       true,
     );
+  });
+
+  test("statement match warns on unbounded domains without wildcard", () => {
+    const result = check(`
+fn main() -> void {
+  let value: i32 = 1;
+  match value {
+    1 => {
+      return;
+    },
+  }
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((diagnostic) => diagnostic.code === "W2601"),
+      true,
+    );
+  });
+
+  test("function return types are inferred by default", () => {
+    checkOk(`
+fn add(x: i32, y: i32) {
+  return x + y;
+}
+
+fn main() -> void {
+  let value: i32 = add(1, 2);
+}
+`);
+  });
+
+  test("inferred return types reject inconsistent branches", () => {
+    const result = check(`
+fn pick(flag: bool) {
+  if flag {
+    return 1;
+  }
+  return "bad";
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2302"]);
   });
 
   test("generic function inference works", () => {
@@ -473,6 +533,19 @@ fn main() -> void {
 `);
   });
 
+  test("trait names are rejected as parameter types", () => {
+    const result = check(`
+trait Named {
+  fn name(self) -> string;
+}
+
+fn render(value: Named) -> string {
+  return value.name();
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2818", "E2104"]);
+  });
+
   test("ambiguous type-parameter methods are diagnosed", () => {
     const result = check(`
 trait LeftName {
@@ -524,6 +597,83 @@ struct User {
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2815"]);
+  });
+
+  test("duplicate satisfies blocks for the same trait are rejected", () => {
+    const result = check(`
+trait Printable {
+  fn print(self) -> void;
+}
+
+struct User {
+  name: string;
+
+  satisfies Printable {
+    fn print(self) -> void {
+      return;
+    }
+  }
+
+  satisfies Printable {
+    fn print(self) -> void {
+      return;
+    }
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2817"]);
+  });
+
+  test("trait methods may not conflict with inherent methods", () => {
+    const result = check(`
+trait Printable {
+  fn show(self) -> void;
+}
+
+struct User {
+  name: string;
+
+  fn show(self) -> void {
+    return;
+  }
+
+  satisfies Printable {
+    fn show(self) -> void {
+      return;
+    }
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2817"]);
+  });
+
+  test("multiple satisfied traits may not expose the same method name", () => {
+    const result = check(`
+trait Left {
+  fn show(self) -> void;
+}
+
+trait Right {
+  fn show(self) -> void;
+}
+
+struct User {
+  name: string;
+
+  satisfies Left {
+    fn show(self) -> void {
+      return;
+    }
+  }
+
+  satisfies Right {
+    fn show(self) -> void {
+      return;
+    }
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2817"]);
   });
 
   test("enum methods may use Self and enum payloads", () => {

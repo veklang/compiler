@@ -237,6 +237,8 @@ export class Checker {
   private globalScope: Scope;
   private currentFunctionReturnType: Type | null = null;
   private currentFunctionDepth = 0;
+  private currentFunctionInferReturn = false;
+  private currentFunctionInferredReturn: Type | null = null;
 
   constructor(private program: Program) {
     this.globalScope = this.createScope();
@@ -566,6 +568,8 @@ export class Checker {
         );
       }
     }
+
+    this.validateTypeMemberConflicts(symbol);
   }
 
   private materializeEnum(symbol: TypeSymbol) {
@@ -602,6 +606,8 @@ export class Checker {
         );
       }
     }
+
+    this.validateTypeMemberConflicts(symbol);
 
     const enumTypeArgs = symbol.typeParams.map((param) =>
       this.typeParamType(
@@ -678,6 +684,58 @@ export class Checker {
       methods.set(method.name.name, method);
     }
     return { span: declaration.trait.span, trait, methods };
+  }
+
+  private validateTypeMemberConflicts(symbol: TypeSymbol) {
+    const satisfactions = symbol.satisfactions ?? [];
+    const methods = symbol.methods ?? new Map<string, MethodDeclaration>();
+
+    const seenTraits: NamedRefType[] = [];
+    for (const satisfaction of satisfactions) {
+      if (seenTraits.some((trait) => this.namedTypeEquals(trait, satisfaction.trait))) {
+        this.report(
+          `Duplicate satisfies block for trait '${satisfaction.trait.name}'.`,
+          satisfaction.span,
+          "E2817",
+        );
+      } else {
+        seenTraits.push(satisfaction.trait);
+      }
+    }
+
+    const traitMethodOwners = new Map<string, string>();
+    for (const satisfaction of satisfactions) {
+      const ownerName = satisfaction.trait.name;
+      const methodNames = this.traitSurfaceMethodNames(satisfaction);
+      for (const methodName of methodNames) {
+        if (methods.has(methodName)) {
+          this.report(
+            `Trait method '${methodName}' conflicts with inherent method '${methodName}'.`,
+            satisfaction.span,
+            "E2817",
+          );
+        }
+
+        const previousOwner = traitMethodOwners.get(methodName);
+        if (previousOwner && previousOwner !== ownerName) {
+          this.report(
+            `Trait method '${methodName}' is provided by multiple satisfied traits.`,
+            satisfaction.span,
+            "E2817",
+          );
+        } else {
+          traitMethodOwners.set(methodName, ownerName);
+        }
+      }
+    }
+  }
+
+  private traitSurfaceMethodNames(satisfaction: TraitSatisfactionInfo): string[] {
+    const traitSymbol = satisfaction.trait.symbol;
+    if (traitSymbol?.kind === "Trait" && traitSymbol.traitDecl) {
+      return traitSymbol.traitDecl.methods.map((method) => method.name.name);
+    }
+    return Array.from(satisfaction.methods.keys());
   }
 
   private createTypeScope(symbol: TypeSymbol, parent: Scope) {
@@ -855,11 +913,29 @@ export class Checker {
 
     const previousReturnType = this.currentFunctionReturnType;
     const previousDepth = this.currentFunctionDepth;
-    this.currentFunctionReturnType = functionType.returnType;
+    const previousInfer = this.currentFunctionInferReturn;
+    const previousInferred = this.currentFunctionInferredReturn;
+    this.currentFunctionInferReturn = !node.returnType;
+    this.currentFunctionInferredReturn = null;
+    this.currentFunctionReturnType = node.returnType
+      ? functionType.returnType
+      : this.unknownType();
     this.currentFunctionDepth++;
     this.checkBlockStatement(node.body, bodyScope);
+    if (this.currentFunctionInferReturn) {
+      const inferred = this.currentFunctionInferredReturn ?? this.primitive("void");
+      symbol.type = {
+        ...symbol.type,
+        returnType: inferred,
+        target: symbol.type.target
+          ? { ...symbol.type.target, returnType: inferred }
+          : undefined,
+      };
+    }
     this.currentFunctionDepth = previousDepth;
     this.currentFunctionReturnType = previousReturnType;
+    this.currentFunctionInferReturn = previousInfer;
+    this.currentFunctionInferredReturn = previousInferred;
   }
 
   private checkTypeDeclaration(symbol: TypeSymbol | undefined, scope: Scope) {
@@ -1023,11 +1099,23 @@ export class Checker {
 
     const previousReturnType = this.currentFunctionReturnType;
     const previousDepth = this.currentFunctionDepth;
-    this.currentFunctionReturnType = resolved.returnType;
+    const previousInfer = this.currentFunctionInferReturn;
+    const previousInferred = this.currentFunctionInferredReturn;
+    this.currentFunctionInferReturn =
+      method.kind === "MethodDeclaration" && !method.returnType;
+    this.currentFunctionInferredReturn = null;
+    this.currentFunctionReturnType = method.returnType
+      ? resolved.returnType
+      : this.unknownType();
     this.currentFunctionDepth++;
     this.checkBlockStatement(method.body, bodyScope);
+    if (this.currentFunctionInferReturn) {
+      resolved.returnType = this.currentFunctionInferredReturn ?? this.primitive("void");
+    }
     this.currentFunctionDepth = previousDepth;
     this.currentFunctionReturnType = previousReturnType;
+    this.currentFunctionInferReturn = previousInfer;
+    this.currentFunctionInferredReturn = previousInferred;
   }
 
   private checkBlockStatement(block: BlockStatement, scope: Scope) {
@@ -1042,6 +1130,19 @@ export class Checker {
     const valueType = node.value
       ? this.checkExpression(node.value, scope, this.currentFunctionReturnType)
       : this.primitive("void");
+    if (this.currentFunctionInferReturn) {
+      if (!this.currentFunctionInferredReturn) {
+        this.currentFunctionInferredReturn = valueType;
+        return;
+      }
+      const merged = this.mergeBranchTypes(this.currentFunctionInferredReturn, valueType);
+      if (!merged) {
+        this.report("Return type mismatch.", node.span, "E2302");
+      } else {
+        this.currentFunctionInferredReturn = merged;
+      }
+      return;
+    }
     if (!this.isAssignable(valueType, this.currentFunctionReturnType)) {
       this.report("Return type mismatch.", node.span, "E2302");
     }
@@ -1135,6 +1236,15 @@ export class Checker {
         node.span,
         "W2601",
       );
+      return;
+    }
+
+    if (coverage.kind === "other" && !coverage.seen.has("_")) {
+      this.warn(
+        "Match may be non-exhaustive; add a catch-all '_' arm.",
+        node.span,
+        "W2601",
+      );
     }
   }
 
@@ -1156,7 +1266,6 @@ export class Checker {
     return (
       node.kind === "IdentifierExpression" ||
       node.kind === "MemberExpression" ||
-      node.kind === "TupleMemberExpression" ||
       node.kind === "IndexExpression"
     );
   }
@@ -1179,11 +1288,6 @@ export class Checker {
     if (node.kind === "MemberExpression") {
       this.ensureMutableRoot(node.object, node.span, scope);
       return this.checkMember(node, scope);
-    }
-
-    if (node.kind === "TupleMemberExpression") {
-      this.ensureMutableRoot(node.object, node.span, scope);
-      return this.checkTupleMember(node, scope);
     }
 
     if (node.kind === "IndexExpression") {
@@ -1960,6 +2064,14 @@ export class Checker {
       this.checkExpression(element, scope, expectedElement),
     );
     let elementType = expectedElement ?? this.unknownType();
+    if (!expectedElement && node.elements.length === 0) {
+      this.report(
+        "Empty array literal requires contextual element type.",
+        node.span,
+        "E2102",
+      );
+      elementType = this.errorType();
+    }
     if (!expectedElement && elementTypes.length > 0)
       elementType = elementTypes[0];
     for (const current of elementTypes) {
@@ -2669,7 +2781,7 @@ export class Checker {
     );
     const returnType = node.returnType
       ? this.resolveType(node.returnType, typeScope)
-      : this.primitive("void");
+      : this.unknownType();
 
     return {
       kind: "Function",
@@ -2702,7 +2814,7 @@ export class Checker {
       ? this.resolveType(node.returnType, scope)
       : expected?.kind === "Function"
         ? expected.returnType
-        : this.primitive("void");
+        : this.unknownType();
     return {
       kind: "Function",
       typeParams: [],
@@ -2731,6 +2843,23 @@ export class Checker {
         isMutable: param.isMutable,
       };
     }
+
+    if (param.type.kind === "NamedType" && !scope.typeParams.has(param.type.name.name)) {
+      const symbol = this.lookupType(param.type.name.name, scope);
+      if (symbol?.kind === "Trait") {
+        this.report(
+          "Trait names are not allowed as parameter types. Use explicit generics with trait bounds.",
+          param.type.span,
+          "E2818",
+        );
+        return {
+          name: param.name.name,
+          type: this.errorType(),
+          isMutable: param.isMutable,
+        };
+      }
+    }
+
     return {
       name: param.name.name,
       type: this.resolveType(param.type, scope),
@@ -2780,7 +2909,9 @@ export class Checker {
 
     const returnType = method.returnType
       ? this.resolveType(method.returnType, methodScope)
-      : this.primitive("void");
+      : method.kind === "TraitMethodSignature"
+        ? this.primitive("void")
+        : this.unknownType();
 
     return {
       name: method.name.name,
