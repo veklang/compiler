@@ -231,6 +231,17 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2207", "E2101"]);
   });
 
+  test("bad arithmetic in imported-call arguments is still diagnosed", () => {
+    const result = check(`
+import "std:io" as io;
+
+fn main() -> void {
+  io.print(1 + true);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2104", "E2101"]);
+  });
+
   test("struct literals require complete known fields", () => {
     const result = check(`
 struct User {

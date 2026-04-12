@@ -1193,6 +1193,16 @@ export class Parser {
       };
     }
 
+    if (this.checkKeyword("mut")) {
+      const token = this.advance();
+      this.report(
+        "Mutable parameter syntax is 'mut name: Type'. 'name: mut Type' is invalid.",
+        token?.span ?? this.currentSpan(),
+        "E1050",
+      );
+      return this.placeholderType(token?.span ?? this.currentSpan());
+    }
+
     return this.parseNamedType();
   }
 

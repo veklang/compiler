@@ -237,4 +237,16 @@ let add_one = fn(x: i32) -> i32 {
     const result = parse("let x = 1");
     expectDiagnostics(result.parseDiagnostics, ["E1020"]);
   });
+
+  test("rejects 'name: mut Type' parameter syntax", () => {
+    const result = parse(`
+fn push_one(xs: mut i32[]) -> void {
+  return;
+}
+`);
+    assert.equal(
+      result.parseDiagnostics.some((diagnostic) => diagnostic.code === "E1050"),
+      true,
+    );
+  });
 });
