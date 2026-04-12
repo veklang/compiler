@@ -139,6 +139,21 @@ fn main() -> void {
 `);
   });
 
+  test("nullable aliases narrow like their underlying types", () => {
+    checkOk(`
+type MaybeI32 = i32?;
+
+fn main() -> void {
+  const maybe_num: MaybeI32 = 1;
+  if maybe_num != null {
+    let n: i32 = maybe_num;
+  } else {
+    let z: null = maybe_num;
+  }
+}
+`);
+  });
+
   test("array and string indexing", () => {
     checkOk(`
 fn main() -> void {
@@ -521,6 +536,71 @@ enum State {
 fn main() -> void {
   let state = State.busy(1);
   let value: i32? = state.value();
+}
+`);
+  });
+
+  test("generic owner methods use concrete type arguments", () => {
+    checkOk(`
+trait Measure<T> {
+  fn compare(self, other: T) -> Ordering;
+}
+
+struct UserId {
+  value: i32;
+
+  fn new(value: i32) -> Self {
+    return Self { value };
+  }
+
+  satisfies Equal<UserId> {
+    fn equals(self, other: UserId) -> bool {
+      return self.value == other.value;
+    }
+  }
+
+  satisfies Measure<UserId> {
+    fn compare(self, other: UserId) -> Ordering {
+      if self.value < other.value {
+        return Less;
+      }
+
+      if self.value > other.value {
+        return Greater;
+      }
+
+      return Equal;
+    }
+  }
+}
+
+enum Packet<T> {
+  Empty;
+  Data(T);
+
+  fn take(self) -> T? {
+    return match self {
+      Data(value) => value,
+      _ => null,
+    };
+  }
+}
+
+fn main() -> void {
+  let packet: Packet<UserId> = Data(UserId.new(1));
+  let taken = packet.take();
+
+  if taken != null {
+    let same = taken.equals(UserId.new(1));
+    let ordering = taken.compare(UserId.new(2));
+    if same {
+      let _label = match ordering {
+        Less => "less",
+        Equal => "equal",
+        _ => "greater",
+      };
+    }
+  }
 }
 `);
   });

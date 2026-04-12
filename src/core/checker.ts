@@ -2609,11 +2609,9 @@ export class Checker {
     return this.namedType(node.name.name);
   }
 
-  private resolveAliasType(symbol: TypeSymbol, scope: Scope): NamedRefType {
+  private resolveAliasType(symbol: TypeSymbol, scope: Scope): Type {
     if (!symbol.aliasTarget) return this.namedType(symbol.name, symbol);
-    const resolved = this.resolveType(symbol.aliasTarget.type, scope);
-    if (resolved.kind === "Named") return resolved;
-    return this.namedType(symbol.name, symbol);
+    return this.resolveType(symbol.aliasTarget.type, scope);
   }
 
   private resolveTypeParams(
@@ -2897,19 +2895,25 @@ export class Checker {
     if (!owner.symbol) return null;
     const direct = owner.symbol.methods?.get(name);
     if (direct)
-      return this.resolveMethod(
-        direct,
-        owner.symbol,
-        this.createOwnerScope(owner, scope),
+      return this.instantiateMethodForOwner(
+        this.resolveMethod(
+          direct,
+          owner.symbol,
+          this.createTypeScope(owner.symbol, scope),
+        ),
+        owner,
       );
 
     for (const satisfaction of owner.symbol.satisfactions ?? []) {
       const impl = satisfaction.methods.get(name);
       if (impl)
-        return this.resolveMethod(
-          impl,
-          owner.symbol,
-          this.createOwnerScope(owner, scope),
+        return this.instantiateMethodForOwner(
+          this.resolveMethod(
+            impl,
+            owner.symbol,
+            this.createTypeScope(owner.symbol, scope),
+          ),
+          owner,
         );
     }
 
@@ -2985,6 +2989,11 @@ export class Checker {
         this.resolveBuiltinTrait("Unwrappable", [type.typeArgs[0]]),
       );
     }
+    if (type.kind === "Named") {
+      for (const satisfaction of type.symbol?.satisfactions ?? []) {
+        candidates.push(satisfaction.trait);
+      }
+    }
 
     for (const candidate of candidates) {
       if (!candidate.symbol || candidate.symbol.kind !== "Trait") continue;
@@ -3027,26 +3036,44 @@ export class Checker {
     return null;
   }
 
-  private createOwnerScope(owner: NamedRefType, scope: Scope) {
-    const ownerScope = this.createScope(scope, owner);
-    if (owner.symbol) {
-      const params = this.resolveTypeParams(
-        owner.symbol.typeParams,
-        undefined,
-        this.globalScope,
-      );
-      for (
-        let i = 0;
-        i < Math.min(params.length, owner.typeArgs?.length ?? 0);
-        i++
-      ) {
-        ownerScope.typeParams.set(params[i].name, {
-          name: params[i].name,
-          bounds: params[i].bounds,
-        });
-      }
+  private instantiateMethodForOwner(
+    method: MethodInfo,
+    owner: NamedRefType,
+  ): MethodInfo {
+    if (!owner.symbol?.typeParams.length || !owner.typeArgs?.length)
+      return method;
+
+    const bindings = new Map<string, Type>();
+    for (
+      let i = 0;
+      i < Math.min(owner.symbol.typeParams.length, owner.typeArgs.length);
+      i++
+    ) {
+      bindings.set(owner.symbol.typeParams[i].name.name, owner.typeArgs[i]);
     }
-    return ownerScope;
+
+    if (bindings.size === 0) return method;
+
+    return {
+      ...method,
+      typeParams: method.typeParams.map((param) => ({
+        ...param,
+        bounds: param.bounds.map((bound) =>
+          this.substituteNamedType(bound, bindings),
+        ),
+      })),
+      receiver: method.receiver
+        ? {
+            ...method.receiver,
+            type: this.substituteType(method.receiver.type, bindings),
+          }
+        : undefined,
+      params: method.params.map((param) => ({
+        ...param,
+        type: this.substituteType(param.type, bindings),
+      })),
+      returnType: this.substituteType(method.returnType, bindings),
+    };
   }
 
   private resolveTypeWithOwnerBindings(
