@@ -32,7 +32,9 @@ describe("lexer", () => {
   });
 
   test("operators", () => {
-    const tokens = tokensOf("+ - ! * / % = == != > >= < <= && || & | ^ << >> => ->");
+    const tokens = tokensOf(
+      "+ - ! * / % = == != > >= < <= && || & | ^ << >> => ->",
+    );
     assert.deepEqual(
       tokens.map((token) => [token.kind, token.lexeme]),
       [
@@ -65,7 +67,10 @@ describe("lexer", () => {
   test("keywords and identifiers", () => {
     const { tokens } = lex(`${keywords.join(" ")} self`);
     const kinds = tokenKinds(withoutEof(tokens));
-    assert.equal(kinds.filter((kind) => kind === "Keyword").length, keywords.length);
+    assert.equal(
+      kinds.filter((kind) => kind === "Keyword").length,
+      keywords.length,
+    );
     assert.equal(kinds[kinds.length - 1], "Identifier");
   });
 

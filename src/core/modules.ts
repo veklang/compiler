@@ -7,7 +7,6 @@ import type { ImportDeclaration, Program } from "@/types/ast";
 import type { Diagnostic } from "@/types/diagnostic";
 
 interface ModuleExportInfo {
-  hasDefault: boolean;
   named: Set<string>;
 }
 
@@ -154,15 +153,9 @@ const localSymbols = (program: Program) => {
   return symbols;
 };
 
-const exportInfo = (program: Program): ModuleExportInfo => {
-  const named = namedExports(program);
-  let hasDefault = false;
-  for (const statement of program.body) {
-    if (statement.kind !== "ExportDefaultDeclaration") continue;
-    hasDefault = true;
-  }
-  return { hasDefault, named };
-};
+const exportInfo = (program: Program): ModuleExportInfo => ({
+  named: namedExports(program),
+});
 
 const resolveImport = (
   fromPath: string,
@@ -196,39 +189,6 @@ const importStatements = (program: Program): ImportDeclaration[] =>
       statement.kind === "ImportDeclaration",
   );
 
-const validateDefaultExportSymbols = (
-  program: Program,
-  symbols: Map<string, SymbolVisibility>,
-) => {
-  const diagnostics: Diagnostic[] = [];
-  for (const statement of program.body) {
-    if (statement.kind !== "ExportDefaultDeclaration") continue;
-    if (statement.symbols)
-      for (const symbol of statement.symbols) {
-        const info = symbols.get(symbol.name);
-        if (info && !info.isPublic)
-          diagnostics.push({
-            severity: "error",
-            message: `Symbol '${symbol.name}' in default export must be public.`,
-            span: symbol.span,
-            code: "E2705",
-          });
-      }
-
-    if (statement.expression?.kind === "IdentifierExpression") {
-      const info = symbols.get(statement.expression.name);
-      if (info && !info.isPublic)
-        diagnostics.push({
-          severity: "error",
-          message: `Symbol '${statement.expression.name}' in default export must be public.`,
-          span: statement.expression.span,
-          code: "E2705",
-        });
-    }
-  }
-  return diagnostics;
-};
-
 const validateImports = (
   module: LoadedModule,
   moduleExports: Map<string, ModuleExportInfo>,
@@ -258,14 +218,6 @@ const validateImports = (
 
     const exports = moduleExports.get(resolved.id);
     if (!exports) continue;
-
-    if (statement.defaultImport && !exports.hasDefault)
-      module.resolutionDiagnostics.push({
-        severity: "error",
-        message: `Module '${specifier}' has no default export.`,
-        span: statement.defaultImport.span,
-        code: "E2704",
-      });
 
     if (statement.namedImports)
       for (const imported of statement.namedImports)
@@ -337,10 +289,7 @@ export const checkModuleGraph = (
 
   for (const [id, module] of modules) {
     if (!module.program) continue;
-    const symbols = localSymbols(module.program);
-    module.resolutionDiagnostics.push(
-      ...validateDefaultExportSymbols(module.program, symbols),
-    );
+    localSymbols(module.program);
     moduleExports.set(id, exportInfo(module.program));
   }
 

@@ -75,9 +75,4 @@ export type Punctuator =
   | ";"
   | "?";
 
-export type LiteralType =
-  | "Integer"
-  | "Float"
-  | "String"
-  | "Boolean"
-  | "Null";
+export type LiteralType = "Integer" | "Float" | "String" | "Boolean" | "Null";
