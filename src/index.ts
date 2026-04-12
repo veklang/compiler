@@ -128,20 +128,6 @@ const { program, diagnostics: parseDiagnostics } = new Parser(
 ).parseProgram();
 const { diagnostics: checkDiagnostics } = new Checker(program).checkProgram();
 
-console.log(
-  inspect(tokens, {
-    depth: 50,
-    colors: true,
-  }),
-);
-
-console.log(
-  inspect(program, {
-    depth: 50,
-    colors: true,
-  }),
-);
-
 if (
   lexDiagnostics.length ||
   parseDiagnostics.length ||
@@ -152,5 +138,19 @@ if (
       { lexDiagnostics, parseDiagnostics, checkDiagnostics },
       { depth: 50, colors: true },
     ),
+  );
+} else {
+  console.log(
+    inspect(tokens, {
+      depth: 50,
+      colors: true,
+    }),
+  );
+
+  console.log(
+    inspect(program, {
+      depth: 50,
+      colors: true,
+    }),
   );
 }
