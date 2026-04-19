@@ -2,6 +2,7 @@ import { strict as nodeAssert } from "node:assert";
 import { Checker } from "@/core/checker";
 import { Lexer } from "@/core/lexer";
 import { Parser } from "@/core/parser";
+import { analyzeReachability } from "@/passes/reachability";
 import type { Program } from "@/types/ast";
 import type { Diagnostic } from "@/types/diagnostic";
 import type { Token } from "@/types/token";
@@ -22,6 +23,12 @@ export const check = (source: string) => {
     parsed.program,
   ).checkProgram();
   return { ...parsed, checkDiagnostics, types };
+};
+
+export const reach = (source: string) => {
+  const parsed = parse(source);
+  const reachability = analyzeReachability(parsed.program);
+  return { ...parsed, ...reachability };
 };
 
 export const expectNoDiagnostics = (
