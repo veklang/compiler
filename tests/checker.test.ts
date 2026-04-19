@@ -995,6 +995,22 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2101"]);
   });
 
+  test("where clause on function type annotation is resolved by checker", () => {
+    checkOk(`
+fn eq_ints(a: i32, b: i32) -> bool {
+  return a.equals(b);
+}
+
+fn apply_eq<T>(a: T, b: T) -> bool where T: Equal<T> {
+  return a.equals(b);
+}
+
+fn main() -> void {
+  let _r: bool = apply_eq(1, 2);
+}
+`);
+  });
+
   test("extern fn is callable and return type is checked", () => {
     checkOk(`
 extern fn add(a: i32, b: i32) -> i32;

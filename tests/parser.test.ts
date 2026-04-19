@@ -297,6 +297,14 @@ struct Foo {
 `);
   });
 
+  test("where clause on function type is parsed", () => {
+    parseOk(`
+let f: fn<T>(T, T) -> bool where T: Equal<T> = fn(a: i32, b: i32) -> bool {
+  return a.equals(b);
+};
+`);
+  });
+
   test("extern fn declaration without body is parsed", () => {
     const program = parseOk(`
 pub extern fn panic(message: string) -> void;
