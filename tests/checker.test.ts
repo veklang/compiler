@@ -931,4 +931,41 @@ fn main() -> void {
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2105"]);
   });
+
+  test("generic function value assigned to matching bounded type is accepted", () => {
+    checkOk(`
+trait Printable {
+  fn print(self) -> void;
+}
+
+fn show<T: Printable>(a: T) -> void {
+  a.print();
+}
+
+fn main() -> void {
+  let f: fn<T: Printable>(T) -> void = show;
+}
+`);
+  });
+
+  test("generic function value assigned to differently bounded type is rejected", () => {
+    const result = check(`
+trait Printable {
+  fn print(self) -> void;
+}
+
+trait Loggable {
+  fn log(self) -> void;
+}
+
+fn show<T: Printable>(a: T) -> void {
+  a.print();
+}
+
+fn main() -> void {
+  let f: fn<T: Loggable>(T) -> void = show;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
 });

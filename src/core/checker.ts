@@ -3597,15 +3597,46 @@ export class Checker {
       );
     }
     if (left.kind === "Function" && right.kind === "Function") {
+      if (left.typeParams.length !== right.typeParams.length) return false;
+      if (left.params.length !== right.params.length) return false;
+
+      // Normalize right's type param names to left's so structural comparisons
+      // treat fn<T: Equal<T>>(...) and fn<U: Equal<U>>(...) as identical.
+      const subst = new Map<string, Type>();
+      for (let i = 0; i < left.typeParams.length; i++) {
+        subst.set(
+          right.typeParams[i].name,
+          this.typeParamType(
+            left.typeParams[i].name,
+            left.typeParams[i].bounds,
+          ),
+        );
+      }
+
+      // Compare bounds on each type parameter after normalization.
+      for (let i = 0; i < left.typeParams.length; i++) {
+        const lb = left.typeParams[i].bounds;
+        const rb = right.typeParams[i].bounds.map((b) =>
+          this.substituteNamedType(b, subst),
+        );
+        if (lb.length !== rb.length) return false;
+        if (!lb.every((lbound, j) => this.namedTypeEquals(lbound, rb[j])))
+          return false;
+      }
+
       return (
-        left.typeParams.length === right.typeParams.length &&
-        left.params.length === right.params.length &&
         left.params.every(
           (param, index) =>
             param.isMutable === right.params[index].isMutable &&
-            this.typeEquals(param.type, right.params[index].type),
+            this.typeEquals(
+              param.type,
+              this.substituteType(right.params[index].type, subst),
+            ),
         ) &&
-        this.typeEquals(left.returnType, right.returnType)
+        this.typeEquals(
+          left.returnType,
+          this.substituteType(right.returnType, subst),
+        )
       );
     }
     if (left.kind === "TypeParam" && right.kind === "TypeParam")
