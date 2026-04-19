@@ -1123,6 +1123,37 @@ fn main() -> void {
 `);
   });
 
+  test("enum unit variants are valid in expression position", () => {
+    checkOk(`
+enum Color {
+  Red;
+  Green;
+  Blue;
+}
+
+fn pick(flag: bool) -> Color {
+  if flag {
+    return Red;
+  }
+  return Blue;
+}
+
+fn main() -> void {
+  let _c: Ordering = Less;
+  let _d: Color = pick(true);
+}
+`);
+  });
+
+  test("enum unit variant used as wrong type is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let _x: i32 = Less;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
   test("Ordering satisfies Equal<Ordering>", () => {
     checkOk(`
 fn eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
