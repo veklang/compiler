@@ -2772,12 +2772,14 @@ export class Checker {
     const typeScope = this.createScope(scope, scope.selfType);
     typeScope.typeParams = new Map(scope.typeParams);
     for (const param of typeParams ?? []) {
-      const bounds = (param.bounds ?? []).map((bound) =>
-        this.resolveNamedReference(bound, typeScope),
-      );
-      const spec = { name: param.name.name, bounds };
+      // Pre-register with empty bounds so self-referential bounds like Equal<T>
+      // can resolve T when processing this param's own bound list.
+      const spec: TypeParamSpec = { name: param.name.name, bounds: [] };
       resolved.set(param.name.name, spec);
       typeScope.typeParams.set(param.name.name, spec);
+      spec.bounds = (param.bounds ?? []).map((bound) =>
+        this.resolveNamedReference(bound, typeScope),
+      );
     }
     for (const clause of whereClause ?? []) {
       const target =

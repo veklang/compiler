@@ -277,6 +277,14 @@ fn maybe() -> null {
 `);
   });
 
+  test("nested generic type arguments parse correctly", () => {
+    parseOk(`
+fn main() -> void {
+  let xs: Map<string, i32[]> = Map {};
+}
+`);
+  });
+
   test("Self is valid as a return type", () => {
     parseOk(`
 struct Foo {

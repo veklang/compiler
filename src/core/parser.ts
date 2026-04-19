@@ -1081,7 +1081,7 @@ export class Parser {
   private parseTypeParams(): TypeParameter[] | undefined {
     if (!this.matchOperator("<")) return undefined;
     const params: TypeParameter[] = [];
-    if (!this.checkOperator(">")) {
+    if (!this.checkAngleClose()) {
       do {
         const name =
           this.parseIdentifier() ??
@@ -1099,7 +1099,7 @@ export class Parser {
         });
       } while (this.matchPunctuator(","));
     }
-    this.expectOperator(">");
+    this.expectAngleClose();
     return params;
   }
 
@@ -1228,13 +1228,13 @@ export class Parser {
     let typeArgs: TypeNode[] | undefined;
     if (this.matchOperator("<")) {
       typeArgs = [];
-      if (!this.checkOperator(">")) {
+      if (!this.checkAngleClose()) {
         do {
           const type = this.parseType();
           if (type) typeArgs.push(type);
         } while (this.matchPunctuator(","));
       }
-      this.expectOperator(">");
+      this.expectAngleClose();
     }
     return {
       kind: "NamedType",
@@ -1294,13 +1294,13 @@ export class Parser {
   private parseCallTypeArgs(): TypeNode[] {
     const typeArgs: TypeNode[] = [];
     this.expectOperator("<");
-    if (!this.checkOperator(">")) {
+    if (!this.checkAngleClose()) {
       do {
         const type = this.parseType();
         if (type) typeArgs.push(type);
       } while (this.matchPunctuator(","));
     }
-    this.expectOperator(">");
+    this.expectAngleClose();
     return typeArgs;
   }
 
@@ -1433,6 +1433,38 @@ export class Parser {
       return token ?? null;
     }
     return token;
+  }
+
+  private checkAngleClose(): boolean {
+    const token = this.peek();
+    return (
+      token?.kind === "Operator" &&
+      (token.operator === ">" || token.operator === ">>")
+    );
+  }
+
+  private expectAngleClose(): Token | null {
+    const token = this.peek();
+    if (token?.kind === "Operator" && token.operator === ">>") {
+      this.current++;
+      // Split >> into two >: splice a synthetic second > back into the stream
+      const second: Token = {
+        kind: "Operator",
+        operator: ">",
+        lexeme: ">",
+        span: {
+          start: {
+            index: token.span.start.index + 1,
+            line: token.span.start.line,
+            column: token.span.start.column + 1,
+          },
+          end: token.span.end,
+        },
+      };
+      this.tokens.splice(this.current, 0, second);
+      return token;
+    }
+    return this.expectOperator(">");
   }
 
   private expectOperator(operator: Operator): Token | null {

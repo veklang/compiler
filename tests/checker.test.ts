@@ -934,16 +934,12 @@ fn main() -> void {
 
   test("generic function value assigned to matching bounded type is accepted", () => {
     checkOk(`
-trait Printable {
-  fn print(self) -> void;
-}
-
-fn show<T: Printable>(a: T) -> void {
-  a.print();
+fn same<T: Equal<T>>(a: T, b: T) -> bool {
+  return a.equals(b);
 }
 
 fn main() -> void {
-  let f: fn<T: Printable>(T) -> void = show;
+  let f: fn<T: Equal<T>>(T, T) -> bool = same;
 }
 `);
   });
