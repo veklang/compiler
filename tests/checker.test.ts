@@ -18,7 +18,7 @@ describe("checker", () => {
   test("unknown identifier", () => {
     const result = check(`
 fn main() -> void {
-  let x = y;
+  let _x = y;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2001"]);
@@ -131,9 +131,9 @@ fn tick(counter: Counter) -> void {
 fn main() -> void {
   let maybe_num: i32? = 1;
   if maybe_num != null {
-    let n: i32 = maybe_num;
+    let _n: i32 = maybe_num;
   } else {
-    let z: null = maybe_num;
+    let _z: null = maybe_num;
   }
 }
 `);
@@ -146,9 +146,9 @@ type MaybeI32 = i32?;
 fn main() -> void {
   const maybe_num: MaybeI32 = 1;
   if maybe_num != null {
-    let n: i32 = maybe_num;
+    let _n: i32 = maybe_num;
   } else {
-    let z: null = maybe_num;
+    let _z: null = maybe_num;
   }
 }
 `);
@@ -158,9 +158,9 @@ fn main() -> void {
     checkOk(`
 fn main() -> void {
   let xs: i32[] = [1, 2, 3];
-  let first: i32 = xs[0];
+  let _first: i32 = xs[0];
   let s: string = "cat";
-  let c: string = s[0];
+  let _c: string = s[0];
 }
 `);
   });
@@ -168,8 +168,8 @@ fn main() -> void {
   test("integer literals in expressions use the expected integer type", () => {
     checkOk(`
 fn main() -> void {
-  let x: i8 = -128;
-  let y: i8 = 1 + 2;
+  let _x: i8 = -128;
+  let _y: i8 = 1 + 2;
 }
 `);
   });
@@ -177,7 +177,7 @@ fn main() -> void {
   test("bitwise operators require integers", () => {
     const result = check(`
 fn main() -> void {
-  let x = 1.0 & 2.0;
+  let _x = 1.0 & 2.0;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2101"]);
@@ -186,7 +186,7 @@ fn main() -> void {
   test("compile-time invalid shifts are rejected", () => {
     const result = check(`
 fn main() -> void {
-  let x: i8 = 1 << 8;
+  let _x: i8 = 1 << 8;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2403"]);
@@ -195,7 +195,7 @@ fn main() -> void {
   test("compile-time integer overflow is rejected", () => {
     const result = check(`
 fn main() -> void {
-  let x: i8 = 127 + 1;
+  let _x: i8 = 127 + 1;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2402"]);
@@ -205,7 +205,7 @@ fn main() -> void {
     const result = check(`
 fn main() -> void {
   let x: i32 = 1;
-  let y = x[0];
+  let _y = x[0];
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2104"]);
@@ -215,7 +215,7 @@ fn main() -> void {
     const result = check(`
 fn main() -> void {
   let x: i32 = 1;
-  let y = x.name;
+  let _y = x.name;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2104"]);
@@ -234,7 +234,7 @@ fn main() -> void {
   test("empty arrays require contextual element types", () => {
     const result = check(`
 fn main() -> void {
-  let xs = [];
+  let _xs = [];
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2102"]);
@@ -294,7 +294,7 @@ fn main() -> void {
     const result = check(`
 fn main() -> void {
   let value: Result<i32, string> = Ok(1);
-  let label: string = match value {
+  let _label: string = match value {
     Ok(v) => v.format(),
     _ => 42,
   };
@@ -307,7 +307,7 @@ fn main() -> void {
     const result = check(`
 fn main() -> void {
   let value: Result<i32, string> = Ok(1);
-  let label = match value {
+  let _label = match value {
     Ok(v) => v.format(),
   };
 }
@@ -339,10 +339,10 @@ fn main() -> void {
 
   match value {
     Ok(v) => {
-      let x: i32 = v;
+      let _x: i32 = v;
     },
     Err(e) => {
-      let y: string = e;
+      let _y: string = e;
     },
     null => {
       return;
@@ -410,7 +410,7 @@ fn add(x: i32, y: i32) {
 }
 
 fn main() -> void {
-  let value: i32 = add(1, 2);
+  let _value: i32 = add(1, 2);
 }
 `);
   });
@@ -434,7 +434,7 @@ fn id<T>(value: T) -> T {
 }
 
 fn main() -> void {
-  let x: i32 = id(1);
+  let _x: i32 = id(1);
 }
 `);
   });
@@ -446,7 +446,7 @@ fn id<T>(value: T) -> T {
 }
 
 fn main() -> void {
-  let x: i32 = id<i32>(1);
+  let _x: i32 = id<i32>(1);
 }
 `);
   });
@@ -458,7 +458,7 @@ fn keep<T>() -> i32 {
 }
 
 fn main() -> void {
-  let x = keep();
+  let _x = keep();
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2820"]);
@@ -470,7 +470,7 @@ fn main() -> void {
   let add = fn(x: i32, y: i32) {
     return x + y;
   };
-  let result: i32 = add(1, 2);
+  let _result: i32 = add(1, 2);
 }
 `);
   });
@@ -485,7 +485,7 @@ fn main() -> void {
   let double = fn(x: i32) {
     return x * 2;
   };
-  let result: i32 = apply(double, 3);
+  let _result: i32 = apply(double, 3);
 }
 `);
   });
@@ -505,7 +505,7 @@ fn main() -> void {
   test("anonymous function inferred return type rejects inconsistent branches", () => {
     const result = check(`
 fn main() -> void {
-  let pick = fn(flag: bool) {
+  let _pick = fn(flag: bool) {
     if flag {
       return 1;
     }
@@ -519,7 +519,7 @@ fn main() -> void {
   test("anonymous function with explicit return annotation still uses annotation", () => {
     checkOk(`
 fn main() -> void {
-  let f: fn(i32) -> i32 = fn(x: i32) -> i32 {
+  let _f: fn(i32) -> i32 = fn(x: i32) -> i32 {
     return x + 1;
   };
 }
@@ -530,7 +530,7 @@ fn main() -> void {
     const result = check(`
 fn main() -> void {
   let offset: i32 = 2;
-  let add = fn(x: i32) -> i32 {
+  let _add = fn(x: i32) -> i32 {
     return x + offset;
   };
 }
@@ -553,7 +553,7 @@ struct User {
 
   satisfies Printable {
     fn print(self) -> void {
-      let x: i32 = self.show();
+      let _x: i32 = self.show();
       return;
     }
   }
@@ -591,7 +591,7 @@ where T: Equal<T>
 fn main() -> void {
   let a = UserId.new(1);
   let b = UserId.new(1);
-  let ok: bool = same(a, b);
+  let _ok: bool = same(a, b);
 }
 `);
   });
@@ -620,7 +620,7 @@ where T: Named
 
 fn main() -> void {
   let user = User { name_value: "ducc" };
-  let label: string = render(user);
+  let _label: string = render(user);
 }
 `);
   });
@@ -666,7 +666,7 @@ struct UserId {
 fn main() -> void {
   let left = UserId { value: 1 };
   let right = UserId { value: 1 };
-  let same = left == right;
+  let _same = left == right;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2101"]);
@@ -788,7 +788,7 @@ enum State {
 
 fn main() -> void {
   let state = State.busy(1);
-  let value: i32? = state.value();
+  let _value: i32? = state.value();
 }
 `);
   });
@@ -876,7 +876,7 @@ fn main() -> void {
   let f: fn(User) -> i32 = User.show;
   let g: fn(i32) -> User = User.new;
   let user = g(1);
-  let x: i32 = f(user);
+  let _x: i32 = f(user);
 }
 `);
   });
@@ -886,7 +886,7 @@ fn main() -> void {
 fn main() -> void {
   let xs: i32[] = [1, 2, 3];
   for item in xs {
-    let x: i32 = item;
+    let _x: i32 = item;
   }
 }
 `);
@@ -918,7 +918,7 @@ struct Counter {
 fn main() -> void {
   let counter = Counter.new(3);
   for item in counter {
-    let x: i32 = item;
+    let _x: i32 = item;
   }
 }
 `);
@@ -927,10 +927,10 @@ fn main() -> void {
   test("numeric casts are accepted", () => {
     checkOk(`
 fn main() -> void {
-  let a: i64 = 1 as i64;
-  let b: f32 = 1 as f32;
-  let c: i32 = 9 as i32;
-  let d: u8 = 255 as u8;
+  let _a: i64 = 1 as i64;
+  let _b: f32 = 1 as f32;
+  let _c: i32 = 9 as i32;
+  let _d: u8 = 255 as u8;
 }
 `);
   });
@@ -938,7 +938,7 @@ fn main() -> void {
   test("bool cast to integer is rejected", () => {
     const result = check(`
 fn main() -> void {
-  let x = true as i32;
+  let _x = true as i32;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2105"]);
@@ -947,7 +947,7 @@ fn main() -> void {
   test("integer cast to bool is rejected", () => {
     const result = check(`
 fn main() -> void {
-  let x = 1 as bool;
+  let _x = 1 as bool;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2105"]);
@@ -956,7 +956,7 @@ fn main() -> void {
   test("null cast is rejected", () => {
     const result = check(`
 fn main() -> void {
-  let x = null as i32;
+  let _x = null as i32;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2105"]);
@@ -969,7 +969,7 @@ fn same<T: Equal<T>>(a: T, b: T) -> bool {
 }
 
 fn main() -> void {
-  let f: fn<T: Equal<T>>(T, T) -> bool = same;
+  let _f: fn<T: Equal<T>>(T, T) -> bool = same;
 }
 `);
   });
@@ -989,7 +989,7 @@ fn show<T: Printable>(a: T) -> void {
 }
 
 fn main() -> void {
-  let f: fn<T: Loggable>(T) -> void = show;
+  let _f: fn<T: Loggable>(T) -> void = show;
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2101"]);
@@ -1016,7 +1016,7 @@ fn main() -> void {
 extern fn add(a: i32, b: i32) -> i32;
 
 fn main() -> void {
-  let x: i32 = add(1, 2);
+  let _x: i32 = add(1, 2);
 }
 `);
   });
@@ -1165,5 +1165,88 @@ fn main() -> void {
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("unused local variable gets W2901 warning", () => {
+    const result = check(`
+fn main() -> void {
+  let x: i32 = 1;
+}
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "W2901"),
+      "expected W2901 for unused local",
+    );
+  });
+
+  test("unused parameter gets W2902 warning", () => {
+    const result = check(`
+fn greet(name: string) -> void {
+  return;
+}
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "W2902"),
+      "expected W2902 for unused parameter",
+    );
+  });
+
+  test("used local suppresses W2901", () => {
+    const result = check(`
+fn double(x: i32) -> i32 {
+  let y: i32 = x + x;
+  return y;
+}
+`);
+    assert.ok(
+      !result.checkDiagnostics.some((d) => d.code === "W2901"),
+      "unexpected W2901 for used local",
+    );
+  });
+
+  test("underscore-prefixed locals suppress unused warnings", () => {
+    const result = check(`
+fn work(_unused: string) -> void {
+  let _result: i32 = 1;
+  return;
+}
+`);
+    assert.ok(
+      !result.checkDiagnostics.some(
+        (d) => d.code === "W2901" || d.code === "W2902",
+      ),
+      "unexpected unused warning for _-prefixed names",
+    );
+  });
+
+  test("for-loop iterator is tracked as a local", () => {
+    const result = check(`
+fn main() -> void {
+  let xs: i32[] = [1, 2, 3];
+  for item in xs {
+    return;
+  }
+}
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "W2901"),
+      "expected W2901 for unused for-loop iterator",
+    );
+  });
+
+  test("match arm binding is tracked as a local", () => {
+    const result = check(`
+fn main() -> void {
+  let value: Result<i32, string> = Ok(1);
+  match value {
+    Ok(v) => { return; },
+    _ => { return; },
+  }
+}
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "W2901"),
+      "expected W2901 for unused match binding",
+    );
   });
 });

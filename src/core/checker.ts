@@ -171,6 +171,7 @@ interface ValueSymbol extends BaseSymbol {
   isGlobal: boolean;
   isConst?: boolean;
   isMutableParam?: boolean;
+  isUsed?: boolean;
 }
 
 interface MethodInfo {
@@ -239,6 +240,7 @@ export class Checker {
   private currentFunctionDepth = 0;
   private currentFunctionInferReturn = false;
   private currentFunctionInferredReturn: Type | null = null;
+  private functionLocals: ValueSymbol[][] = [];
 
   constructor(private program: Program) {
     this.globalScope = this.createScope();
@@ -744,6 +746,8 @@ export class Checker {
     const bodyScope = this.createScope(scope, scope.selfType);
     for (const param of functionType.typeParams)
       bodyScope.typeParams.set(param.name, param);
+
+    this.functionLocals.push([]);
     for (const param of functionType.params) {
       if (!param.name) continue;
       this.declareValue(bodyScope, {
@@ -757,7 +761,10 @@ export class Checker {
       });
     }
 
-    if (node.isExtern) return;
+    if (node.isExtern) {
+      this.functionLocals.pop();
+      return;
+    }
 
     const previousReturnType = this.currentFunctionReturnType;
     const previousDepth = this.currentFunctionDepth;
@@ -785,6 +792,7 @@ export class Checker {
     this.currentFunctionReturnType = previousReturnType;
     this.currentFunctionInferReturn = previousInfer;
     this.currentFunctionInferredReturn = previousInferred;
+    this.warnUnusedLocals(this.functionLocals.pop()!);
   }
 
   private checkTypeDeclaration(symbol: TypeSymbol | undefined, scope: Scope) {
@@ -922,6 +930,8 @@ export class Checker {
     }
     for (const param of resolved.typeParams)
       bodyScope.typeParams.set(param.name, param);
+
+    this.functionLocals.push([]);
     if (resolved.receiver && method.params[0]?.kind === "SelfParameter") {
       this.declareValue(bodyScope, {
         kind: "Value",
@@ -966,6 +976,7 @@ export class Checker {
     this.currentFunctionReturnType = previousReturnType;
     this.currentFunctionInferReturn = previousInfer;
     this.currentFunctionInferredReturn = previousInferred;
+    this.warnUnusedLocals(this.functionLocals.pop()!);
   }
 
   private checkBlockStatement(block: BlockStatement, scope: Scope) {
@@ -1104,6 +1115,7 @@ export class Checker {
   private checkAssignmentStatement(node: AssignmentStatement, scope: Scope) {
     if (!this.isAssignableTarget(node.target)) {
       this.report("Invalid assignment target.", node.target.span, "E2504");
+      this.checkExpression(node.target, scope);
       return;
     }
 
@@ -1130,6 +1142,7 @@ export class Checker {
         this.report(`Unknown identifier '${node.name}'.`, node.span, "E2001");
         return this.errorType();
       }
+      if (!symbol.isGlobal) symbol.isUsed = true;
       if (symbol.isConst)
         this.report("Cannot assign to const binding.", node.span, "E2501");
       if (symbol.isMutableParam === false) {
@@ -1293,6 +1306,8 @@ export class Checker {
       this.report(`Unknown identifier '${node.name}'.`, node.span, "E2001");
       return this.errorType();
     }
+
+    if (!symbol.isGlobal) symbol.isUsed = true;
 
     if (
       this.currentFunctionDepth > 0 &&
@@ -2120,6 +2135,7 @@ export class Checker {
     );
     const bodyScope = this.createScope(scope, scope.selfType);
     bodyScope.typeParams = new Map(scope.typeParams);
+    this.functionLocals.push([]);
     for (const param of functionType.params) {
       if (!param.name) continue;
       this.declareValue(bodyScope, {
@@ -2156,6 +2172,7 @@ export class Checker {
     this.currentFunctionReturnType = previousReturnType;
     this.currentFunctionInferReturn = previousInfer;
     this.currentFunctionInferredReturn = previousInferred;
+    this.warnUnusedLocals(this.functionLocals.pop()!);
     return result;
   }
 
@@ -3747,6 +3764,14 @@ export class Checker {
       return;
     }
     scope.values.set(symbol.name, symbol);
+    if (
+      !symbol.isGlobal &&
+      this.functionLocals.length > 0 &&
+      symbol.name !== "self" &&
+      !symbol.name.startsWith("_")
+    ) {
+      this.functionLocals[this.functionLocals.length - 1].push(symbol);
+    }
   }
 
   private lookupTypeParamBounds(name: string, scope: Scope): NamedRefType[] {
@@ -3787,6 +3812,18 @@ export class Checker {
     if (this.diagnosticSet.has(key)) return;
     this.diagnosticSet.add(key);
     this.diagnostics.push({ severity: "warning", message, span, code });
+  }
+
+  private warnUnusedLocals(frame: ValueSymbol[]): void {
+    for (const symbol of frame) {
+      if (symbol.isUsed) continue;
+      const isParam = symbol.isMutableParam !== undefined;
+      this.warn(
+        `Unused ${isParam ? "parameter" : "local"} '${symbol.name}'.`,
+        symbol.node.span,
+        isParam ? "W2902" : "W2901",
+      );
+    }
   }
 }
 
