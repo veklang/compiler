@@ -1123,6 +1123,26 @@ fn main() -> void {
 `);
   });
 
+  test("Ordering satisfies Equal<Ordering>", () => {
+    checkOk(`
+fn eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
+
+fn main() -> void {
+  let _r = eq(Less, Greater);
+}
+`);
+  });
+
+  test("Ordering satisfies Hashable", () => {
+    checkOk(`
+fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
+
+fn main() -> void {
+  needs_hashable(Equal);
+}
+`);
+  });
+
   test("bool does not satisfy Ordered<bool>", () => {
     const result = check(`
 fn needs_ordered<T: Ordered<T>>(_a: T, _b: T) -> void { return; }

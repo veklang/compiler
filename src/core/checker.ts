@@ -3357,6 +3357,7 @@ export class Checker {
       }
       if (trait.name === "Hashable") {
         if (type.name === "string") return true;
+        if (type.name === "Ordering") return true;
       }
       if (trait.name === "Ordered" && type.name === "string") {
         const typeArg = trait.typeArgs?.[0];
@@ -3463,7 +3464,8 @@ export class Checker {
     if (!this.typeEquals(type, trait.typeArgs[0])) return false;
     return (
       type.kind === "Primitive" ||
-      (type.kind === "Named" && type.name === "string")
+      (type.kind === "Named" &&
+        (type.name === "string" || type.name === "Ordering"))
     );
   }
 
