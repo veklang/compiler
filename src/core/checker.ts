@@ -3004,6 +3004,9 @@ export class Checker {
         this.resolveBuiltinTrait("Unwrappable", [type.typeArgs[0]]),
       );
     }
+    if (type.kind === "Nullable") {
+      candidates.push(this.resolveBuiltinTrait("Unwrappable", [type.base]));
+    }
     if (type.kind === "Named") {
       for (const satisfaction of type.symbol?.satisfactions ?? []) {
         candidates.push(satisfaction.trait);
@@ -3280,31 +3283,135 @@ export class Checker {
     if (type.kind === "TypeParam") {
       return type.bounds.some((bound) => this.namedTypeEquals(bound, trait));
     }
+
     if (type.kind === "Named") {
       if (type.name === "Array" && trait.name === "Iterable") return true;
-      if (trait.name === "Formattable" && this.isFormattable(type)) return true;
       if (trait.name === "Equal" && this.isBuiltinEquatable(type, trait))
         return true;
+      if (trait.name === "Formattable") {
+        if (this.isFormattable(type)) return true;
+        if (type.name === "Ordering") return true;
+        if (type.name === "Array" && type.typeArgs?.[0])
+          return this.typeSatisfiesTrait(
+            type.typeArgs[0],
+            this.resolveBuiltinTrait("Formattable", []),
+            scope,
+          );
+        if (type.name === "Result" && type.typeArgs?.length === 2)
+          return (
+            this.typeSatisfiesTrait(
+              type.typeArgs[0],
+              this.resolveBuiltinTrait("Formattable", []),
+              scope,
+            ) &&
+            this.typeSatisfiesTrait(
+              type.typeArgs[1],
+              this.resolveBuiltinTrait("Formattable", []),
+              scope,
+            )
+          );
+      }
+      if (trait.name === "Hashable") {
+        if (type.name === "string") return true;
+      }
+      if (trait.name === "Ordered" && type.name === "string") {
+        const typeArg = trait.typeArgs?.[0];
+        if (typeArg && this.typeEquals(type, typeArg)) return true;
+      }
+      if (trait.name === "Cloneable") {
+        if (type.name === "string") return true;
+        if (type.name === "Array" && type.typeArgs?.[0])
+          return this.typeSatisfiesTrait(
+            type.typeArgs[0],
+            this.resolveBuiltinTrait("Cloneable", []),
+            scope,
+          );
+      }
+      if (trait.name === "Defaultable") {
+        if (type.name === "string" || type.name === "Array") return true;
+      }
       return (
         type.symbol?.satisfactions?.some((entry) =>
-          this.namedTypeEquals(entry.trait, trait),
+          this.namedTypeEquals(
+            this.substituteOwnerTypeArgs(entry.trait, type),
+            trait,
+          ),
         ) ?? false
       );
     }
+
     if (type.kind === "Primitive") {
       if (trait.name === "Formattable") return this.isFormattable(type);
       if (trait.name === "Equal") return this.isBuiltinEquatable(type, trait);
+      if (trait.name === "Hashable") return true;
+      if (trait.name === "Ordered") {
+        const typeArg = trait.typeArgs?.[0];
+        if (!typeArg || !this.typeEquals(type, typeArg)) return false;
+        return type.name !== "bool";
+      }
+      if (trait.name === "Cloneable") return true;
+      if (trait.name === "Defaultable") return true;
     }
-    if (type.kind === "Tuple" && trait.name === "Equal") {
-      return type.elements.every((element) =>
-        this.typeSatisfiesTrait(
-          element,
-          this.resolveBuiltinTrait("Equal", [element]),
+
+    if (type.kind === "Tuple") {
+      const allSatisfy = (t: NamedRefType) =>
+        type.elements.every((el) => this.typeSatisfiesTrait(el, t, scope));
+      if (trait.name === "Equal")
+        return (
+          allSatisfy(this.resolveBuiltinTrait("Equal", [type])) ||
+          type.elements.every((el) =>
+            this.typeSatisfiesTrait(
+              el,
+              this.resolveBuiltinTrait("Equal", [el]),
+              scope,
+            ),
+          )
+        );
+      if (trait.name === "Formattable")
+        return allSatisfy(this.resolveBuiltinTrait("Formattable", []));
+      if (trait.name === "Hashable")
+        return allSatisfy(this.resolveBuiltinTrait("Hashable", []));
+      if (trait.name === "Cloneable")
+        return allSatisfy(this.resolveBuiltinTrait("Cloneable", []));
+    }
+
+    if (type.kind === "Nullable") {
+      if (trait.name === "Equal")
+        return this.typeSatisfiesTrait(
+          type.base,
+          this.resolveBuiltinTrait("Equal", [type.base]),
           scope,
-        ),
-      );
+        );
+      if (trait.name === "Formattable")
+        return this.typeSatisfiesTrait(
+          type.base,
+          this.resolveBuiltinTrait("Formattable", []),
+          scope,
+        );
+      if (trait.name === "Unwrappable") {
+        const typeArg = trait.typeArgs?.[0];
+        if (!typeArg) return false;
+        return this.typeEquals(type.base, typeArg);
+      }
     }
+
     return false;
+  }
+
+  private substituteOwnerTypeArgs(
+    trait: NamedRefType,
+    owner: NamedRefType,
+  ): NamedRefType {
+    if (!owner.typeArgs?.length || !owner.symbol?.typeParams.length)
+      return trait;
+    const bindings = new Map<string, Type>();
+    for (
+      let i = 0;
+      i < Math.min(owner.symbol.typeParams.length, owner.typeArgs.length);
+      i++
+    )
+      bindings.set(owner.symbol.typeParams[i].name.name, owner.typeArgs[i]);
+    return this.substituteNamedType(trait, bindings);
   }
 
   private isBuiltinEquatable(type: Type, trait: NamedRefType): boolean {

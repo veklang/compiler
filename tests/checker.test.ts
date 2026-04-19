@@ -974,4 +974,150 @@ fn main() -> void {
 }
 `);
   });
+
+  test("primitives satisfy Hashable, Ordered, Cloneable, Defaultable", () => {
+    checkOk(`
+fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
+fn needs_ordered<T: Ordered<T>>(_a: T, _b: T) -> void { return; }
+fn needs_cloneable<T: Cloneable>(_x: T) -> void { return; }
+fn needs_defaultable<T: Defaultable>(_x: T) -> void { return; }
+
+fn main() -> void {
+  needs_hashable(42);
+  needs_ordered(1, 2);
+  needs_cloneable(3);
+  needs_defaultable(4);
+}
+`);
+  });
+
+  test("string satisfies Hashable, Ordered, Cloneable, Defaultable, Formattable", () => {
+    checkOk(`
+fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
+fn needs_ordered<T: Ordered<T>>(_a: T, _b: T) -> void { return; }
+fn needs_cloneable<T: Cloneable>(_x: T) -> void { return; }
+fn needs_formattable<T: Formattable>(x: T) -> string { return x.format(); }
+
+fn main() -> void {
+  let s: string = "hello";
+  needs_hashable(s);
+  needs_ordered(s, s);
+  needs_cloneable(s);
+  needs_formattable(s);
+}
+`);
+  });
+
+  test("tuple satisfies Equal, Formattable, Hashable, Cloneable", () => {
+    checkOk(`
+fn needs_eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
+fn needs_fmt<T: Formattable>(x: T) -> string { return x.format(); }
+fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
+fn needs_cloneable<T: Cloneable>(_x: T) -> void { return; }
+
+fn main() -> void {
+  let pair: (i32, string) = (1, "a");
+  needs_eq(pair, pair);
+  needs_fmt(pair);
+  needs_hashable(pair);
+  needs_cloneable(pair);
+}
+`);
+  });
+
+  test("nullable satisfies Equal and Formattable", () => {
+    checkOk(`
+fn eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
+fn fmt<T: Formattable>(x: T) -> string { return x.format(); }
+
+fn main() -> void {
+  let x: i32? = null;
+  let _e = eq(x, x);
+  let _f = fmt(x);
+}
+`);
+  });
+
+  test("nullable satisfies Unwrappable<T> and unwrap is callable", () => {
+    checkOk(`
+fn main() -> void {
+  let x: i32? = 42;
+  let _v: i32 = x.unwrap();
+}
+`);
+  });
+
+  test("Result satisfies Unwrappable<T> and unwrap is callable", () => {
+    checkOk(`
+fn main() -> void {
+  let r: Result<i32, string> = Ok(1);
+  let _v: i32 = r.unwrap();
+}
+`);
+  });
+
+  test("Array satisfies Formattable when element is Formattable", () => {
+    checkOk(`
+fn fmt<T: Formattable>(x: T) -> string { return x.format(); }
+
+fn main() -> void {
+  let xs: i32[] = [1, 2, 3];
+  let _f = fmt(xs);
+}
+`);
+  });
+
+  test("Ordering satisfies Formattable", () => {
+    checkOk(`
+fn fmt<T: Formattable>(x: T) -> string { return x.format(); }
+
+fn main() -> void {
+  let _f = fmt(Less);
+}
+`);
+  });
+
+  test("bool does not satisfy Ordered<bool>", () => {
+    const result = check(`
+fn needs_ordered<T: Ordered<T>>(_a: T, _b: T) -> void { return; }
+
+fn main() -> void {
+  needs_ordered(true, false);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("struct without Equal satisfaction fails Equal bound", () => {
+    const result = check(`
+struct Point {
+  x: i32;
+  y: i32;
+}
+
+fn needs_eq<T: Equal<T>>(_a: T, _b: T) -> void { return; }
+
+fn main() -> void {
+  let p = Point { x: 1, y: 2 };
+  needs_eq(p, p);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("Array of non-Equal element fails Equal bound", () => {
+    const result = check(`
+struct Item {
+  value: i32;
+}
+
+fn needs_eq<T: Equal<T>>(_a: T, _b: T) -> void { return; }
+
+fn main() -> void {
+  let xs: Item[] = [];
+  needs_eq(xs, xs);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
 });
