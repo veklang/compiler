@@ -692,7 +692,11 @@ export class Checker {
 
     const seenTraits: NamedRefType[] = [];
     for (const satisfaction of satisfactions) {
-      if (seenTraits.some((trait) => this.namedTypeEquals(trait, satisfaction.trait))) {
+      if (
+        seenTraits.some((trait) =>
+          this.namedTypeEquals(trait, satisfaction.trait),
+        )
+      ) {
         this.report(
           `Duplicate satisfies block for trait '${satisfaction.trait.name}'.`,
           satisfaction.span,
@@ -730,7 +734,9 @@ export class Checker {
     }
   }
 
-  private traitSurfaceMethodNames(satisfaction: TraitSatisfactionInfo): string[] {
+  private traitSurfaceMethodNames(
+    satisfaction: TraitSatisfactionInfo,
+  ): string[] {
     const traitSymbol = satisfaction.trait.symbol;
     if (traitSymbol?.kind === "Trait" && traitSymbol.traitDecl) {
       return traitSymbol.traitDecl.methods.map((method) => method.name.name);
@@ -923,7 +929,8 @@ export class Checker {
     this.currentFunctionDepth++;
     this.checkBlockStatement(node.body, bodyScope);
     if (this.currentFunctionInferReturn) {
-      const inferred = this.currentFunctionInferredReturn ?? this.primitive("void");
+      const inferred =
+        this.currentFunctionInferredReturn ?? this.primitive("void");
       symbol.type = {
         ...symbol.type,
         returnType: inferred,
@@ -1110,7 +1117,8 @@ export class Checker {
     this.currentFunctionDepth++;
     this.checkBlockStatement(method.body, bodyScope);
     if (this.currentFunctionInferReturn) {
-      resolved.returnType = this.currentFunctionInferredReturn ?? this.primitive("void");
+      resolved.returnType =
+        this.currentFunctionInferredReturn ?? this.primitive("void");
     }
     this.currentFunctionDepth = previousDepth;
     this.currentFunctionReturnType = previousReturnType;
@@ -1135,7 +1143,10 @@ export class Checker {
         this.currentFunctionInferredReturn = valueType;
         return;
       }
-      const merged = this.mergeBranchTypes(this.currentFunctionInferredReturn, valueType);
+      const merged = this.mergeBranchTypes(
+        this.currentFunctionInferredReturn,
+        valueType,
+      );
       if (!merged) {
         this.report("Return type mismatch.", node.span, "E2302");
       } else {
@@ -2279,22 +2290,48 @@ export class Checker {
         isMutableParam: param.isMutable,
       });
     }
+
     const previousReturnType = this.currentFunctionReturnType;
     const previousDepth = this.currentFunctionDepth;
+    const previousInfer = this.currentFunctionInferReturn;
+    const previousInferred = this.currentFunctionInferredReturn;
+
+    const shouldInfer = !node.returnType && expected?.kind !== "Function";
+    this.currentFunctionInferReturn = shouldInfer;
+    this.currentFunctionInferredReturn = null;
     this.currentFunctionReturnType = functionType.returnType;
     this.currentFunctionDepth++;
     this.checkBlockStatement(node.body, bodyScope);
+
+    let result: FunctionRefType = functionType;
+    if (shouldInfer) {
+      const inferred =
+        this.currentFunctionInferredReturn ?? this.primitive("void");
+      result = { ...functionType, returnType: inferred };
+    }
+
     this.currentFunctionDepth = previousDepth;
     this.currentFunctionReturnType = previousReturnType;
-    return functionType;
+    this.currentFunctionInferReturn = previousInfer;
+    this.currentFunctionInferredReturn = previousInferred;
+    return result;
   }
 
   private checkCast(node: CastExpression, scope: Scope): Type {
     const from = this.checkExpression(node.expression, scope);
     const to = this.resolveType(node.type, scope);
-    if (from.kind === "Primitive" && to.kind === "Primitive") return to;
-    this.report("Invalid cast.", node.span, "E2105");
-    return to;
+    if (this.isValidCast(from, to)) return to;
+    this.report(
+      `Cannot cast '${this.displayType(from)}' to '${this.displayType(to)}'.`,
+      node.span,
+      "E2105",
+    );
+    return this.errorType();
+  }
+
+  private isValidCast(from: Type, to: Type): boolean {
+    if (from.kind === "Error" || to.kind === "Error") return true;
+    return this.isNumericType(from) && this.isNumericType(to);
   }
 
   private checkMatchExpression(
@@ -2844,7 +2881,10 @@ export class Checker {
       };
     }
 
-    if (param.type.kind === "NamedType" && !scope.typeParams.has(param.type.name.name)) {
+    if (
+      param.type.kind === "NamedType" &&
+      !scope.typeParams.has(param.type.name.name)
+    ) {
       const symbol = this.lookupType(param.type.name.name, scope);
       if (symbol?.kind === "Trait") {
         this.report(

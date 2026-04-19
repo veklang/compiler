@@ -107,9 +107,7 @@ const namedExports = (program: Program) => {
       names.add(statement.name.name);
 
     if (statement.kind === "VariableDeclaration" && statement.isPublic) {
-      if (statement.name.kind === "Identifier") names.add(statement.name.name);
-      if (statement.name.kind === "TupleBinding")
-        for (const element of statement.name.elements) names.add(element.name);
+      names.add(statement.name.name);
       continue;
     }
 
@@ -134,11 +132,7 @@ const localSymbols = (program: Program) => {
     if (statement.kind === "FunctionDeclaration")
       declare(statement.name.name, statement.isPublic);
     if (statement.kind === "VariableDeclaration") {
-      if (statement.name.kind === "Identifier")
-        declare(statement.name.name, statement.isPublic);
-      if (statement.name.kind === "TupleBinding")
-        for (const element of statement.name.elements)
-          declare(element.name, statement.isPublic);
+      declare(statement.name.name, statement.isPublic);
       continue;
     }
     if (statement.kind === "TypeAliasDeclaration")
