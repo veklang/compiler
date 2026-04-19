@@ -434,7 +434,69 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2820"]);
   });
 
-  test("anonymous functions may not capture outer locals", () => {
+  test("anonymous function return type is inferred without annotation", () => {
+    checkOk(`
+fn main() -> void {
+  let add = fn(x: i32, y: i32) {
+    return x + y;
+  };
+  let result: i32 = add(1, 2);
+}
+`);
+  });
+
+  test("anonymous function inferred return type is used at call sites", () => {
+    checkOk(`
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+  return f(x);
+}
+
+fn main() -> void {
+  let double = fn(x: i32) {
+    return x * 2;
+  };
+  let result: i32 = apply(double, 3);
+}
+`);
+  });
+
+  test("anonymous function with no return infers void", () => {
+    checkOk(`
+fn main() -> void {
+  let noop = fn(x: i32) {
+    let _ = x;
+    return;
+  };
+  noop(1);
+}
+`);
+  });
+
+  test("anonymous function inferred return type rejects inconsistent branches", () => {
+    const result = check(`
+fn main() -> void {
+  let pick = fn(flag: bool) {
+    if flag {
+      return 1;
+    }
+    return "bad";
+  };
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2302"]);
+  });
+
+  test("anonymous function with explicit return annotation still uses annotation", () => {
+    checkOk(`
+fn main() -> void {
+  let f: fn(i32) -> i32 = fn(x: i32) -> i32 {
+    return x + 1;
+  };
+}
+`);
+  });
+
+  test("anonymous function may not capture outer locals", () => {
     const result = check(`
 fn main() -> void {
   let offset: i32 = 2;
@@ -830,5 +892,43 @@ fn main() -> void {
   }
 }
 `);
+  });
+
+  test("numeric casts are accepted", () => {
+    checkOk(`
+fn main() -> void {
+  let a: i64 = 1 as i64;
+  let b: f32 = 1 as f32;
+  let c: i32 = 9 as i32;
+  let d: u8 = 255 as u8;
+}
+`);
+  });
+
+  test("bool cast to integer is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let x = true as i32;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2105"]);
+  });
+
+  test("integer cast to bool is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let x = 1 as bool;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2105"]);
+  });
+
+  test("null cast is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let x = null as i32;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2105"]);
   });
 });
