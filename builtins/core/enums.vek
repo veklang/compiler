@@ -1,0 +1,40 @@
+pub enum Ordering {
+  Less;
+  Equal;
+  Greater;
+}
+
+pub enum Result<T, E> {
+  Ok(T);
+  Err(E);
+
+  satisfies Unwrappable<T> {
+    fn unwrap(self) -> T {
+      return match self {
+        Ok(value) => value,
+        Err(_) => panic("called unwrap on an Err value"),
+      };
+    }
+
+    fn unwrap_or(self, default: T) -> T {
+      return match self {
+        Ok(value) => value,
+        Err(_) => default,
+      };
+    }
+
+    fn is_some(self) -> bool {
+      return match self {
+        Ok(_) => true,
+        Err(_) => false,
+      };
+    }
+
+    fn is_none(self) -> bool {
+      return match self {
+        Ok(_) => false,
+        Err(_) => true,
+      };
+    }
+  }
+}

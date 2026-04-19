@@ -1,3 +1,7 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { Lexer } from "@/core/lexer";
+import { Parser } from "@/core/parser";
 import type {
   ArrayLiteralExpression,
   AssignmentStatement,
@@ -21,16 +25,12 @@ import type {
   MatchStatement,
   MemberExpression,
   MethodDeclaration,
-  NamedParameter,
   NamedType,
   Node,
-  NullableType,
   Parameter,
   Pattern,
   Program,
   ReturnStatement,
-  SelfParameter,
-  SelfType,
   Statement,
   StructDeclaration,
   StructField,
@@ -246,6 +246,9 @@ export class Checker {
   }
 
   public checkProgram(): CheckResult {
+    const coreStatements = this.loadCoreLibraryStatements();
+    this.predeclareTypes(coreStatements);
+    this.predeclareFunctions(coreStatements);
     this.predeclareTypes();
     this.predeclareFunctions();
     this.materializeTypes();
@@ -255,6 +258,19 @@ export class Checker {
       diagnostics: this.diagnostics,
       types: this.types,
     };
+  }
+
+  private loadCoreLibraryStatements(): Statement[] {
+    const builtinsDir = path.resolve(__dirname, "../../builtins/core");
+    const files = ["panic.vek", "traits.vek", "enums.vek"];
+    const statements: Statement[] = [];
+    for (const file of files) {
+      const source = fs.readFileSync(path.join(builtinsDir, file), "utf8");
+      const lexed = new Lexer(source).lex();
+      const parsed = new Parser(lexed.tokens).parseProgram();
+      statements.push(...parsed.program.body);
+    }
+    return statements;
   }
 
   private createScope(parent?: Scope, selfType?: NamedRefType): Scope {
@@ -277,198 +293,22 @@ export class Checker {
         typeParams: [],
       });
     }
-
-    const builtinType = (name: string, typeParams: string[]) => {
-      this.globalScope.types.set(name, {
-        kind: "BuiltinType",
-        name,
-        node: this.program,
-        typeParams: typeParams.map((param) => this.syntheticTypeParam(param)),
-      });
-    };
-
-    builtinType("Array", ["T"]);
-    builtinType("Map", ["K", "V"]);
-
-    const orderingDecl: EnumDeclaration = {
-      kind: "EnumDeclaration",
-      span: this.program.span,
-      name: this.syntheticIdentifier("Ordering"),
-      typeParams: [],
-      members: [
-        this.syntheticEnumVariant("Less"),
-        this.syntheticEnumVariant("Equal"),
-        this.syntheticEnumVariant("Greater"),
-      ],
-      isPublic: true,
-    };
-    this.globalScope.types.set("Ordering", {
-      kind: "Enum",
-      name: "Ordering",
-      node: orderingDecl,
-      enumDecl: orderingDecl,
-      typeParams: [],
-    });
-
-    const resultDecl: EnumDeclaration = {
-      kind: "EnumDeclaration",
-      span: this.program.span,
-      name: this.syntheticIdentifier("Result"),
-      typeParams: [this.syntheticTypeParam("T"), this.syntheticTypeParam("E")],
-      members: [
-        this.syntheticEnumVariant("Ok", [this.syntheticNamedType("T")]),
-        this.syntheticEnumVariant("Err", [this.syntheticNamedType("E")]),
-      ],
-      isPublic: true,
-    };
-    this.globalScope.types.set("Result", {
-      kind: "Enum",
-      name: "Result",
-      node: resultDecl,
-      enumDecl: resultDecl,
-      typeParams: resultDecl.typeParams ?? [],
-    });
-
-    const builtinTrait = (
-      name: string,
-      typeParams: string[],
-      methods: TraitMethodSignature[],
-    ) => {
-      const decl: TraitDeclaration = {
-        kind: "TraitDeclaration",
-        span: this.program.span,
-        name: this.syntheticIdentifier(name),
-        typeParams: typeParams.map((param) => this.syntheticTypeParam(param)),
-        methods,
-        isPublic: true,
-      };
-      this.globalScope.types.set(name, {
-        kind: "Trait",
-        name,
-        node: decl,
-        traitDecl: decl,
-        typeParams: decl.typeParams ?? [],
-      });
-    };
-
-    builtinTrait(
-      "Equal",
-      ["T"],
-      [
-        this.syntheticTraitMethod(
-          "equals",
-          [
-            this.syntheticSelfParam(false),
-            this.syntheticNamedParam("other", this.syntheticNamedType("T")),
-          ],
-          this.syntheticNamedType("bool"),
-        ),
-      ],
-    );
-    builtinTrait(
-      "Hashable",
-      [],
-      [
-        this.syntheticTraitMethod(
-          "hash",
-          [this.syntheticSelfParam(false)],
-          this.syntheticNamedType("u64"),
-        ),
-      ],
-    );
-    builtinTrait(
-      "Ordered",
-      ["T"],
-      [
-        this.syntheticTraitMethod(
-          "compare",
-          [
-            this.syntheticSelfParam(false),
-            this.syntheticNamedParam("other", this.syntheticNamedType("T")),
-          ],
-          this.syntheticNamedType("Ordering"),
-        ),
-      ],
-    );
-    builtinTrait(
-      "Cloneable",
-      [],
-      [
-        this.syntheticTraitMethod(
-          "clone",
-          [this.syntheticSelfParam(false)],
-          this.syntheticSelfType(),
-        ),
-      ],
-    );
-    builtinTrait(
-      "Iterable",
-      ["T"],
-      [
-        this.syntheticTraitMethod(
-          "next",
-          [this.syntheticSelfParam(true)],
-          this.syntheticNullableType(this.syntheticNamedType("T")),
-        ),
-      ],
-    );
-    builtinTrait(
-      "Defaultable",
-      [],
-      [this.syntheticTraitMethod("default", [], this.syntheticSelfType())],
-    );
-    builtinTrait(
-      "Formattable",
-      [],
-      [
-        this.syntheticTraitMethod(
-          "format",
-          [this.syntheticSelfParam(false)],
-          this.syntheticNamedType("string"),
-        ),
-      ],
-    );
-    builtinTrait(
-      "Unwrappable",
-      ["T"],
-      [
-        this.syntheticTraitMethod(
-          "unwrap",
-          [this.syntheticSelfParam(false)],
-          this.syntheticNamedType("T"),
-        ),
-      ],
-    );
-
-    const panicType: FunctionRefType = {
-      kind: "Function",
-      typeParams: [],
-      params: [
-        { name: "message", type: this.primitive("string"), isMutable: false },
-      ],
-      returnType: this.primitive("void"),
-      target: {
-        kind: "function",
-        name: "panic",
-        typeParams: [],
-        params: [
-          { name: "message", type: this.primitive("string"), isMutable: false },
-        ],
-        returnType: this.primitive("void"),
-      },
-    };
-    this.globalScope.values.set("panic", {
-      kind: "BuiltinFunction",
-      name: "panic",
+    this.globalScope.types.set("Array", {
+      kind: "BuiltinType",
+      name: "Array",
       node: this.program,
-      type: panicType,
-      functionDepth: 0,
-      isGlobal: true,
+      typeParams: [this.syntheticTypeParam("T")],
+    });
+    this.globalScope.types.set("Map", {
+      kind: "BuiltinType",
+      name: "Map",
+      node: this.program,
+      typeParams: [this.syntheticTypeParam("K"), this.syntheticTypeParam("V")],
     });
   }
 
-  private predeclareTypes() {
-    for (const statement of this.program.body) {
+  private predeclareTypes(statements: Statement[] = this.program.body) {
+    for (const statement of statements) {
       if (statement.kind === "TypeAliasDeclaration") {
         this.declareType(this.globalScope, {
           kind: "Alias",
@@ -509,8 +349,8 @@ export class Checker {
     }
   }
 
-  private predeclareFunctions() {
-    for (const statement of this.program.body) {
+  private predeclareFunctions(statements: Statement[] = this.program.body) {
+    for (const statement of statements) {
       if (statement.kind !== "FunctionDeclaration") continue;
       const type = this.resolveFunctionDeclarationSignature(
         statement,
@@ -3798,73 +3638,6 @@ export class Checker {
       kind: "TypeParameter",
       span: this.program.span,
       name: this.syntheticIdentifier(name),
-    };
-  }
-
-  private syntheticNamedType(name: string): NamedType {
-    return {
-      kind: "NamedType",
-      span: this.program.span,
-      name: this.syntheticIdentifier(name),
-    };
-  }
-
-  private syntheticSelfType(): SelfType {
-    return {
-      kind: "SelfType",
-      span: this.program.span,
-    };
-  }
-
-  private syntheticNullableType(base: TypeNode): NullableType {
-    return {
-      kind: "NullableType",
-      span: this.program.span,
-      base,
-    };
-  }
-
-  private syntheticSelfParam(isMutable: boolean): SelfParameter {
-    return {
-      kind: "SelfParameter",
-      span: this.program.span,
-      isMutable,
-    };
-  }
-
-  private syntheticNamedParam(name: string, type: TypeNode): NamedParameter {
-    return {
-      kind: "NamedParameter",
-      span: this.program.span,
-      name: this.syntheticIdentifier(name),
-      type,
-      isMutable: false,
-    };
-  }
-
-  private syntheticTraitMethod(
-    name: string,
-    params: Parameter[],
-    returnType: TypeNode,
-  ): TraitMethodSignature {
-    return {
-      kind: "TraitMethodSignature",
-      span: this.program.span,
-      name: this.syntheticIdentifier(name),
-      params,
-      returnType,
-    };
-  }
-
-  private syntheticEnumVariant(
-    name: string,
-    payload?: TypeNode[],
-  ): EnumVariant {
-    return {
-      kind: "EnumVariant",
-      span: this.program.span,
-      name: this.syntheticIdentifier(name),
-      payload,
     };
   }
 

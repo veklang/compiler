@@ -1,0 +1,34 @@
+pub trait Equal<T> {
+  fn equals(self, other: T) -> bool;
+}
+
+pub trait Hashable {
+  fn hash(self) -> u64;
+}
+
+pub trait Ordered<T> {
+  fn compare(self, other: T) -> Ordering;
+}
+
+pub trait Cloneable {
+  fn clone(self) -> Self;
+}
+
+pub trait Iterable<T> {
+  fn next(mut self) -> T?;
+}
+
+pub trait Defaultable {
+  fn default() -> Self;
+}
+
+pub trait Formattable {
+  fn format(self) -> string;
+}
+
+pub trait Unwrappable<T> {
+  fn unwrap(self) -> T;
+  fn unwrap_or(self, default: T) -> T;
+  fn is_some(self) -> bool;
+  fn is_none(self) -> bool;
+}
