@@ -88,12 +88,7 @@ export interface VariableDeclaration extends Node {
   isPublic: boolean;
 }
 
-export type BindingPattern = Identifier | TupleBinding;
-
-export interface TupleBinding extends Node {
-  kind: "TupleBinding";
-  elements: Identifier[];
-}
+export type BindingPattern = Identifier;
 
 export interface TypeAliasDeclaration extends Node {
   kind: "TypeAliasDeclaration";
