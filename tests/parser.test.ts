@@ -249,4 +249,43 @@ fn push_one(xs: mut i32[]) -> void {
       true,
     );
   });
+
+  test("struct keyword in type position is rejected", () => {
+    const result = parse(`let x: struct = 1;`);
+    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
+  });
+
+  test("let keyword in type position is rejected", () => {
+    const result = parse(`let x: let = 1;`);
+    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
+  });
+
+  test("trait keyword in type position is rejected", () => {
+    const result = parse(`let x: trait = 1;`);
+    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
+  });
+
+  test("void and null are valid in type position", () => {
+    parseOk(`
+fn nothing() -> void {
+  return;
+}
+
+fn maybe() -> null {
+  return null;
+}
+`);
+  });
+
+  test("Self is valid as a return type", () => {
+    parseOk(`
+struct Foo {
+  id: i32;
+
+  fn make(id: i32) -> Self {
+    return Self { id };
+  }
+}
+`);
+  });
 });

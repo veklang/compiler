@@ -1206,9 +1206,19 @@ export class Parser {
     return this.parseNamedType();
   }
 
+  private static readonly typeKeywords = new Set(["void", "null", "Self"]);
+
   private parseNamedType(): NamedType | null {
     const token = this.advance();
     if (!token) return null;
+    if (token.kind === "Keyword" && !Parser.typeKeywords.has(token.lexeme)) {
+      this.report(
+        `'${token.lexeme}' is a keyword and cannot be used as a type name.`,
+        token.span,
+        "E1051",
+      );
+      return this.placeholderNamedType(token.span);
+    }
     if (token.kind !== "Identifier" && token.kind !== "Keyword") {
       this.report("Expected type.", token.span, "E1050");
       return this.placeholderNamedType(token.span);
