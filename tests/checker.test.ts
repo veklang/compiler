@@ -303,6 +303,19 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2101"]);
   });
 
+  test("match expression with heterogeneous arms passes when each satisfies expected type", () => {
+    checkOk(`
+fn main() -> void {
+  let value: Result<i32, string> = Ok(1);
+
+  let _n: i32? = match value {
+    Ok(v) => v,
+    _ => null,
+  };
+}
+`);
+  });
+
   test("match expression requires wildcard arm", () => {
     const result = check(`
 fn main() -> void {
