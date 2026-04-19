@@ -2182,26 +2182,53 @@ export class Checker {
     expected?: Type,
   ): Type {
     const matchedType = this.checkExpression(node.expression, scope);
+    const coverage = this.createCoverageTracker(matchedType);
+    const priorPatterns: Pattern[] = [];
     let resultType: Type | null = expected ?? null;
     let hasWildcard = false;
 
     for (const arm of node.arms) {
       if (arm.pattern.kind === "WildcardPattern") hasWildcard = true;
+
+      if (
+        priorPatterns.some((pattern) =>
+          this.patternCovers(pattern, arm.pattern, matchedType, scope),
+        )
+      ) {
+        this.warn(
+          "Match arm is shadowed by an earlier arm.",
+          arm.span,
+          "W2602",
+        );
+      }
+
       const armScope = this.createScope(scope, scope.selfType);
       armScope.typeParams = new Map(scope.typeParams);
-      this.bindPattern(arm.pattern, matchedType, armScope, scope);
+      this.bindPattern(arm.pattern, matchedType, armScope, scope, coverage);
       const armType = this.checkExpression(arm.expression, armScope, expected);
-      if (!resultType) resultType = armType;
-      else {
-        const merged = this.mergeBranchTypes(resultType, armType);
-        if (!merged) {
+      priorPatterns.push(arm.pattern);
+
+      if (expected) {
+        if (!this.isAssignable(armType, expected)) {
           this.report(
             "Match expression arms must have a single type.",
             arm.span,
             "E2101",
           );
-        } else {
-          resultType = merged;
+        }
+      } else {
+        if (!resultType) resultType = armType;
+        else {
+          const merged = this.mergeBranchTypes(resultType, armType);
+          if (!merged) {
+            this.report(
+              "Match expression arms must have a single type.",
+              arm.span,
+              "E2101",
+            );
+          } else {
+            resultType = merged;
+          }
         }
       }
     }

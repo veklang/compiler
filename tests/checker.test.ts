@@ -273,6 +273,36 @@ let user = User { id: 1, name: "a", id: 2 };
     expectDiagnostics(result.checkDiagnostics, ["E2002"]);
   });
 
+  test("match expression warns on shadowed arms", () => {
+    const result = check(`
+fn main() -> void {
+  let value: Result<i32, string> = Ok(1);
+  let label = match value {
+    Ok(v) => v.format(),
+    _ => "other",
+    Ok(_) => "shadowed",
+  };
+}
+`);
+    assert.equal(
+      result.checkDiagnostics.some((d) => d.code === "W2602"),
+      true,
+    );
+  });
+
+  test("match expression with expected type checks each arm individually", () => {
+    const result = check(`
+fn main() -> void {
+  let value: Result<i32, string> = Ok(1);
+  let label: string = match value {
+    Ok(v) => v.format(),
+    _ => 42,
+  };
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
   test("match expression requires wildcard arm", () => {
     const result = check(`
 fn main() -> void {
