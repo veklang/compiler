@@ -917,6 +917,8 @@ export class Checker {
       });
     }
 
+    if (node.isExtern) return;
+
     const previousReturnType = this.currentFunctionReturnType;
     const previousDepth = this.currentFunctionDepth;
     const previousInfer = this.currentFunctionInferReturn;
@@ -927,7 +929,7 @@ export class Checker {
       ? functionType.returnType
       : this.unknownType();
     this.currentFunctionDepth++;
-    this.checkBlockStatement(node.body, bodyScope);
+    this.checkBlockStatement(node.body!, bodyScope);
     if (this.currentFunctionInferReturn) {
       const inferred =
         this.currentFunctionInferredReturn ?? this.primitive("void");

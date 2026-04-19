@@ -16,6 +16,7 @@ export const keywords = [
   "const",
   "fn",
   "inline",
+  "extern",
   "struct",
   "type",
   "trait",

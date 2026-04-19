@@ -964,4 +964,14 @@ fn main() -> void {
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2101"]);
   });
+
+  test("extern fn is callable and return type is checked", () => {
+    checkOk(`
+extern fn add(a: i32, b: i32) -> i32;
+
+fn main() -> void {
+  let x: i32 = add(1, 2);
+}
+`);
+  });
 });

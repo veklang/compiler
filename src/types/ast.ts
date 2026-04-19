@@ -54,8 +54,9 @@ export interface FunctionDeclaration extends Node {
   params: Parameter[];
   returnType?: TypeNode;
   whereClause?: WhereConstraint[];
-  body: BlockStatement;
+  body?: BlockStatement;
   isInline: boolean;
+  isExtern: boolean;
   isPublic: boolean;
 }
 

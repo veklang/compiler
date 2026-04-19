@@ -146,6 +146,7 @@ export class Parser {
   ): FunctionDeclaration | null {
     const before = this.current;
     const isInline = !!this.matchKeyword("inline");
+    const isExtern = !!this.matchKeyword("extern");
     if (!this.checkKeyword("fn")) {
       this.current = before;
       return null;
@@ -158,6 +159,23 @@ export class Parser {
     const params = this.parseParameterList();
     const returnType = this.matchOperator("->") ? this.parseType() : undefined;
     const whereClause = this.parseWhereClause();
+
+    if (isExtern) {
+      const semi = this.expectPunctuator(";");
+      return {
+        kind: "FunctionDeclaration",
+        span: this.spanFrom(start?.span, semi?.span),
+        name,
+        typeParams,
+        params,
+        returnType: returnType ?? undefined,
+        whereClause,
+        isInline,
+        isExtern,
+        isPublic,
+      };
+    }
+
     const body = this.parseBlockStatement();
 
     return {
@@ -170,6 +188,7 @@ export class Parser {
       whereClause,
       body,
       isInline,
+      isExtern,
       isPublic,
     };
   }

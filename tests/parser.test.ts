@@ -296,4 +296,15 @@ struct Foo {
 }
 `);
   });
+
+  test("extern fn declaration without body is parsed", () => {
+    const program = parseOk(`
+pub extern fn panic(message: string) -> void;
+extern fn add(a: i32, b: i32) -> i32;
+`);
+    assert.deepEqual(getProgramBodyKinds(program), [
+      "FunctionDeclaration",
+      "FunctionDeclaration",
+    ]);
+  });
 });
