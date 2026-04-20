@@ -1,0 +1,146 @@
+# IR Program Structure
+
+## IrProgram
+
+```ts
+interface IrProgram {
+  version: 1;
+  sourceFiles: IrSourceFile[];
+  declarations: IrDeclaration[];
+  entry?: IrFunctionId;
+  runtime: IrRuntimeRequirements;
+}
+
+type IrDeclaration =
+  | IrFunction
+  | IrGlobal
+  | IrTypeDeclaration
+  | IrConstantData;
+```
+
+`IrProgram.declarations` contains only IR-level declarations:
+
+- functions
+- globals
+- type declarations needed by C emission
+- constant data
+
+Declaration order is not semantically significant. The C emitter may reorder
+declarations as needed for prototypes and definitions.
+
+Constant data is static immutable data emitted outside function bodies.
+
+```ts
+interface IrConstantData {
+  kind: "constant_data";
+  id: string;
+  linkName: string;
+  type: IrType;
+  value: IrConst;
+}
+```
+
+## Source Files
+
+```ts
+type IrSourceFileId = string;
+
+interface IrSourceFile {
+  id: IrSourceFileId;
+  path?: string;
+}
+```
+
+Source file ids are used only for debug spans and diagnostics. They do not affect
+runtime behavior.
+
+## Runtime Requirements
+
+```ts
+interface IrRuntimeRequirements {
+  panic: boolean;
+  strings: boolean;
+  arrays: IrType[];
+  refCounting: boolean;
+  copyOnWrite: boolean;
+}
+```
+
+The runtime requirements describe which runtime headers and objects the emitted
+C needs. They are derived from IR instructions and types.
+
+The C emitter must not silently emit calls to runtime helpers not declared by
+`runtime`.
+
+## Identifiers and Names
+
+IR ids are stable within one `IrProgram` and are not user-facing.
+
+```ts
+type IrFunctionId = string;
+type IrGlobalId = string;
+type IrTypeDeclId = string;
+type IrBlockId = string;
+type IrLocalId = string;
+type IrTempId = string;
+```
+
+Recommended generated forms:
+
+- functions: `fn.N`
+- globals: `global.N`
+- type declarations: `type.N`
+- blocks: `bb.N`
+- locals: `local.N`
+- temporaries: `tmp.N`
+
+The emitter is responsible for turning ids and symbolic names into C-safe names.
+
+### Symbol Names
+
+Every emitted function has both:
+
+- an internal `IrFunctionId`
+- a C-safe `linkName`
+
+```ts
+interface IrFunction {
+  id: IrFunctionId;
+  sourceName?: string;
+  linkName: string;
+  signature: IrFunctionType;
+  params: IrParam[];
+  locals: IrLocal[];
+  blocks: IrBlock[];
+  body: "defined" | "extern";
+  span?: IrSpan;
+}
+```
+
+Rules:
+
+- Non-generic functions use their declared name unless collision avoidance is
+  required.
+- Generic specializations use monomorphized mangled names.
+- Methods include their owner type in the mangled name.
+- Runtime helpers use reserved `__vek_*` names.
+- User-visible names must never be trusted as already C-safe.
+
+## Source Spans
+
+```ts
+interface IrSpan {
+  file: IrSourceFileId;
+  start: { index: number; line: number; column: number };
+  end: { index: number; line: number; column: number };
+}
+```
+
+Spans are optional but should be preserved where practical for:
+
+- generated C comments in debug mode
+- backend diagnostics
+- IR validation errors
+- source maps or future tooling
+
+Spans must not affect emitted program behavior.
