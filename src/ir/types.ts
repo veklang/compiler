@@ -24,7 +24,11 @@ export interface IrRuntimeRequirements {
   copyOnWrite: boolean;
 }
 
-export type IrDeclaration = IrFunction | IrGlobal | IrStructDeclaration;
+export type IrDeclaration =
+  | IrFunction
+  | IrGlobal
+  | IrStructDeclaration
+  | IrEnumDeclaration;
 
 export type IrSourceFileId = string;
 export type IrFunctionId = string;
@@ -71,6 +75,21 @@ export interface IrStructField {
   name: string;
   type: IrType;
   index: number;
+}
+
+export interface IrEnumDeclaration {
+  kind: "enum_decl";
+  id: IrTypeDeclId;
+  sourceName?: string;
+  linkName: string;
+  variants: IrEnumVariant[];
+  span?: Span;
+}
+
+export interface IrEnumVariant {
+  name: string;
+  tag: number;
+  payloadTypes: IrType[];
 }
 
 export interface IrFunctionType {
@@ -132,6 +151,7 @@ export interface IrNamedType {
   kind: "named";
   name: string;
   args: IrType[];
+  decl?: "struct" | "enum";
 }
 
 export interface IrNullableType {
@@ -210,7 +230,10 @@ export type IrInstruction =
   | IrCastInstruction
   | IrConstructStructInstruction
   | IrGetFieldInstruction
-  | IrSetFieldInstruction;
+  | IrSetFieldInstruction
+  | IrConstructEnumInstruction
+  | IrGetTagInstruction
+  | IrGetEnumPayloadInstruction;
 
 export interface IrAssignInstruction {
   kind: "assign";
@@ -278,6 +301,35 @@ export interface IrSetFieldInstruction {
   target: IrLocalId;
   field: string;
   value: IrOperand;
+  span?: Span;
+}
+
+export interface IrConstructEnumInstruction {
+  kind: "construct_enum";
+  target: IrTempId;
+  declId: IrTypeDeclId;
+  variant: string;
+  tag: number;
+  payload: IrOperand[];
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrGetTagInstruction {
+  kind: "get_tag";
+  target: IrTempId;
+  object: IrOperand;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrGetEnumPayloadInstruction {
+  kind: "get_enum_payload";
+  target: IrTempId;
+  object: IrOperand;
+  variant: string;
+  index: number;
+  type: IrType;
   span?: Span;
 }
 

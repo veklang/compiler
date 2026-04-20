@@ -3,6 +3,8 @@ import type {
   IrBlockId,
   IrConst,
   IrDeclaration,
+  IrEnumDeclaration,
+  IrEnumVariant,
   IrFunction,
   IrLocal,
   IrLocalId,
@@ -25,6 +27,8 @@ import type {
   CallExpression,
   CastExpression,
   ContinueStatement,
+  EnumDeclaration,
+  EnumVariant,
   Expression,
   ForStatement,
   FunctionDeclaration,
@@ -33,6 +37,7 @@ import type {
   IfStatement,
   LiteralExpression,
   MatchStatement,
+  MatchStatementArm,
   MemberExpression,
   NamedParameter,
   Node,
@@ -56,6 +61,14 @@ interface IrTypeSource {
   types: WeakMap<Node, unknown>;
 }
 
+interface VariantInfo {
+  enumName: string;
+  declId: IrTypeDeclId;
+  variantName: string;
+  tag: number;
+  payloadTypes: IrType[];
+}
+
 interface LowerContext {
   checkResult: IrTypeSource;
   runtime: IrRuntimeRequirements;
@@ -68,6 +81,7 @@ interface LowerContext {
   loopExit?: IrBlockId;
   loopContinue?: IrBlockId;
   structFields: Map<string, IrStructField[]>;
+  variantInfos: Map<string, VariantInfo>;
 }
 
 export function lowerProgramToIr(
@@ -78,12 +92,15 @@ export function lowerProgramToIr(
   const runtime = emptyRuntimeRequirements();
   const declarations: IrDeclaration[] = [];
   const structFields = new Map<string, IrStructField[]>();
+  const variantInfos = new Map<string, VariantInfo>();
   let entry: string | undefined;
 
   for (const statement of program.body) {
-    if (statement.kind !== "StructDeclaration") continue;
-    const decl = lowerStructDeclaration(statement, structFields);
-    declarations.push(decl);
+    if (statement.kind === "StructDeclaration") {
+      declarations.push(lowerStructDeclaration(statement, structFields));
+    } else if (statement.kind === "EnumDeclaration") {
+      declarations.push(lowerEnumDeclaration(statement, variantInfos));
+    }
   }
 
   for (const statement of program.body) {
@@ -93,6 +110,7 @@ export function lowerProgramToIr(
       checkResult,
       runtime,
       structFields,
+      variantInfos,
     );
     declarations.push(lowered);
     if (statement.name.name === "main") entry = lowered.id;
@@ -130,11 +148,42 @@ function lowerStructDeclaration(
   };
 }
 
+function lowerEnumDeclaration(
+  node: EnumDeclaration,
+  variantInfos: Map<string, VariantInfo>,
+): IrEnumDeclaration {
+  const id: IrTypeDeclId = `enum.${node.name.name}`;
+  const declId = id;
+  const variants: IrEnumVariant[] = node.members
+    .filter((m): m is EnumVariant => m.kind === "EnumVariant")
+    .map((variant, tag) => {
+      const payloadTypes = (variant.payload ?? []).map(typeFromTypeNode);
+      const info: VariantInfo = {
+        enumName: node.name.name,
+        declId,
+        variantName: variant.name.name,
+        tag,
+        payloadTypes,
+      };
+      variantInfos.set(variant.name.name, info);
+      return { name: variant.name.name, tag, payloadTypes };
+    });
+  return {
+    kind: "enum_decl",
+    id,
+    sourceName: node.name.name,
+    linkName: node.name.name,
+    variants,
+    span: node.span,
+  };
+}
+
 function lowerFunction(
   node: FunctionDeclaration,
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
   structFields: Map<string, IrStructField[]>,
+  variantInfos: Map<string, VariantInfo>,
 ): IrFunction {
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
@@ -147,6 +196,7 @@ function lowerFunction(
     nextLocal: 0,
     nextTemp: 0,
     structFields,
+    variantInfos,
   };
 
   const params = node.params
@@ -441,11 +491,199 @@ function lowerForStatement(_statement: ForStatement, _context: LowerContext) {
   );
 }
 
-function lowerMatchStatement(
-  _statement: MatchStatement,
-  _context: LowerContext,
+function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
+  const matchOperand = lowerExpression(statement.expression, context);
+  const joinBlock = newBlock(context);
+
+  const armBlocks = statement.arms.map(() => newBlock(context));
+  const defaultBlock = newBlock(context);
+
+  const matchType = matchOperand.type;
+  const isEnum =
+    matchType.kind === "named" &&
+    [...context.variantInfos.values()].some(
+      (v) => v.enumName === (matchType as { name: string }).name,
+    );
+
+  if (isEnum) {
+    const tagTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "get_tag",
+      target: tagTarget,
+      object: matchOperand,
+      type: irPrimitive("i32"),
+    });
+    const tagOperand: IrOperand = {
+      kind: "temp",
+      id: tagTarget,
+      type: irPrimitive("i32"),
+    };
+
+    const switchCases: { value: IrConst; target: IrBlockId }[] = [];
+    let defaultTarget = defaultBlock.id;
+
+    for (let i = 0; i < statement.arms.length; i++) {
+      const arm = statement.arms[i];
+      const armBlock = armBlocks[i];
+      const pattern = arm.pattern;
+
+      if (pattern.kind === "WildcardPattern") {
+        defaultTarget = armBlock.id;
+      } else if (pattern.kind === "IdentifierPattern") {
+        const variantInfo = context.variantInfos.get(pattern.name.name);
+        if (variantInfo) {
+          switchCases.push({
+            value: { kind: "int", value: String(variantInfo.tag) },
+            target: armBlock.id,
+          });
+        } else {
+          defaultTarget = armBlock.id;
+        }
+      } else if (pattern.kind === "EnumPattern") {
+        const variantInfo = context.variantInfos.get(pattern.name.name);
+        if (variantInfo) {
+          switchCases.push({
+            value: { kind: "int", value: String(variantInfo.tag) },
+            target: armBlock.id,
+          });
+        }
+      }
+    }
+
+    context.currentBlock.terminator = {
+      kind: "switch",
+      value: tagOperand,
+      cases: switchCases,
+      defaultTarget,
+      span: statement.span,
+    };
+  } else {
+    lowerNonEnumMatch(
+      statement,
+      matchOperand,
+      armBlocks,
+      defaultBlock,
+      context,
+    );
+  }
+
+  for (let i = 0; i < statement.arms.length; i++) {
+    const arm = statement.arms[i];
+    const armBlock = armBlocks[i];
+    switchBlock(context, armBlock);
+    lowerMatchArmBindings(arm, matchOperand, context);
+    const savedLocals = saveLocals(context);
+    lowerBlock(arm.body, context);
+    restoreLocals(context, savedLocals);
+    if (!isTerminated(context)) {
+      context.currentBlock.terminator = {
+        kind: "branch",
+        target: joinBlock.id,
+      };
+    }
+  }
+
+  switchBlock(context, defaultBlock);
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = { kind: "branch", target: joinBlock.id };
+  }
+
+  switchBlock(context, joinBlock);
+}
+
+function lowerNonEnumMatch(
+  statement: MatchStatement,
+  matchOperand: IrOperand,
+  armBlocks: IrBlock[],
+  defaultBlock: IrBlock,
+  context: LowerContext,
 ) {
-  throw new Error("IR lowering does not support match statements yet.");
+  let defaultTarget = defaultBlock.id;
+  const switchCases: { value: IrConst; target: IrBlockId }[] = [];
+
+  for (let i = 0; i < statement.arms.length; i++) {
+    const arm = statement.arms[i];
+    const armBlock = armBlocks[i];
+    const pattern = arm.pattern;
+
+    if (pattern.kind === "WildcardPattern") {
+      defaultTarget = armBlock.id;
+    } else if (pattern.kind === "IdentifierPattern") {
+      defaultTarget = armBlock.id;
+    } else if (pattern.kind === "LiteralPattern") {
+      const c = constFromLiteral(pattern.literal);
+      switchCases.push({ value: c, target: armBlock.id });
+    }
+  }
+
+  context.currentBlock.terminator = {
+    kind: "switch",
+    value: matchOperand,
+    cases: switchCases,
+    defaultTarget,
+    span: statement.span,
+  };
+}
+
+function lowerMatchArmBindings(
+  arm: MatchStatementArm,
+  matchOperand: IrOperand,
+  context: LowerContext,
+) {
+  const pattern = arm.pattern;
+
+  if (
+    pattern.kind === "IdentifierPattern" &&
+    !context.variantInfos.has(pattern.name.name)
+  ) {
+    const local = declareLocal(
+      context,
+      pattern.name.name,
+      matchOperand.type,
+      true,
+      pattern.span,
+    );
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: local.id,
+      value: matchOperand,
+      span: pattern.span,
+    });
+  } else if (pattern.kind === "EnumPattern") {
+    const variantInfo = context.variantInfos.get(pattern.name.name);
+    if (variantInfo) {
+      for (let i = 0; i < pattern.args.length; i++) {
+        const arg = pattern.args[i];
+        if (arg.kind !== "IdentifierPattern") continue;
+        const payloadType = variantInfo.payloadTypes[i] ?? {
+          kind: "unknown" as const,
+        };
+        const tempId = nextTemp(context);
+        context.currentBlock.instructions.push({
+          kind: "get_enum_payload",
+          target: tempId,
+          object: matchOperand,
+          variant: variantInfo.variantName,
+          index: i,
+          type: payloadType,
+          span: arg.span,
+        });
+        const local = declareLocal(
+          context,
+          arg.name.name,
+          payloadType,
+          true,
+          arg.span,
+        );
+        context.currentBlock.instructions.push({
+          kind: "assign",
+          target: local.id,
+          value: { kind: "temp", id: tempId, type: payloadType },
+          span: arg.span,
+        });
+      }
+    }
+  }
 }
 
 function lowerExpression(
@@ -493,6 +731,27 @@ function lowerIdentifier(
       id: local,
       type: typeFromNode(context.checkResult, expression),
     };
+  }
+  const variant = context.variantInfos.get(expression.name);
+  if (variant && variant.payloadTypes.length === 0) {
+    const target = nextTemp(context);
+    const type: IrType = {
+      kind: "named",
+      name: variant.enumName,
+      args: [],
+      decl: "enum",
+    };
+    context.currentBlock.instructions.push({
+      kind: "construct_enum",
+      target,
+      declId: variant.declId,
+      variant: variant.variantName,
+      tag: variant.tag,
+      payload: [],
+      type,
+      span: expression.span,
+    });
+    return { kind: "temp", id: target, type };
   }
   return {
     kind: "function",
@@ -551,6 +810,33 @@ function lowerCall(
   const type = typeFromNode(context.checkResult, expression);
   const callee = lowerExpression(expression.callee, context);
   const returnsVoid = type.kind === "primitive" && type.name === "void";
+
+  if (callee.kind === "function") {
+    const variant = context.variantInfos.get(callee.name);
+    if (variant && variant.payloadTypes.length > 0) {
+      const target = nextTemp(context);
+      const enumType: IrType = {
+        kind: "named",
+        name: variant.enumName,
+        args: [],
+        decl: "enum",
+      };
+      const payload = expression.args.map((arg) =>
+        lowerExpression(arg, context),
+      );
+      context.currentBlock.instructions.push({
+        kind: "construct_enum",
+        target,
+        declId: variant.declId,
+        variant: variant.variantName,
+        tag: variant.tag,
+        payload,
+        type: enumType,
+        span: expression.span,
+      });
+      return { kind: "temp", id: target, type: enumType };
+    }
+  }
 
   if (callee.kind === "function" && callee.name === "panic") {
     context.runtime.panic = true;

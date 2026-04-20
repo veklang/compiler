@@ -29,6 +29,13 @@ export function validateIr(program: IrProgram): IrValidationResult {
         });
       }
       structIds.add(declaration.id);
+    } else if (declaration.kind === "enum_decl") {
+      if (structIds.has(declaration.id)) {
+        diagnostics.push({
+          message: `Duplicate type decl id '${declaration.id}'.`,
+        });
+      }
+      structIds.add(declaration.id);
     }
   }
 
@@ -159,6 +166,27 @@ function validateInstruction(
     validateOperand(fn, instruction.callee, locals, temps, diagnostics);
     for (const arg of instruction.args)
       validateOperand(fn, arg, locals, temps, diagnostics);
+    return;
+  }
+
+  if (instruction.kind === "construct_enum") {
+    if (!structIds.has(instruction.declId)) {
+      diagnostics.push({
+        message: `construct_enum in '${fn.id}' references unknown enum '${instruction.declId}'.`,
+      });
+    }
+    for (const p of instruction.payload)
+      validateOperand(fn, p, locals, temps, diagnostics);
+    return;
+  }
+
+  if (instruction.kind === "get_tag") {
+    validateOperand(fn, instruction.object, locals, temps, diagnostics);
+    return;
+  }
+
+  if (instruction.kind === "get_enum_payload") {
+    validateOperand(fn, instruction.object, locals, temps, diagnostics);
     return;
   }
 

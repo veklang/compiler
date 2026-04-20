@@ -1,5 +1,6 @@
 import type {
   IrConst,
+  IrEnumDeclaration,
   IrFunction,
   IrInstruction,
   IrOperand,
@@ -42,6 +43,16 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
     lines.push(...emitStructTypedef(s));
   }
   if (structs.length > 0) lines.push("");
+
+  const enums = program.declarations.filter(
+    (declaration): declaration is IrEnumDeclaration =>
+      declaration.kind === "enum_decl",
+  );
+
+  for (const e of enums) {
+    lines.push(...emitEnumTypedef(e));
+  }
+  if (enums.length > 0) lines.push("");
 
   const functions = program.declarations.filter(
     (declaration): declaration is IrFunction =>
@@ -144,6 +155,31 @@ function emitInstruction(
     return `${emitType(instruction.type)} ${target} = ${call};`;
   }
 
+  if (instruction.kind === "construct_enum") {
+    const target = declareTemp(context, instruction.target);
+    const enumType = emitType(instruction.type);
+    if (instruction.payload.length === 0) {
+      return `${enumType} ${target} = (${enumType}){ .tag = ${instruction.tag} };`;
+    }
+    const payloadFields = instruction.payload
+      .map(
+        (p, i) =>
+          `.data.${instruction.variant}._${i} = ${emitOperand(p, context)}`,
+      )
+      .join(", ");
+    return `${enumType} ${target} = (${enumType}){ .tag = ${instruction.tag}, ${payloadFields} };`;
+  }
+
+  if (instruction.kind === "get_tag") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.object, context)}.tag;`;
+  }
+
+  if (instruction.kind === "get_enum_payload") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.object, context)}.data.${instruction.variant}._${instruction.index};`;
+  }
+
   if (instruction.kind === "construct_struct") {
     const target = declareTemp(context, instruction.target);
     const fields = instruction.fields
@@ -238,9 +274,26 @@ function emitStructTypedef(s: IrStructDeclaration): string[] {
   return [`typedef struct {`, ...fields, `} ${cStructName(s.linkName)};`];
 }
 
+function emitEnumTypedef(e: IrEnumDeclaration): string[] {
+  const payloadVariants = e.variants.filter((v) => v.payloadTypes.length > 0);
+  const lines: string[] = [`typedef struct {`, `  int32_t tag;`];
+  if (payloadVariants.length > 0) {
+    lines.push(`  union {`);
+    for (const v of payloadVariants) {
+      const fields = v.payloadTypes
+        .map((t, i) => `${emitType(t)} _${i};`)
+        .join(" ");
+      lines.push(`    struct { ${fields} } ${v.name};`);
+    }
+    lines.push(`  } data;`);
+  }
+  lines.push(`} ${cEnumName(e.linkName)};`);
+  return lines;
+}
+
 function emitType(type: IrType): string {
   if (type.kind === "named") {
-    return cStructName(type.name);
+    return type.decl === "enum" ? cEnumName(type.name) : cStructName(type.name);
   }
   if (type.kind !== "primitive") {
     throw new Error(`C emission does not support type '${type.kind}' yet.`);
@@ -302,6 +355,10 @@ function sanitizeName(name: string): string {
 
 function cStructName(name: string): string {
   return `__vek_struct_${sanitizeName(name)}`;
+}
+
+function cEnumName(name: string): string {
+  return `__vek_enum_${sanitizeName(name)}`;
 }
 
 function declareTemp(context: FunctionEmitContext, id: string): string {

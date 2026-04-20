@@ -156,6 +156,91 @@ fn move_right(mut p: Point) -> void {
     assert.ok(c.includes(".x ="));
   });
 
+  test("emits enum typedef with tag and union", () => {
+    const c = emitOk(`
+enum Shape {
+  Circle(i32);
+  Rect(i32, i32);
+}
+fn main() -> void { return; }
+`);
+
+    assert.ok(c.includes("typedef struct {"));
+    assert.ok(c.includes("int32_t tag;"));
+    assert.ok(c.includes("union {"));
+    assert.ok(c.includes("struct { int32_t _0; } Circle;"));
+    assert.ok(c.includes("struct { int32_t _0; int32_t _1; } Rect;"));
+    assert.ok(c.includes("} __vek_enum_Shape;"));
+  });
+
+  test("emits unit variant construction", () => {
+    const c = emitOk(`
+enum Color {
+  Red;
+  Green;
+  Blue;
+}
+fn make() -> Color {
+  return Red;
+}
+`);
+
+    assert.ok(c.includes("__vek_enum_Color"));
+    assert.ok(c.includes(".tag = 0"));
+  });
+
+  test("emits payload variant construction", () => {
+    const c = emitOk(`
+enum Shape {
+  Circle(i32);
+}
+fn make(r: i32) -> Shape {
+  return Circle(r);
+}
+`);
+
+    assert.ok(c.includes(".tag = 0"));
+    assert.ok(c.includes(".data.Circle._0 ="));
+  });
+
+  test("emits match on enum as switch with get_tag", () => {
+    const c = emitOk(`
+enum Color {
+  Red;
+  Green;
+  Blue;
+}
+fn describe(c: Color) -> void {
+  match c {
+    Red => { return; }
+    Green => { return; }
+    _ => { return; }
+  }
+}
+`);
+
+    assert.ok(c.includes(".tag;"));
+    assert.ok(c.includes("switch ("));
+    assert.ok(c.includes("case 0:"));
+    assert.ok(c.includes("case 1:"));
+  });
+
+  test("emits payload binding via get_enum_payload", () => {
+    const c = emitOk(`
+enum Shape {
+  Circle(i32);
+}
+fn area(s: Shape) -> i32 {
+  match s {
+    Circle(r) => { return r; }
+    _ => { return 0; }
+  }
+}
+`);
+
+    assert.ok(c.includes(".data.Circle._0;"));
+  });
+
   test("rejects f16 during C emission", () => {
     const result = check(`
 fn half(x: f16) -> f16 {

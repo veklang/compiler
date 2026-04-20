@@ -266,4 +266,105 @@ fn move_right(mut p: Point) -> void {
     assert.ok(dump.includes("set_field"));
     assert.ok(dump.includes(".x"));
   });
+
+  test("lowers enum declaration to enum_decl", () => {
+    const ir = irOk(`
+enum Color {
+  Red;
+  Green;
+  Blue;
+}
+fn main() -> void { return; }
+`);
+
+    const enumDecl = ir.declarations.find((d) => d.kind === "enum_decl");
+    assert.ok(enumDecl?.kind === "enum_decl");
+    assert.equal(enumDecl.sourceName, "Color");
+    assert.equal(enumDecl.variants.length, 3);
+    assert.equal(enumDecl.variants[0].name, "Red");
+    assert.equal(enumDecl.variants[0].tag, 0);
+    assert.equal(enumDecl.variants[1].name, "Green");
+    assert.equal(enumDecl.variants[2].tag, 2);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("enum enum.Color Color"));
+    assert.ok(dump.includes("Red[0]"));
+    assert.ok(dump.includes("Green[1]"));
+    assert.ok(dump.includes("Blue[2]"));
+  });
+
+  test("lowers unit variant construction to construct_enum", () => {
+    const ir = irOk(`
+enum Color {
+  Red;
+  Green;
+  Blue;
+}
+fn make() -> Color {
+  let c: Color = Red;
+  return c;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("construct_enum enum.Color::Red[0]"));
+  });
+
+  test("lowers payload variant construction to construct_enum", () => {
+    const ir = irOk(`
+enum Shape {
+  Circle(i32);
+  Rect(i32, i32);
+}
+fn make(r: i32) -> Shape {
+  return Circle(r);
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("construct_enum enum.Shape::Circle[0]"));
+  });
+
+  test("lowers match on enum to switch + arm blocks", () => {
+    const ir = irOk(`
+enum Color {
+  Red;
+  Green;
+  Blue;
+}
+fn describe(c: Color) -> void {
+  match c {
+    Red => { return; }
+    Green => { return; }
+    _ => { return; }
+  }
+}
+`);
+
+    const fn = ir.declarations.find((d) => d.kind === "function");
+    assert.ok(fn?.kind === "function");
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("get_tag"));
+    assert.ok(dump.includes("switch"));
+  });
+
+  test("lowers match arm payload binding to get_enum_payload", () => {
+    const ir = irOk(`
+enum Shape {
+  Circle(i32);
+  Rect(i32, i32);
+}
+fn area(s: Shape) -> i32 {
+  match s {
+    Circle(r) => { return r; }
+    Rect(w, _h) => { return w; }
+    _ => { return 0; }
+  }
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("get_enum_payload"));
+    assert.ok(dump.includes("Circle"));
+  });
 });

@@ -1,5 +1,6 @@
 import type {
   IrConst,
+  IrEnumDeclaration,
   IrFunction,
   IrInstruction,
   IrOperand,
@@ -21,6 +22,7 @@ export function dumpIr(program: IrProgram): string {
 
   for (const declaration of program.declarations) {
     if (declaration.kind === "struct_decl") dumpStructDecl(declaration, lines);
+    else if (declaration.kind === "enum_decl") dumpEnumDecl(declaration, lines);
     else if (declaration.kind === "function") dumpFunction(declaration, lines);
   }
 
@@ -32,6 +34,19 @@ function dumpStructDecl(decl: IrStructDeclaration, lines: string[]) {
     .map((f) => `${f.name}: ${dumpType(f.type)}`)
     .join(", ");
   lines.push(`struct ${decl.id} ${decl.linkName} { ${fields} }`);
+}
+
+function dumpEnumDecl(decl: IrEnumDeclaration, lines: string[]) {
+  const variants = decl.variants
+    .map((v) => {
+      const payload =
+        v.payloadTypes.length > 0
+          ? `(${v.payloadTypes.map(dumpType).join(", ")})`
+          : "";
+      return `${v.name}[${v.tag}]${payload}`;
+    })
+    .join(", ");
+  lines.push(`enum ${decl.id} ${decl.linkName} { ${variants} }`);
 }
 
 function dumpFunction(fn: IrFunction, lines: string[]) {
@@ -89,6 +104,19 @@ function dumpInstruction(instruction: IrInstruction): string {
     return `${target}call ${dumpOperand(instruction.callee)}(${instruction.args
       .map(dumpOperand)
       .join(", ")})`;
+  }
+  if (instruction.kind === "construct_enum") {
+    const payload =
+      instruction.payload.length > 0
+        ? `(${instruction.payload.map(dumpOperand).join(", ")})`
+        : "";
+    return `${instruction.target}: ${dumpType(instruction.type)} = construct_enum ${instruction.declId}::${instruction.variant}[${instruction.tag}]${payload}`;
+  }
+  if (instruction.kind === "get_tag") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = get_tag ${dumpOperand(instruction.object)}`;
+  }
+  if (instruction.kind === "get_enum_payload") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = get_enum_payload ${dumpOperand(instruction.object)}::${instruction.variant}[${instruction.index}]`;
   }
   if (instruction.kind === "construct_struct") {
     const fields = instruction.fields
