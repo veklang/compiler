@@ -59,6 +59,49 @@ fn main() -> void {
     assert.ok(dumpIr(ir).includes('call @panic("boom")'));
   });
 
+  test("lowers top-level declarations to globals", () => {
+    const ir = irOk(`
+let counter: i32 = 41;
+const label: string = "count";
+
+fn get_counter() -> i32 {
+  return counter;
+}
+`);
+
+    const globals = ir.declarations.filter((d) => d.kind === "global");
+    assert.equal(globals.length, 2);
+    assert.ok(globals[0].kind === "global");
+    assert.equal(globals[0].sourceName, "counter");
+    assert.equal(globals[0].mutable, true);
+    assert.ok(globals[1].kind === "global");
+    assert.equal(globals[1].sourceName, "label");
+    assert.equal(globals[1].mutable, false);
+    assert.equal(ir.runtime.strings, true);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("global global.counter let counter: i32 = 41"));
+    assert.ok(
+      dump.includes('global global.label const label: string = "count"'),
+    );
+    assert.ok(dump.includes("return global.counter"));
+  });
+
+  test("lowers assignment to a top-level let as store_global", () => {
+    const ir = irOk(`
+let counter: i32 = 0;
+
+fn inc() -> i32 {
+  counter = counter + 1;
+  return counter;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("store_global global.counter"));
+    assert.ok(dump.includes("return global.counter"));
+  });
+
   test("lowers if with no else to cond_branch + join", () => {
     const ir = irOk(`
 fn main() -> void {

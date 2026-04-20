@@ -1,6 +1,7 @@
 import type {
   IrBlock,
   IrFunction,
+  IrGlobalId,
   IrInstruction,
   IrOperand,
   IrProgram,
@@ -20,6 +21,7 @@ export function validateIr(program: IrProgram): IrValidationResult {
   const diagnostics: IrValidationDiagnostic[] = [];
   const functionIds = new Set<string>();
   const structIds = new Set<IrTypeDeclId>();
+  const globalIds = new Set<IrGlobalId>();
 
   for (const declaration of program.declarations) {
     if (declaration.kind === "struct_decl") {
@@ -36,6 +38,13 @@ export function validateIr(program: IrProgram): IrValidationResult {
         });
       }
       structIds.add(declaration.id);
+    } else if (declaration.kind === "global") {
+      if (globalIds.has(declaration.id)) {
+        diagnostics.push({
+          message: `Duplicate global id '${declaration.id}'.`,
+        });
+      }
+      globalIds.add(declaration.id);
     }
   }
 
@@ -47,7 +56,7 @@ export function validateIr(program: IrProgram): IrValidationResult {
       });
     }
     functionIds.add(declaration.id);
-    validateFunction(declaration, structIds, diagnostics);
+    validateFunction(declaration, structIds, globalIds, diagnostics);
   }
 
   if (program.entry && !functionIds.has(program.entry)) {
@@ -62,6 +71,7 @@ export function validateIr(program: IrProgram): IrValidationResult {
 function validateFunction(
   fn: IrFunction,
   structIds: Set<IrTypeDeclId>,
+  globalIds: Set<IrGlobalId>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   const locals = new Set<string>();
@@ -91,7 +101,16 @@ function validateFunction(
   const blockIds = new Set(fn.blocks.map((b) => b.id));
 
   for (const block of fn.blocks)
-    validateBlock(fn, block, blockIds, locals, temps, structIds, diagnostics);
+    validateBlock(
+      fn,
+      block,
+      blockIds,
+      locals,
+      temps,
+      structIds,
+      globalIds,
+      diagnostics,
+    );
 }
 
 function validateBlock(
@@ -101,10 +120,19 @@ function validateBlock(
   locals: Set<string>,
   temps: Set<string>,
   structIds: Set<IrTypeDeclId>,
+  globalIds: Set<IrGlobalId>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   for (const instruction of block.instructions) {
-    validateInstruction(fn, instruction, locals, temps, structIds, diagnostics);
+    validateInstruction(
+      fn,
+      instruction,
+      locals,
+      temps,
+      structIds,
+      globalIds,
+      diagnostics,
+    );
   }
 
   if (!block.terminator) {
@@ -120,6 +148,7 @@ function validateBlock(
     blockIds,
     locals,
     temps,
+    globalIds,
     diagnostics,
   );
 }
@@ -130,6 +159,7 @@ function validateInstruction(
   locals: Set<string>,
   temps: Set<string>,
   structIds: Set<IrTypeDeclId>,
+  globalIds: Set<IrGlobalId>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   if (instruction.kind === "assign") {
@@ -138,7 +168,31 @@ function validateInstruction(
         message: `Assignment in '${fn.id}' targets unknown local '${instruction.target}'.`,
       });
     }
-    validateOperand(fn, instruction.value, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      instruction.value,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
+    return;
+  }
+
+  if (instruction.kind === "store_global") {
+    if (!globalIds.has(instruction.globalId)) {
+      diagnostics.push({
+        message: `store_global in '${fn.id}' targets unknown global '${instruction.globalId}'.`,
+      });
+    }
+    validateOperand(
+      fn,
+      instruction.value,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     return;
   }
 
@@ -152,20 +206,48 @@ function validateInstruction(
   }
 
   if (instruction.kind === "binary") {
-    validateOperand(fn, instruction.left, locals, temps, diagnostics);
-    validateOperand(fn, instruction.right, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      instruction.left,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
+    validateOperand(
+      fn,
+      instruction.right,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     return;
   }
 
   if (instruction.kind === "unary") {
-    validateOperand(fn, instruction.argument, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      instruction.argument,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     return;
   }
 
   if (instruction.kind === "call") {
-    validateOperand(fn, instruction.callee, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      instruction.callee,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     for (const arg of instruction.args)
-      validateOperand(fn, arg, locals, temps, diagnostics);
+      validateOperand(fn, arg, locals, temps, globalIds, diagnostics);
     return;
   }
 
@@ -176,17 +258,31 @@ function validateInstruction(
       });
     }
     for (const p of instruction.payload)
-      validateOperand(fn, p, locals, temps, diagnostics);
+      validateOperand(fn, p, locals, temps, globalIds, diagnostics);
     return;
   }
 
   if (instruction.kind === "get_tag") {
-    validateOperand(fn, instruction.object, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      instruction.object,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     return;
   }
 
   if (instruction.kind === "get_enum_payload") {
-    validateOperand(fn, instruction.object, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      instruction.object,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     return;
   }
 
@@ -197,12 +293,19 @@ function validateInstruction(
       });
     }
     for (const f of instruction.fields)
-      validateOperand(fn, f.value, locals, temps, diagnostics);
+      validateOperand(fn, f.value, locals, temps, globalIds, diagnostics);
     return;
   }
 
   if (instruction.kind === "get_field") {
-    validateOperand(fn, instruction.object, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      instruction.object,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     return;
   }
 
@@ -212,11 +315,18 @@ function validateInstruction(
         message: `set_field in '${fn.id}' targets unknown local '${instruction.target}'.`,
       });
     }
-    validateOperand(fn, instruction.value, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      instruction.value,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     return;
   }
 
-  validateOperand(fn, instruction.value, locals, temps, diagnostics);
+  validateOperand(fn, instruction.value, locals, temps, globalIds, diagnostics);
 }
 
 function validateTerminator(
@@ -225,11 +335,19 @@ function validateTerminator(
   blockIds: Set<string>,
   locals: Set<string>,
   temps: Set<string>,
+  globalIds: Set<IrGlobalId>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   if (terminator.kind === "return") {
     if (terminator.value)
-      validateOperand(fn, terminator.value, locals, temps, diagnostics);
+      validateOperand(
+        fn,
+        terminator.value,
+        locals,
+        temps,
+        globalIds,
+        diagnostics,
+      );
     return;
   }
 
@@ -239,14 +357,28 @@ function validateTerminator(
   }
 
   if (terminator.kind === "cond_branch") {
-    validateOperand(fn, terminator.condition, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      terminator.condition,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     requireBlockTarget(fn, terminator.thenTarget, blockIds, diagnostics);
     requireBlockTarget(fn, terminator.elseTarget, blockIds, diagnostics);
     return;
   }
 
   if (terminator.kind === "switch") {
-    validateOperand(fn, terminator.value, locals, temps, diagnostics);
+    validateOperand(
+      fn,
+      terminator.value,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
     for (const c of terminator.cases)
       requireBlockTarget(fn, c.target, blockIds, diagnostics);
     requireBlockTarget(fn, terminator.defaultTarget, blockIds, diagnostics);
@@ -274,6 +406,7 @@ function validateOperand(
   operand: IrOperand,
   locals: Set<string>,
   temps: Set<string>,
+  globalIds: Set<IrGlobalId>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   if (operand.kind === "local" && !locals.has(operand.id)) {
@@ -285,6 +418,12 @@ function validateOperand(
   if (operand.kind === "temp" && !temps.has(operand.id)) {
     diagnostics.push({
       message: `Operand in '${fn.id}' references undefined temp '${operand.id}'.`,
+    });
+  }
+
+  if (operand.kind === "global" && !globalIds.has(operand.id)) {
+    diagnostics.push({
+      message: `Operand in '${fn.id}' references unknown global '${operand.id}'.`,
     });
   }
 }

@@ -2,6 +2,7 @@ import type {
   IrConst,
   IrEnumDeclaration,
   IrFunction,
+  IrGlobal,
   IrInstruction,
   IrOperand,
   IrProgram,
@@ -23,6 +24,7 @@ export function dumpIr(program: IrProgram): string {
   for (const declaration of program.declarations) {
     if (declaration.kind === "struct_decl") dumpStructDecl(declaration, lines);
     else if (declaration.kind === "enum_decl") dumpEnumDecl(declaration, lines);
+    else if (declaration.kind === "global") dumpGlobal(declaration, lines);
     else if (declaration.kind === "function") dumpFunction(declaration, lines);
   }
 
@@ -34,6 +36,14 @@ function dumpStructDecl(decl: IrStructDeclaration, lines: string[]) {
     .map((f) => `${f.name}: ${dumpType(f.type)}`)
     .join(", ");
   lines.push(`struct ${decl.id} ${decl.linkName} { ${fields} }`);
+}
+
+function dumpGlobal(decl: IrGlobal, lines: string[]) {
+  const mut = decl.mutable ? "let" : "const";
+  const init = decl.initializer ? ` = ${dumpConst(decl.initializer)}` : "";
+  lines.push(
+    `global ${decl.id} ${mut} ${decl.linkName}: ${dumpType(decl.type)}${init}`,
+  );
 }
 
 function dumpEnumDecl(decl: IrEnumDeclaration, lines: string[]) {
@@ -130,6 +140,9 @@ function dumpInstruction(instruction: IrInstruction): string {
   if (instruction.kind === "set_field") {
     return `set_field ${instruction.target}.${instruction.field} = ${dumpOperand(instruction.value)}`;
   }
+  if (instruction.kind === "store_global") {
+    return `store_global ${instruction.globalId} = ${dumpOperand(instruction.value)}`;
+  }
   return `${instruction.target}: ${dumpType(instruction.type)} = cast ${dumpOperand(
     instruction.value,
   )}`;
@@ -156,6 +169,7 @@ function dumpOperand(operand: IrOperand): string {
   if (operand.kind === "const") return dumpConst(operand.value);
   if (operand.kind === "local") return operand.id;
   if (operand.kind === "temp") return operand.id;
+  if (operand.kind === "global") return operand.id;
   return `@${operand.name}`;
 }
 

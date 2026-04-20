@@ -151,4 +151,33 @@ fn main() -> void {
       },
     );
   });
+
+  test("compiles and runs global reads and writes", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+let counter: i32 = 40;
+
+fn main() -> i32 {
+  counter = counter + 2;
+  return counter;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

@@ -6,6 +6,8 @@ import type {
   IrEnumDeclaration,
   IrEnumVariant,
   IrFunction,
+  IrGlobal,
+  IrGlobalId,
   IrLocal,
   IrLocalId,
   IrOperand,
@@ -82,6 +84,7 @@ interface LowerContext {
   loopContinue?: IrBlockId;
   structFields: Map<string, IrStructField[]>;
   variantInfos: Map<string, VariantInfo>;
+  globals: Map<string, IrGlobalId>;
 }
 
 export function lowerProgramToIr(
@@ -103,6 +106,15 @@ export function lowerProgramToIr(
     }
   }
 
+  const globals = new Map<string, IrGlobalId>();
+  for (const statement of program.body) {
+    if (statement.kind === "VariableDeclaration") {
+      const global = lowerGlobalDeclaration(statement, checkResult, runtime);
+      declarations.push(global);
+      globals.set(statement.name.name, global.id);
+    }
+  }
+
   for (const statement of program.body) {
     if (statement.kind !== "FunctionDeclaration") continue;
     const lowered = lowerFunction(
@@ -111,6 +123,7 @@ export function lowerProgramToIr(
       runtime,
       structFields,
       variantInfos,
+      globals,
     );
     declarations.push(lowered);
     if (statement.name.name === "main") entry = lowered.id;
@@ -178,12 +191,44 @@ function lowerEnumDeclaration(
   };
 }
 
+function lowerGlobalDeclaration(
+  node: VariableDeclaration,
+  checkResult: IrTypeSource,
+  runtime: IrRuntimeRequirements,
+): IrGlobal {
+  const type = node.typeAnnotation
+    ? typeFromTypeNode(node.typeAnnotation)
+    : typeFromNode(checkResult, node.initializer);
+  const initializer =
+    node.initializer?.kind === "LiteralExpression"
+      ? constFromLiteral(node.initializer)
+      : undefined;
+  if (node.initializer && !initializer) {
+    throw new Error(
+      `IR lowering does not support non-literal global initializer '${node.name.name}' yet.`,
+    );
+  }
+  if (initializer?.kind === "string") runtime.strings = true;
+  const id: IrGlobalId = `global.${node.name.name}`;
+  return {
+    kind: "global",
+    id,
+    sourceName: node.name.name,
+    linkName: node.name.name,
+    type,
+    mutable: node.declarationKind === "let",
+    initializer,
+    span: node.span,
+  };
+}
+
 function lowerFunction(
   node: FunctionDeclaration,
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
   structFields: Map<string, IrStructField[]>,
   variantInfos: Map<string, VariantInfo>,
+  globals: Map<string, IrGlobalId>,
 ): IrFunction {
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
@@ -197,6 +242,7 @@ function lowerFunction(
     nextTemp: 0,
     structFields,
     variantInfos,
+    globals,
   };
 
   const params = node.params
@@ -350,6 +396,16 @@ function lowerAssignment(
   }
   if (statement.target.kind !== "IdentifierExpression") {
     throw new Error("IR lowering only supports identifier assignment so far.");
+  }
+  const globalId = context.globals.get(statement.target.name);
+  if (globalId) {
+    context.currentBlock.instructions.push({
+      kind: "store_global",
+      globalId,
+      value: lowerExpression(statement.value, context),
+      span: statement.span,
+    });
+    return;
   }
   const target = context.locals.get(statement.target.name);
   if (!target) {
@@ -729,6 +785,14 @@ function lowerIdentifier(
     return {
       kind: "local",
       id: local,
+      type: typeFromNode(context.checkResult, expression),
+    };
+  }
+  const globalId = context.globals.get(expression.name);
+  if (globalId) {
+    return {
+      kind: "global",
+      id: globalId,
       type: typeFromNode(context.checkResult, expression),
     };
   }

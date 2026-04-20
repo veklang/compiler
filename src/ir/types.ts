@@ -188,7 +188,8 @@ export type IrOperand =
   | IrConstOperand
   | IrLocalOperand
   | IrTempOperand
-  | IrFunctionOperand;
+  | IrFunctionOperand
+  | IrGlobalOperand;
 
 export interface IrConstOperand {
   kind: "const";
@@ -214,6 +215,12 @@ export interface IrFunctionOperand {
   type: IrType;
 }
 
+export interface IrGlobalOperand {
+  kind: "global";
+  id: IrGlobalId;
+  type: IrType;
+}
+
 export type IrConst =
   | { kind: "int"; value: string }
   | { kind: "float"; value: string }
@@ -233,7 +240,8 @@ export type IrInstruction =
   | IrSetFieldInstruction
   | IrConstructEnumInstruction
   | IrGetTagInstruction
-  | IrGetEnumPayloadInstruction;
+  | IrGetEnumPayloadInstruction
+  | IrStoreGlobalInstruction;
 
 export interface IrAssignInstruction {
   kind: "assign";
@@ -330,6 +338,13 @@ export interface IrGetEnumPayloadInstruction {
   variant: string;
   index: number;
   type: IrType;
+  span?: Span;
+}
+
+export interface IrStoreGlobalInstruction {
+  kind: "store_global";
+  globalId: IrGlobalId;
+  value: IrOperand;
   span?: Span;
 }
 

@@ -61,6 +61,37 @@ fn main() -> void {
     assert.ok(c.includes('__vek_panic_cstr("boom");'));
   });
 
+  test("emits top-level globals and global loads", () => {
+    const c = emitOk(`
+let counter: i32 = 41;
+const label: string = "count";
+
+fn get_counter() -> i32 {
+  return counter;
+}
+`);
+
+    assert.ok(c.includes("static int32_t __vek_global_counter = 41;"));
+    assert.ok(
+      c.includes('static const char * const __vek_global_label = "count";'),
+    );
+    assert.ok(c.includes("return __vek_global_counter;"));
+  });
+
+  test("emits store_global for top-level let assignment", () => {
+    const c = emitOk(`
+let counter: i32 = 0;
+
+fn inc() -> i32 {
+  counter = counter + 1;
+  return counter;
+}
+`);
+
+    assert.ok(c.includes("__vek_global_counter ="));
+    assert.ok(c.includes("return __vek_global_counter;"));
+  });
+
   test("emits if/else as labels and conditional goto", () => {
     const c = emitOk(`
 fn max(a: i32, b: i32) -> i32 {

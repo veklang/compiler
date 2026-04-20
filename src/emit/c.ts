@@ -2,6 +2,7 @@ import type {
   IrConst,
   IrEnumDeclaration,
   IrFunction,
+  IrGlobal,
   IrInstruction,
   IrOperand,
   IrProgram,
@@ -17,6 +18,7 @@ export interface CEmitOptions {
 interface FunctionEmitContext {
   localNames: Map<string, string>;
   tempNames: Map<string, string>;
+  globalNames: Map<string, string>;
   paramIds: Set<string>;
   multiBlock: boolean;
 }
@@ -54,6 +56,18 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   }
   if (enums.length > 0) lines.push("");
 
+  const globals = program.declarations.filter(
+    (declaration): declaration is IrGlobal => declaration.kind === "global",
+  );
+  const globalNames = new Map(
+    globals.map((global) => [global.id, cGlobalName(global.linkName)]),
+  );
+
+  for (const global of globals) {
+    lines.push(emitGlobalDeclaration(global, globalNames));
+  }
+  if (globals.length > 0) lines.push("");
+
   const functions = program.declarations.filter(
     (declaration): declaration is IrFunction =>
       declaration.kind === "function" && declaration.body === "defined",
@@ -65,7 +79,7 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   if (functions.length > 0) lines.push("");
 
   for (const fn of functions) {
-    lines.push(...emitFunction(fn), "");
+    lines.push(...emitFunction(fn, globalNames), "");
   }
 
   const entry = program.entry
@@ -85,13 +99,32 @@ function functionPrototype(fn: IrFunction): string {
   })`;
 }
 
-function emitFunction(fn: IrFunction): string[] {
+function emitGlobalDeclaration(
+  global: IrGlobal,
+  globalNames: Map<string, string>,
+): string {
+  const name = requireGlobal(globalNames, global.id);
+  const type = emitType(global.type);
+  const init = global.initializer ? ` = ${emitConst(global.initializer)}` : "";
+  const qualifier = global.mutable ? "" : "const ";
+
+  if (!global.mutable && type.endsWith("*")) {
+    return `static ${type} const ${name}${init};`;
+  }
+  return `static ${qualifier}${type} ${name}${init};`;
+}
+
+function emitFunction(
+  fn: IrFunction,
+  globalNames: Map<string, string>,
+): string[] {
   const multiBlock = fn.blocks.length > 1;
   const context: FunctionEmitContext = {
     localNames: new Map(
       fn.locals.map((local) => [local.id, cLocalName(local.id)]),
     ),
     tempNames: new Map(),
+    globalNames,
     paramIds: new Set(fn.params.map((param) => param.local)),
     multiBlock,
   };
@@ -197,6 +230,10 @@ function emitInstruction(
     return `${requireLocal(context, instruction.target)}.${instruction.field} = ${emitOperand(instruction.value, context)};`;
   }
 
+  if (instruction.kind === "store_global") {
+    return `${requireGlobal(context.globalNames, instruction.globalId)} = ${emitOperand(instruction.value, context)};`;
+  }
+
   const target = declareTemp(context, instruction.target);
   return `${emitType(instruction.type)} ${target} = (${emitType(
     instruction.type,
@@ -257,6 +294,8 @@ function emitOperand(operand: IrOperand, context: FunctionEmitContext): string {
   if (operand.kind === "const") return emitConst(operand.value);
   if (operand.kind === "local") return requireLocal(context, operand.id);
   if (operand.kind === "temp") return requireTemp(context, operand.id);
+  if (operand.kind === "global")
+    return requireGlobal(context.globalNames, operand.id);
   if (operand.name === "panic") return "__vek_panic_cstr";
   return cFunctionName(operand.name);
 }
@@ -349,6 +388,10 @@ function cBlockLabel(id: string): string {
   return id.replace(/\./g, "_");
 }
 
+function cGlobalName(name: string): string {
+  return `__vek_global_${sanitizeName(name)}`;
+}
+
 function sanitizeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^([0-9])/, "_$1");
 }
@@ -376,6 +419,12 @@ function requireLocal(context: FunctionEmitContext, id: string): string {
 function requireTemp(context: FunctionEmitContext, id: string): string {
   const name = context.tempNames.get(id);
   if (!name) throw new Error(`Unknown temp '${id}' during C emission.`);
+  return name;
+}
+
+function requireGlobal(globalNames: Map<string, string>, id: string): string {
+  const name = globalNames.get(id);
+  if (!name) throw new Error(`Unknown global '${id}' during C emission.`);
   return name;
 }
 
