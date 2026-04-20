@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -20,6 +21,13 @@ const withTempFile = (source: string, run: (filePath: string) => void) => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 };
+
+const hasMuslGcc = () =>
+  spawnSync("command -v musl-gcc", {
+    shell: true,
+    encoding: "utf8",
+    stdio: "pipe",
+  }).status === 0;
 
 describe("cli", () => {
   test("parses source path and optional backend flags", () => {
@@ -86,6 +94,59 @@ fn main() -> void {
           );
         } finally {
           fs.rmSync(result.tempDir, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs a void main with the default toolchain", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> void {
+  return;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 0);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs panic through the runtime", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> void {
+  panic("boom");
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+          assert.equal(result.stderr.includes("panic: boom"), true);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
         }
       },
     );
