@@ -5,6 +5,7 @@ import type {
   IrOperand,
   IrProgram,
   IrTerminator,
+  IrTypeDeclId,
 } from "@/ir/types";
 
 export interface IrValidationDiagnostic {
@@ -18,6 +19,18 @@ export interface IrValidationResult {
 export function validateIr(program: IrProgram): IrValidationResult {
   const diagnostics: IrValidationDiagnostic[] = [];
   const functionIds = new Set<string>();
+  const structIds = new Set<IrTypeDeclId>();
+
+  for (const declaration of program.declarations) {
+    if (declaration.kind === "struct_decl") {
+      if (structIds.has(declaration.id)) {
+        diagnostics.push({
+          message: `Duplicate struct id '${declaration.id}'.`,
+        });
+      }
+      structIds.add(declaration.id);
+    }
+  }
 
   for (const declaration of program.declarations) {
     if (declaration.kind !== "function") continue;
@@ -27,7 +40,7 @@ export function validateIr(program: IrProgram): IrValidationResult {
       });
     }
     functionIds.add(declaration.id);
-    validateFunction(declaration, diagnostics);
+    validateFunction(declaration, structIds, diagnostics);
   }
 
   if (program.entry && !functionIds.has(program.entry)) {
@@ -41,6 +54,7 @@ export function validateIr(program: IrProgram): IrValidationResult {
 
 function validateFunction(
   fn: IrFunction,
+  structIds: Set<IrTypeDeclId>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   const locals = new Set<string>();
@@ -70,7 +84,7 @@ function validateFunction(
   const blockIds = new Set(fn.blocks.map((b) => b.id));
 
   for (const block of fn.blocks)
-    validateBlock(fn, block, blockIds, locals, temps, diagnostics);
+    validateBlock(fn, block, blockIds, locals, temps, structIds, diagnostics);
 }
 
 function validateBlock(
@@ -79,10 +93,11 @@ function validateBlock(
   blockIds: Set<string>,
   locals: Set<string>,
   temps: Set<string>,
+  structIds: Set<IrTypeDeclId>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   for (const instruction of block.instructions) {
-    validateInstruction(fn, instruction, locals, temps, diagnostics);
+    validateInstruction(fn, instruction, locals, temps, structIds, diagnostics);
   }
 
   if (!block.terminator) {
@@ -107,6 +122,7 @@ function validateInstruction(
   instruction: IrInstruction,
   locals: Set<string>,
   temps: Set<string>,
+  structIds: Set<IrTypeDeclId>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   if (instruction.kind === "assign") {
@@ -143,6 +159,32 @@ function validateInstruction(
     validateOperand(fn, instruction.callee, locals, temps, diagnostics);
     for (const arg of instruction.args)
       validateOperand(fn, arg, locals, temps, diagnostics);
+    return;
+  }
+
+  if (instruction.kind === "construct_struct") {
+    if (!structIds.has(instruction.declId)) {
+      diagnostics.push({
+        message: `construct_struct in '${fn.id}' references unknown struct '${instruction.declId}'.`,
+      });
+    }
+    for (const f of instruction.fields)
+      validateOperand(fn, f.value, locals, temps, diagnostics);
+    return;
+  }
+
+  if (instruction.kind === "get_field") {
+    validateOperand(fn, instruction.object, locals, temps, diagnostics);
+    return;
+  }
+
+  if (instruction.kind === "set_field") {
+    if (!locals.has(instruction.target)) {
+      diagnostics.push({
+        message: `set_field in '${fn.id}' targets unknown local '${instruction.target}'.`,
+      });
+    }
+    validateOperand(fn, instruction.value, locals, temps, diagnostics);
     return;
   }
 

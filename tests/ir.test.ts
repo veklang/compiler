@@ -192,4 +192,78 @@ fn main() -> void {
     const result = validateIr(ir);
     assert.deepEqual(result.diagnostics, []);
   });
+
+  test("lowers struct declaration to struct_decl", () => {
+    const ir = irOk(`
+struct Point {
+  x: i32;
+  y: i32;
+}
+fn main() -> void {
+  return;
+}
+`);
+
+    const structDecl = ir.declarations.find((d) => d.kind === "struct_decl");
+    assert.ok(structDecl);
+    assert.ok(structDecl.kind === "struct_decl");
+    assert.equal(structDecl.sourceName, "Point");
+    assert.equal(structDecl.fields.length, 2);
+    assert.equal(structDecl.fields[0].name, "x");
+    assert.equal(structDecl.fields[1].name, "y");
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("struct struct.Point Point { x: i32, y: i32 }"));
+  });
+
+  test("lowers struct literal to construct_struct", () => {
+    const ir = irOk(`
+struct Point {
+  x: i32;
+  y: i32;
+}
+fn make() -> Point {
+  let p: Point = Point { x: 1, y: 2 };
+  return p;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("construct_struct struct.Point"));
+    assert.ok(dump.includes("x:"));
+    assert.ok(dump.includes("y:"));
+  });
+
+  test("lowers member access to get_field", () => {
+    const ir = irOk(`
+struct Point {
+  x: i32;
+  y: i32;
+}
+fn get_x(p: Point) -> i32 {
+  return p.x;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("get_field"));
+    assert.ok(dump.includes(".x"));
+  });
+
+  test("lowers field assignment to set_field", () => {
+    const ir = irOk(`
+struct Point {
+  x: i32;
+  y: i32;
+}
+fn move_right(mut p: Point) -> void {
+  p.x = p.x + 1;
+  return;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("set_field"));
+    assert.ok(dump.includes(".x"));
+  });
 });

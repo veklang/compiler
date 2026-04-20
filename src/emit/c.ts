@@ -4,6 +4,7 @@ import type {
   IrInstruction,
   IrOperand,
   IrProgram,
+  IrStructDeclaration,
   IrTerminator,
   IrType,
 } from "@/ir/types";
@@ -31,6 +32,16 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
     `#include "${runtimeHeader}"`,
     "",
   ];
+
+  const structs = program.declarations.filter(
+    (declaration): declaration is IrStructDeclaration =>
+      declaration.kind === "struct_decl",
+  );
+
+  for (const s of structs) {
+    lines.push(...emitStructTypedef(s));
+  }
+  if (structs.length > 0) lines.push("");
 
   const functions = program.declarations.filter(
     (declaration): declaration is IrFunction =>
@@ -133,6 +144,23 @@ function emitInstruction(
     return `${emitType(instruction.type)} ${target} = ${call};`;
   }
 
+  if (instruction.kind === "construct_struct") {
+    const target = declareTemp(context, instruction.target);
+    const fields = instruction.fields
+      .map((f) => `.${f.name} = ${emitOperand(f.value, context)}`)
+      .join(", ");
+    return `${emitType(instruction.type)} ${target} = (${emitType(instruction.type)}){ ${fields} };`;
+  }
+
+  if (instruction.kind === "get_field") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.object, context)}.${instruction.field};`;
+  }
+
+  if (instruction.kind === "set_field") {
+    return `${requireLocal(context, instruction.target)}.${instruction.field} = ${emitOperand(instruction.value, context)};`;
+  }
+
   const target = declareTemp(context, instruction.target);
   return `${emitType(instruction.type)} ${target} = (${emitType(
     instruction.type,
@@ -205,7 +233,15 @@ function emitConst(value: IrConst): string {
   return "";
 }
 
+function emitStructTypedef(s: IrStructDeclaration): string[] {
+  const fields = s.fields.map((f) => `  ${emitType(f.type)} ${f.name};`);
+  return [`typedef struct {`, ...fields, `} ${cStructName(s.linkName)};`];
+}
+
 function emitType(type: IrType): string {
+  if (type.kind === "named") {
+    return cStructName(type.name);
+  }
   if (type.kind !== "primitive") {
     throw new Error(`C emission does not support type '${type.kind}' yet.`);
   }
@@ -262,6 +298,10 @@ function cBlockLabel(id: string): string {
 
 function sanitizeName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^([0-9])/, "_$1");
+}
+
+function cStructName(name: string): string {
+  return `__vek_struct_${sanitizeName(name)}`;
 }
 
 function declareTemp(context: FunctionEmitContext, id: string): string {

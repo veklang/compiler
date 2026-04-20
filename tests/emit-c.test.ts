@@ -106,6 +106,56 @@ fn main() -> void {
     assert.ok(c.includes("__builtin_unreachable();"));
   });
 
+  test("emits struct typedef and compound literal", () => {
+    const c = emitOk(`
+struct Point {
+  x: i32;
+  y: i32;
+}
+fn make() -> Point {
+  let p: Point = Point { x: 1, y: 2 };
+  return p;
+}
+`);
+
+    assert.ok(c.includes("typedef struct {"));
+    assert.ok(c.includes("  int32_t x;"));
+    assert.ok(c.includes("  int32_t y;"));
+    assert.ok(c.includes("} __vek_struct_Point;"));
+    assert.ok(c.includes("__vek_struct_Point"));
+    assert.ok(c.includes(".x = 1"));
+    assert.ok(c.includes(".y = 2"));
+  });
+
+  test("emits get_field as struct member access", () => {
+    const c = emitOk(`
+struct Point {
+  x: i32;
+  y: i32;
+}
+fn get_x(p: Point) -> i32 {
+  return p.x;
+}
+`);
+
+    assert.ok(c.includes(".x;"));
+  });
+
+  test("emits set_field as struct member assignment", () => {
+    const c = emitOk(`
+struct Point {
+  x: i32;
+  y: i32;
+}
+fn move_right(mut p: Point) -> void {
+  p.x = p.x + 1;
+  return;
+}
+`);
+
+    assert.ok(c.includes(".x ="));
+  });
+
   test("rejects f16 during C emission", () => {
     const result = check(`
 fn half(x: f16) -> f16 {

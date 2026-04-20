@@ -24,7 +24,7 @@ export interface IrRuntimeRequirements {
   copyOnWrite: boolean;
 }
 
-export type IrDeclaration = IrFunction | IrGlobal | IrTypeDeclaration;
+export type IrDeclaration = IrFunction | IrGlobal | IrStructDeclaration;
 
 export type IrSourceFileId = string;
 export type IrFunctionId = string;
@@ -58,13 +58,19 @@ export interface IrGlobal {
   span?: Span;
 }
 
-export interface IrTypeDeclaration {
-  kind: "type_declaration";
+export interface IrStructDeclaration {
+  kind: "struct_decl";
   id: IrTypeDeclId;
   sourceName?: string;
   linkName: string;
-  shape: "struct" | "enum" | "tuple" | "opaque";
+  fields: IrStructField[];
   span?: Span;
+}
+
+export interface IrStructField {
+  name: string;
+  type: IrType;
+  index: number;
 }
 
 export interface IrFunctionType {
@@ -201,7 +207,10 @@ export type IrInstruction =
   | IrBinaryInstruction
   | IrUnaryInstruction
   | IrCallInstruction
-  | IrCastInstruction;
+  | IrCastInstruction
+  | IrConstructStructInstruction
+  | IrGetFieldInstruction
+  | IrSetFieldInstruction;
 
 export interface IrAssignInstruction {
   kind: "assign";
@@ -243,6 +252,32 @@ export interface IrCastInstruction {
   target: IrTempId;
   value: IrOperand;
   type: IrType;
+  span?: Span;
+}
+
+export interface IrConstructStructInstruction {
+  kind: "construct_struct";
+  target: IrTempId;
+  declId: IrTypeDeclId;
+  fields: { name: string; value: IrOperand }[];
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrGetFieldInstruction {
+  kind: "get_field";
+  target: IrTempId;
+  object: IrOperand;
+  field: string;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrSetFieldInstruction {
+  kind: "set_field";
+  target: IrLocalId;
+  field: string;
+  value: IrOperand;
   span?: Span;
 }
 

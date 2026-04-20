@@ -10,8 +10,11 @@ import type {
   IrPrimitiveType,
   IrProgram,
   IrRuntimeRequirements,
+  IrStructDeclaration,
+  IrStructField,
   IrTempId,
   IrType,
+  IrTypeDeclId,
 } from "@/ir/types";
 import { irPrimitive } from "@/ir/types";
 import type {
@@ -30,11 +33,15 @@ import type {
   IfStatement,
   LiteralExpression,
   MatchStatement,
+  MemberExpression,
   NamedParameter,
   Node,
   Program,
   ReturnStatement,
   Statement,
+  StructDeclaration,
+  StructField,
+  StructLiteralExpression,
   TypeNode,
   UnaryExpression,
   VariableDeclaration,
@@ -60,6 +67,7 @@ interface LowerContext {
   nextTemp: number;
   loopExit?: IrBlockId;
   loopContinue?: IrBlockId;
+  structFields: Map<string, IrStructField[]>;
 }
 
 export function lowerProgramToIr(
@@ -69,11 +77,23 @@ export function lowerProgramToIr(
 ): IrProgram {
   const runtime = emptyRuntimeRequirements();
   const declarations: IrDeclaration[] = [];
+  const structFields = new Map<string, IrStructField[]>();
   let entry: string | undefined;
 
   for (const statement of program.body) {
+    if (statement.kind !== "StructDeclaration") continue;
+    const decl = lowerStructDeclaration(statement, structFields);
+    declarations.push(decl);
+  }
+
+  for (const statement of program.body) {
     if (statement.kind !== "FunctionDeclaration") continue;
-    const lowered = lowerFunction(statement, checkResult, runtime);
+    const lowered = lowerFunction(
+      statement,
+      checkResult,
+      runtime,
+      structFields,
+    );
     declarations.push(lowered);
     if (statement.name.name === "main") entry = lowered.id;
   }
@@ -87,10 +107,34 @@ export function lowerProgramToIr(
   };
 }
 
+function lowerStructDeclaration(
+  node: StructDeclaration,
+  structFields: Map<string, IrStructField[]>,
+): IrStructDeclaration {
+  const fields: IrStructField[] = node.members
+    .filter((m): m is StructField => m.kind === "StructField")
+    .map((field, index) => ({
+      name: field.name.name,
+      type: typeFromTypeNode(field.type),
+      index,
+    }));
+  const id: IrTypeDeclId = `struct.${node.name.name}`;
+  structFields.set(node.name.name, fields);
+  return {
+    kind: "struct_decl",
+    id,
+    sourceName: node.name.name,
+    linkName: node.name.name,
+    fields,
+    span: node.span,
+  };
+}
+
 function lowerFunction(
   node: FunctionDeclaration,
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
+  structFields: Map<string, IrStructField[]>,
 ): IrFunction {
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
@@ -102,6 +146,7 @@ function lowerFunction(
     currentBlock: entryBlock,
     nextLocal: 0,
     nextTemp: 0,
+    structFields,
   };
 
   const params = node.params
@@ -242,6 +287,17 @@ function lowerAssignment(
   statement: AssignmentStatement,
   context: LowerContext,
 ) {
+  if (statement.target.kind === "MemberExpression") {
+    const localId = resolveLocalFromMember(statement.target, context);
+    context.currentBlock.instructions.push({
+      kind: "set_field",
+      target: localId,
+      field: statement.target.property.name,
+      value: lowerExpression(statement.value, context),
+      span: statement.span,
+    });
+    return;
+  }
   if (statement.target.kind !== "IdentifierExpression") {
     throw new Error("IR lowering only supports identifier assignment so far.");
   }
@@ -257,6 +313,22 @@ function lowerAssignment(
     value: lowerExpression(statement.value, context),
     span: statement.span,
   });
+}
+
+function resolveLocalFromMember(
+  expr: MemberExpression,
+  context: LowerContext,
+): IrLocalId {
+  if (expr.object.kind !== "IdentifierExpression") {
+    throw new Error(
+      "IR lowering only supports single-level field assignment so far.",
+    );
+  }
+  const localId = context.locals.get(expr.object.name);
+  if (!localId) {
+    throw new Error(`Unknown local '${expr.object.name}' during IR lowering.`);
+  }
+  return localId;
 }
 
 function lowerIfStatement(statement: IfStatement, context: LowerContext) {
@@ -396,6 +468,10 @@ function lowerExpression(
       return lowerCall(expression, context);
     case "CastExpression":
       return lowerCast(expression, context);
+    case "StructLiteralExpression":
+      return lowerStructLiteral(expression, context);
+    case "MemberExpression":
+      return lowerMemberExpression(expression, context);
     default:
       throw new Error(`IR lowering does not support ${expression.kind} yet.`);
   }
@@ -519,6 +595,47 @@ function lowerCast(
     kind: "cast",
     target,
     value: lowerExpression(expression.expression, context),
+    type,
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type };
+}
+
+function lowerStructLiteral(
+  expression: StructLiteralExpression,
+  context: LowerContext,
+): IrOperand {
+  const structName = expression.name.name;
+  const declId: IrTypeDeclId = `struct.${structName}`;
+  const type: IrType = { kind: "named", name: structName, args: [] };
+  const target = nextTemp(context);
+  const fields = expression.fields.map((f) => ({
+    name: f.name.name,
+    value: lowerExpression(f.value, context),
+  }));
+  context.currentBlock.instructions.push({
+    kind: "construct_struct",
+    target,
+    declId,
+    fields,
+    type,
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type };
+}
+
+function lowerMemberExpression(
+  expression: MemberExpression,
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  const type = typeFromNode(context.checkResult, expression);
+  const object = lowerExpression(expression.object, context);
+  context.currentBlock.instructions.push({
+    kind: "get_field",
+    target,
+    object,
+    field: expression.property.name,
     type,
     span: expression.span,
   });

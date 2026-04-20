@@ -4,6 +4,7 @@ import type {
   IrInstruction,
   IrOperand,
   IrProgram,
+  IrStructDeclaration,
   IrTerminator,
   IrType,
 } from "@/ir/types";
@@ -19,10 +20,18 @@ export function dumpIr(program: IrProgram): string {
   );
 
   for (const declaration of program.declarations) {
-    if (declaration.kind === "function") dumpFunction(declaration, lines);
+    if (declaration.kind === "struct_decl") dumpStructDecl(declaration, lines);
+    else if (declaration.kind === "function") dumpFunction(declaration, lines);
   }
 
   return lines.join("\n");
+}
+
+function dumpStructDecl(decl: IrStructDeclaration, lines: string[]) {
+  const fields = decl.fields
+    .map((f) => `${f.name}: ${dumpType(f.type)}`)
+    .join(", ");
+  lines.push(`struct ${decl.id} ${decl.linkName} { ${fields} }`);
 }
 
 function dumpFunction(fn: IrFunction, lines: string[]) {
@@ -80,6 +89,18 @@ function dumpInstruction(instruction: IrInstruction): string {
     return `${target}call ${dumpOperand(instruction.callee)}(${instruction.args
       .map(dumpOperand)
       .join(", ")})`;
+  }
+  if (instruction.kind === "construct_struct") {
+    const fields = instruction.fields
+      .map((f) => `${f.name}: ${dumpOperand(f.value)}`)
+      .join(", ");
+    return `${instruction.target}: ${dumpType(instruction.type)} = construct_struct ${instruction.declId} { ${fields} }`;
+  }
+  if (instruction.kind === "get_field") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = get_field ${dumpOperand(instruction.object)}.${instruction.field}`;
+  }
+  if (instruction.kind === "set_field") {
+    return `set_field ${instruction.target}.${instruction.field} = ${dumpOperand(instruction.value)}`;
   }
   return `${instruction.target}: ${dumpType(instruction.type)} = cast ${dumpOperand(
     instruction.value,
