@@ -64,15 +64,19 @@ function validateFunction(
 
   if (fn.blocks.length === 0) {
     diagnostics.push({ message: `Defined function '${fn.id}' has no blocks.` });
+    return;
   }
 
+  const blockIds = new Set(fn.blocks.map((b) => b.id));
+
   for (const block of fn.blocks)
-    validateBlock(fn, block, locals, temps, diagnostics);
+    validateBlock(fn, block, blockIds, locals, temps, diagnostics);
 }
 
 function validateBlock(
   fn: IrFunction,
   block: IrBlock,
+  blockIds: Set<string>,
   locals: Set<string>,
   temps: Set<string>,
   diagnostics: IrValidationDiagnostic[],
@@ -88,7 +92,14 @@ function validateBlock(
     return;
   }
 
-  validateTerminator(fn, block.terminator, locals, temps, diagnostics);
+  validateTerminator(
+    fn,
+    block.terminator,
+    blockIds,
+    locals,
+    temps,
+    diagnostics,
+  );
 }
 
 function validateInstruction(
@@ -141,12 +152,50 @@ function validateInstruction(
 function validateTerminator(
   fn: IrFunction,
   terminator: IrTerminator,
+  blockIds: Set<string>,
   locals: Set<string>,
   temps: Set<string>,
   diagnostics: IrValidationDiagnostic[],
 ) {
-  if (terminator.kind === "return" && terminator.value) {
+  if (terminator.kind === "return") {
+    if (terminator.value)
+      validateOperand(fn, terminator.value, locals, temps, diagnostics);
+    return;
+  }
+
+  if (terminator.kind === "branch") {
+    requireBlockTarget(fn, terminator.target, blockIds, diagnostics);
+    return;
+  }
+
+  if (terminator.kind === "cond_branch") {
+    validateOperand(fn, terminator.condition, locals, temps, diagnostics);
+    requireBlockTarget(fn, terminator.thenTarget, blockIds, diagnostics);
+    requireBlockTarget(fn, terminator.elseTarget, blockIds, diagnostics);
+    return;
+  }
+
+  if (terminator.kind === "switch") {
     validateOperand(fn, terminator.value, locals, temps, diagnostics);
+    for (const c of terminator.cases)
+      requireBlockTarget(fn, c.target, blockIds, diagnostics);
+    requireBlockTarget(fn, terminator.defaultTarget, blockIds, diagnostics);
+    return;
+  }
+
+  // unreachable — no targets to validate
+}
+
+function requireBlockTarget(
+  fn: IrFunction,
+  target: string,
+  blockIds: Set<string>,
+  diagnostics: IrValidationDiagnostic[],
+) {
+  if (!blockIds.has(target)) {
+    diagnostics.push({
+      message: `Terminator in '${fn.id}' references unknown block '${target}'.`,
+    });
   }
 }
 

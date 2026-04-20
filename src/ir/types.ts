@@ -246,8 +246,28 @@ export interface IrCastInstruction {
   span?: Span;
 }
 
+export interface IrSwitchCase {
+  value: IrConst;
+  target: IrBlockId;
+}
+
 export type IrTerminator =
   | { kind: "return"; value?: IrOperand; span?: Span }
+  | { kind: "branch"; target: IrBlockId; span?: Span }
+  | {
+      kind: "cond_branch";
+      condition: IrOperand;
+      thenTarget: IrBlockId;
+      elseTarget: IrBlockId;
+      span?: Span;
+    }
+  | {
+      kind: "switch";
+      value: IrOperand;
+      cases: IrSwitchCase[];
+      defaultTarget: IrBlockId;
+      span?: Span;
+    }
   | { kind: "unreachable"; span?: Span };
 
 export const irPrimitive = (

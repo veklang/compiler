@@ -16,6 +16,7 @@ interface FunctionEmitContext {
   localNames: Map<string, string>;
   tempNames: Map<string, string>;
   paramIds: Set<string>;
+  multiBlock: boolean;
 }
 
 const defaultRuntimeHeader = "../runtime/dist/vek_runtime.h";
@@ -63,12 +64,14 @@ function functionPrototype(fn: IrFunction): string {
 }
 
 function emitFunction(fn: IrFunction): string[] {
+  const multiBlock = fn.blocks.length > 1;
   const context: FunctionEmitContext = {
     localNames: new Map(
       fn.locals.map((local) => [local.id, cLocalName(local.id)]),
     ),
     tempNames: new Map(),
     paramIds: new Set(fn.params.map((param) => param.local)),
+    multiBlock,
   };
   const lines = [`${functionPrototype(fn)} {`];
 
@@ -78,11 +81,17 @@ function emitFunction(fn: IrFunction): string[] {
   }
 
   for (const block of fn.blocks) {
+    if (multiBlock) {
+      lines.push(`${cBlockLabel(block.id)}:`);
+    }
     for (const instruction of block.instructions) {
       lines.push(`  ${emitInstruction(instruction, context)}`);
     }
-    if (block.terminator)
-      lines.push(`  ${emitTerminator(block.terminator, context)}`);
+    if (block.terminator) {
+      for (const line of emitTerminator(block.terminator, context)) {
+        lines.push(`  ${line}`);
+      }
+    }
   }
 
   lines.push("}");
@@ -133,11 +142,40 @@ function emitInstruction(
 function emitTerminator(
   terminator: IrTerminator,
   context: FunctionEmitContext,
-): string {
-  if (terminator.kind === "unreachable") return "__builtin_unreachable();";
-  if (!terminator.value) return "return;";
-  if (isVoidOperand(terminator.value)) return "return;";
-  return `return ${emitOperand(terminator.value, context)};`;
+): string[] {
+  if (terminator.kind === "unreachable") return ["__builtin_unreachable();"];
+
+  if (terminator.kind === "return") {
+    if (!terminator.value || isVoidOperand(terminator.value))
+      return ["return;"];
+    return [`return ${emitOperand(terminator.value, context)};`];
+  }
+
+  if (terminator.kind === "branch") {
+    return [`goto ${cBlockLabel(terminator.target)};`];
+  }
+
+  if (terminator.kind === "cond_branch") {
+    const cond = emitOperand(terminator.condition, context);
+    const thenLabel = cBlockLabel(terminator.thenTarget);
+    const elseLabel = cBlockLabel(terminator.elseTarget);
+    return [`if (${cond}) goto ${thenLabel}; else goto ${elseLabel};`];
+  }
+
+  if (terminator.kind === "switch") {
+    const val = emitOperand(terminator.value, context);
+    const lines: string[] = [`switch (${val}) {`];
+    for (const c of terminator.cases) {
+      lines.push(
+        `  case ${emitConst(c.value)}: goto ${cBlockLabel(c.target)};`,
+      );
+    }
+    lines.push(`  default: goto ${cBlockLabel(terminator.defaultTarget)};`);
+    lines.push("}");
+    return lines;
+  }
+
+  return ["/* unknown terminator */"];
 }
 
 function emitMainWrapper(entry: IrFunction): string[] {
@@ -216,6 +254,10 @@ function cLocalName(id: string): string {
 
 function cTempName(id: string): string {
   return `t${id.replace(/^tmp\./, "")}`;
+}
+
+function cBlockLabel(id: string): string {
+  return id.replace(/\./g, "_");
 }
 
 function sanitizeName(name: string): string {

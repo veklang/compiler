@@ -61,6 +61,51 @@ fn main() -> void {
     assert.ok(c.includes('__vek_panic_cstr("boom");'));
   });
 
+  test("emits if/else as labels and conditional goto", () => {
+    const c = emitOk(`
+fn max(a: i32, b: i32) -> i32 {
+  if a > b {
+    return a;
+  } else {
+    return b;
+  }
+}
+`);
+
+    assert.ok(c.includes("if ("));
+    assert.ok(c.includes("goto bb_"));
+    assert.ok(c.includes("bb_1:"));
+    assert.ok(c.includes("bb_2:"));
+  });
+
+  test("emits while loop with condition and body labels", () => {
+    const c = emitOk(`
+fn count() -> void {
+  let i: i32 = 0;
+  while i < 10 {
+    i = i + 1;
+  }
+  return;
+}
+`);
+
+    assert.ok(c.includes("goto bb_"));
+    assert.ok(c.includes("if ("));
+    assert.ok(c.includes("bb_1:"));
+    assert.ok(c.includes("bb_2:"));
+    assert.ok(c.includes("bb_3:"));
+  });
+
+  test("emits unreachable after panic", () => {
+    const c = emitOk(`
+fn main() -> void {
+  panic("boom");
+}
+`);
+
+    assert.ok(c.includes("__builtin_unreachable();"));
+  });
+
   test("rejects f16 during C emission", () => {
     const result = check(`
 fn half(x: f16) -> f16 {

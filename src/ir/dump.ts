@@ -88,6 +88,16 @@ function dumpInstruction(instruction: IrInstruction): string {
 
 function dumpTerminator(terminator: IrTerminator): string {
   if (terminator.kind === "unreachable") return "unreachable";
+  if (terminator.kind === "branch") return `branch ${terminator.target}`;
+  if (terminator.kind === "cond_branch") {
+    return `cond_branch ${dumpOperand(terminator.condition)}, ${terminator.thenTarget}, ${terminator.elseTarget}`;
+  }
+  if (terminator.kind === "switch") {
+    const cases = terminator.cases
+      .map((c) => `${dumpConst(c.value)} -> ${c.target}`)
+      .join(", ");
+    return `switch ${dumpOperand(terminator.value)}, [${cases}], default -> ${terminator.defaultTarget}`;
+  }
   return terminator.value
     ? `return ${dumpOperand(terminator.value)}`
     : "return";

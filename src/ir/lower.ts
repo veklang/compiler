@@ -1,5 +1,6 @@
 import type {
   IrBlock,
+  IrBlockId,
   IrConst,
   IrDeclaration,
   IrFunction,
@@ -17,13 +18,18 @@ import type {
   AssignmentStatement,
   BinaryExpression,
   BlockStatement,
+  BreakStatement,
   CallExpression,
   CastExpression,
+  ContinueStatement,
   Expression,
+  ForStatement,
   FunctionDeclaration,
   GroupingExpression,
   IdentifierExpression,
+  IfStatement,
   LiteralExpression,
+  MatchStatement,
   NamedParameter,
   Node,
   Program,
@@ -32,6 +38,7 @@ import type {
   TypeNode,
   UnaryExpression,
   VariableDeclaration,
+  WhileStatement,
 } from "@/types/ast";
 
 interface LowerOptions {
@@ -47,9 +54,12 @@ interface LowerContext {
   runtime: IrRuntimeRequirements;
   locals: Map<string, IrLocalId>;
   localDecls: IrLocal[];
-  block: IrBlock;
+  blocks: IrBlock[];
+  currentBlock: IrBlock;
   nextLocal: number;
   nextTemp: number;
+  loopExit?: IrBlockId;
+  loopContinue?: IrBlockId;
 }
 
 export function lowerProgramToIr(
@@ -82,13 +92,14 @@ function lowerFunction(
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
 ): IrFunction {
-  const block: IrBlock = { id: "bb.0", instructions: [] };
+  const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
     checkResult,
     runtime,
     locals: new Map(),
     localDecls: [],
-    block,
+    blocks: [entryBlock],
+    currentBlock: entryBlock,
     nextLocal: 0,
     nextTemp: 0,
   };
@@ -113,11 +124,11 @@ function lowerFunction(
     });
 
   if (node.body) lowerBlock(node.body, context);
-  if (node.body && !block.terminator) {
-    block.terminator = {
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = {
       kind: "return",
       value: voidOperand(),
-      span: node.body.span,
+      span: node.body?.span,
     };
   }
 
@@ -139,7 +150,7 @@ function lowerFunction(
     },
     params,
     locals: context.localDecls,
-    blocks: node.isExtern ? [] : [block],
+    blocks: node.isExtern ? [] : context.blocks,
     body: node.isExtern ? "extern" : "defined",
     span: node.span,
   };
@@ -147,7 +158,7 @@ function lowerFunction(
 
 function lowerBlock(block: BlockStatement, context: LowerContext) {
   for (const statement of block.body) {
-    if (context.block.terminator) return;
+    if (isTerminated(context)) return;
     lowerStatement(statement, context);
   }
 }
@@ -168,6 +179,24 @@ function lowerStatement(statement: Statement, context: LowerContext) {
       return;
     case "BlockStatement":
       lowerBlock(statement, context);
+      return;
+    case "IfStatement":
+      lowerIfStatement(statement, context);
+      return;
+    case "WhileStatement":
+      lowerWhileStatement(statement, context);
+      return;
+    case "BreakStatement":
+      lowerBreak(statement, context);
+      return;
+    case "ContinueStatement":
+      lowerContinue(statement, context);
+      return;
+    case "ForStatement":
+      lowerForStatement(statement, context);
+      return;
+    case "MatchStatement":
+      lowerMatchStatement(statement, context);
       return;
     default:
       throw new Error(`IR lowering does not support ${statement.kind} yet.`);
@@ -190,7 +219,7 @@ function lowerVariableDeclaration(
   );
 
   if (statement.initializer) {
-    context.block.instructions.push({
+    context.currentBlock.instructions.push({
       kind: "assign",
       target: local.id,
       value: lowerExpression(statement.initializer, context),
@@ -200,7 +229,7 @@ function lowerVariableDeclaration(
 }
 
 function lowerReturn(statement: ReturnStatement, context: LowerContext) {
-  context.block.terminator = {
+  context.currentBlock.terminator = {
     kind: "return",
     value: statement.value
       ? lowerExpression(statement.value, context)
@@ -222,12 +251,129 @@ function lowerAssignment(
       `Unknown local '${statement.target.name}' during IR lowering.`,
     );
   }
-  context.block.instructions.push({
+  context.currentBlock.instructions.push({
     kind: "assign",
     target,
     value: lowerExpression(statement.value, context),
     span: statement.span,
   });
+}
+
+function lowerIfStatement(statement: IfStatement, context: LowerContext) {
+  const condition = lowerExpression(statement.condition, context);
+
+  const thenBlock = newBlock(context);
+  const elseBlock = statement.elseBranch ? newBlock(context) : undefined;
+  const joinBlock = newBlock(context);
+
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition,
+    thenTarget: thenBlock.id,
+    elseTarget: elseBlock ? elseBlock.id : joinBlock.id,
+    span: statement.span,
+  };
+
+  const savedLocals = saveLocals(context);
+
+  switchBlock(context, thenBlock);
+  lowerBlock(statement.thenBranch, context);
+  restoreLocals(context, savedLocals);
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = { kind: "branch", target: joinBlock.id };
+  }
+
+  if (statement.elseBranch && elseBlock) {
+    switchBlock(context, elseBlock);
+    const savedLocals2 = saveLocals(context);
+    if (statement.elseBranch.kind === "BlockStatement") {
+      lowerBlock(statement.elseBranch, context);
+    } else {
+      lowerIfStatement(statement.elseBranch, context);
+    }
+    restoreLocals(context, savedLocals2);
+    if (!isTerminated(context)) {
+      context.currentBlock.terminator = {
+        kind: "branch",
+        target: joinBlock.id,
+      };
+    }
+  }
+
+  switchBlock(context, joinBlock);
+}
+
+function lowerWhileStatement(statement: WhileStatement, context: LowerContext) {
+  const condBlock = newBlock(context);
+  const bodyBlock = newBlock(context);
+  const exitBlock = newBlock(context);
+
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: condBlock.id,
+    span: statement.span,
+  };
+
+  switchBlock(context, condBlock);
+  const condition = lowerExpression(statement.condition, context);
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition,
+    thenTarget: bodyBlock.id,
+    elseTarget: exitBlock.id,
+    span: statement.span,
+  };
+
+  switchBlock(context, bodyBlock);
+  const savedExit = context.loopExit;
+  const savedContinue = context.loopContinue;
+  context.loopExit = exitBlock.id;
+  context.loopContinue = condBlock.id;
+  const savedLocals = saveLocals(context);
+  lowerBlock(statement.body, context);
+  restoreLocals(context, savedLocals);
+  context.loopExit = savedExit;
+  context.loopContinue = savedContinue;
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = { kind: "branch", target: condBlock.id };
+  }
+
+  switchBlock(context, exitBlock);
+}
+
+function lowerBreak(statement: BreakStatement, context: LowerContext) {
+  if (!context.loopExit) {
+    throw new Error("IR lowering: break outside of loop.");
+  }
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: context.loopExit,
+    span: statement.span,
+  };
+}
+
+function lowerContinue(statement: ContinueStatement, context: LowerContext) {
+  if (!context.loopContinue) {
+    throw new Error("IR lowering: continue outside of loop.");
+  }
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: context.loopContinue,
+    span: statement.span,
+  };
+}
+
+function lowerForStatement(_statement: ForStatement, _context: LowerContext) {
+  throw new Error(
+    "IR lowering does not support for loops yet (requires array runtime helpers).",
+  );
+}
+
+function lowerMatchStatement(
+  _statement: MatchStatement,
+  _context: LowerContext,
+) {
+  throw new Error("IR lowering does not support match statements yet.");
 }
 
 function lowerExpression(
@@ -292,7 +438,7 @@ function lowerBinary(
 ): IrOperand {
   const target = nextTemp(context);
   const type = typeFromNode(context.checkResult, expression);
-  context.block.instructions.push({
+  context.currentBlock.instructions.push({
     kind: "binary",
     target,
     operator: expression.operator,
@@ -310,7 +456,7 @@ function lowerUnary(
 ): IrOperand {
   const target = nextTemp(context);
   const type = typeFromNode(context.checkResult, expression);
-  context.block.instructions.push({
+  context.currentBlock.instructions.push({
     kind: "unary",
     target,
     operator: expression.operator,
@@ -332,9 +478,25 @@ function lowerCall(
 
   if (callee.kind === "function" && callee.name === "panic") {
     context.runtime.panic = true;
+    const args = expression.args.map((arg) => lowerExpression(arg, context));
+    context.currentBlock.instructions.push({
+      kind: "call",
+      target: undefined,
+      callee,
+      args,
+      type,
+      span: expression.span,
+    });
+    context.currentBlock.terminator = {
+      kind: "unreachable",
+      span: expression.span,
+    };
+    const afterBlock = newBlock(context);
+    switchBlock(context, afterBlock);
+    return voidOperand();
   }
 
-  context.block.instructions.push({
+  context.currentBlock.instructions.push({
     kind: "call",
     target: returnsVoid ? undefined : target,
     callee,
@@ -353,7 +515,7 @@ function lowerCast(
 ): IrOperand {
   const target = nextTemp(context);
   const type = typeFromTypeNode(expression.type);
-  context.block.instructions.push({
+  context.currentBlock.instructions.push({
     kind: "cast",
     target,
     value: lowerExpression(expression.expression, context),
@@ -361,6 +523,34 @@ function lowerCast(
     span: expression.span,
   });
   return { kind: "temp", id: target, type };
+}
+
+function newBlock(context: LowerContext): IrBlock {
+  const block: IrBlock = {
+    id: `bb.${context.blocks.length}`,
+    instructions: [],
+  };
+  context.blocks.push(block);
+  return block;
+}
+
+function switchBlock(context: LowerContext, block: IrBlock): void {
+  context.currentBlock = block;
+}
+
+function isTerminated(context: LowerContext): boolean {
+  return context.currentBlock.terminator !== undefined;
+}
+
+function saveLocals(context: LowerContext): Map<string, IrLocalId> {
+  return new Map(context.locals);
+}
+
+function restoreLocals(
+  context: LowerContext,
+  saved: Map<string, IrLocalId>,
+): void {
+  context.locals = saved;
 }
 
 function declareLocal(
