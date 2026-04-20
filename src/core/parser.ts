@@ -281,7 +281,7 @@ export class Parser {
       this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     this.expectPunctuator(":");
     const type = this.parseType() ?? this.placeholderType(this.currentSpan());
-    this.expectSemicolon();
+    this.expectSemicolonOrSync();
     return {
       kind: "StructField",
       span: this.spanFrom(fieldName.span, type.span),
@@ -335,7 +335,7 @@ export class Parser {
       }
       this.expectPunctuator(")");
     }
-    this.expectSemicolon();
+    this.expectSemicolonOrSync();
     return {
       kind: "EnumVariant",
       span: this.spanFrom(
@@ -1426,6 +1426,19 @@ export class Parser {
   private expectSemicolon() {
     if (!this.matchPunctuator(";"))
       this.report("Expected ';'.", this.currentSpan(), "E1020");
+  }
+
+  private expectSemicolonOrSync() {
+    if (this.matchPunctuator(";")) return;
+    this.report("Expected ';'.", this.currentSpan(), "E1020");
+    while (
+      !this.isAtEnd() &&
+      !this.checkPunctuator(";") &&
+      !this.checkPunctuator("}")
+    ) {
+      this.advance();
+    }
+    this.matchPunctuator(";");
   }
 
   private expectKind(kind: Token["kind"]): Token {
