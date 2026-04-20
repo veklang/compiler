@@ -5,6 +5,7 @@ import "./modules.test";
 import "./reachability.test";
 import "./mono.test";
 import "./initializers.test";
+import "./ir.test";
 import { run } from "./tester";
 
 run();
