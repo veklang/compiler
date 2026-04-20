@@ -236,6 +236,10 @@ export type IrInstruction =
   | IrUnaryInstruction
   | IrCallInstruction
   | IrCastInstruction
+  | IrMakeNullInstruction
+  | IrMakeNullableInstruction
+  | IrIsNullInstruction
+  | IrUnwrapNullableInstruction
   | IrConstructTupleInstruction
   | IrGetTupleFieldInstruction
   | IrConstructStructInstruction
@@ -284,6 +288,37 @@ export interface IrCallInstruction {
 
 export interface IrCastInstruction {
   kind: "cast";
+  target: IrTempId;
+  value: IrOperand;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrMakeNullInstruction {
+  kind: "make_null";
+  target: IrTempId;
+  type: IrNullableType;
+  span?: Span;
+}
+
+export interface IrMakeNullableInstruction {
+  kind: "make_nullable";
+  target: IrTempId;
+  value: IrOperand;
+  type: IrNullableType;
+  span?: Span;
+}
+
+export interface IrIsNullInstruction {
+  kind: "is_null";
+  target: IrTempId;
+  value: IrOperand;
+  type: IrPrimitiveType;
+  span?: Span;
+}
+
+export interface IrUnwrapNullableInstruction {
+  kind: "unwrap_nullable";
   target: IrTempId;
   value: IrOperand;
   type: IrType;

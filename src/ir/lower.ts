@@ -77,6 +77,7 @@ interface LowerContext {
   checkResult: IrTypeSource;
   runtime: IrRuntimeRequirements;
   locals: Map<string, IrLocalId>;
+  localTypes: Map<IrLocalId, IrType>;
   localDecls: IrLocal[];
   blocks: IrBlock[];
   currentBlock: IrBlock;
@@ -87,7 +88,9 @@ interface LowerContext {
   structFields: Map<string, IrStructField[]>;
   variantInfos: Map<string, VariantInfo>;
   globals: Map<string, IrGlobalId>;
+  globalTypes: Map<IrGlobalId, IrType>;
   lazyGlobals: Set<IrGlobalId>;
+  returnType: IrType;
 }
 
 export function lowerProgramToIr(
@@ -110,6 +113,7 @@ export function lowerProgramToIr(
   }
 
   const globals = new Map<string, IrGlobalId>();
+  const globalTypes = new Map<IrGlobalId, IrType>();
   const lazyGlobals = new Set<IrGlobalId>();
   const globalStatements: VariableDeclaration[] = [];
   for (const statement of program.body) {
@@ -117,6 +121,7 @@ export function lowerProgramToIr(
       const global = lowerGlobalDeclaration(statement, checkResult, runtime);
       declarations.push(global);
       globals.set(statement.name.name, global.id);
+      globalTypes.set(global.id, global.type);
       if (global.initializerFunction) lazyGlobals.add(global.id);
       globalStatements.push(statement);
     }
@@ -136,6 +141,7 @@ export function lowerProgramToIr(
         structFields,
         variantInfos,
         globals,
+        globalTypes,
         lazyGlobals,
       ),
     );
@@ -150,6 +156,7 @@ export function lowerProgramToIr(
       structFields,
       variantInfos,
       globals,
+      globalTypes,
       lazyGlobals,
     );
     declarations.push(lowered);
@@ -256,6 +263,7 @@ function lowerGlobalInitializerFunction(
   structFields: Map<string, IrStructField[]>,
   variantInfos: Map<string, VariantInfo>,
   globals: Map<string, IrGlobalId>,
+  globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
 ): IrFunction {
   if (!node.initializer) {
@@ -268,6 +276,7 @@ function lowerGlobalInitializerFunction(
     checkResult,
     runtime,
     locals: new Map(),
+    localTypes: new Map(),
     localDecls: [],
     blocks: [entryBlock],
     currentBlock: entryBlock,
@@ -276,13 +285,20 @@ function lowerGlobalInitializerFunction(
     structFields,
     variantInfos,
     globals,
+    globalTypes,
     lazyGlobals,
+    returnType: irPrimitive("void"),
   };
 
   context.currentBlock.instructions.push({
     kind: "store_global",
     globalId,
-    value: lowerExpression(node.initializer, context),
+    value: coerceOperand(
+      lowerExpression(node.initializer, context),
+      globalTypes.get(globalId) ?? typeFromNode(checkResult, node.initializer),
+      context,
+      node.span,
+    ),
     span: node.span,
   });
   context.currentBlock.terminator = {
@@ -312,13 +328,18 @@ function lowerFunction(
   structFields: Map<string, IrStructField[]>,
   variantInfos: Map<string, VariantInfo>,
   globals: Map<string, IrGlobalId>,
+  globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
 ): IrFunction {
+  const returnType = node.returnType
+    ? typeFromTypeNode(node.returnType)
+    : irPrimitive("void");
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
     checkResult,
     runtime,
     locals: new Map(),
+    localTypes: new Map(),
     localDecls: [],
     blocks: [entryBlock],
     currentBlock: entryBlock,
@@ -327,7 +348,9 @@ function lowerFunction(
     structFields,
     variantInfos,
     globals,
+    globalTypes,
     lazyGlobals,
+    returnType,
   };
 
   const params = node.params
@@ -357,10 +380,6 @@ function lowerFunction(
       span: node.body?.span,
     };
   }
-
-  const returnType = node.returnType
-    ? typeFromTypeNode(node.returnType)
-    : irPrimitive("void");
 
   return {
     kind: "function",
@@ -448,7 +467,12 @@ function lowerVariableDeclaration(
     context.currentBlock.instructions.push({
       kind: "assign",
       target: local.id,
-      value: lowerExpression(statement.initializer, context),
+      value: coerceOperand(
+        lowerExpression(statement.initializer, context),
+        local.type,
+        context,
+        statement.span,
+      ),
       span: statement.span,
     });
   }
@@ -458,7 +482,12 @@ function lowerReturn(statement: ReturnStatement, context: LowerContext) {
   context.currentBlock.terminator = {
     kind: "return",
     value: statement.value
-      ? lowerExpression(statement.value, context)
+      ? coerceOperand(
+          lowerExpression(statement.value, context),
+          context.returnType,
+          context,
+          statement.span,
+        )
       : voidOperand(),
     span: statement.span,
   };
@@ -487,7 +516,13 @@ function lowerAssignment(
     context.currentBlock.instructions.push({
       kind: "store_global",
       globalId,
-      value: lowerExpression(statement.value, context),
+      value: coerceOperand(
+        lowerExpression(statement.value, context),
+        context.globalTypes.get(globalId) ??
+          typeFromNode(context.checkResult, statement.value),
+        context,
+        statement.span,
+      ),
       span: statement.span,
     });
     return;
@@ -501,7 +536,13 @@ function lowerAssignment(
   context.currentBlock.instructions.push({
     kind: "assign",
     target,
-    value: lowerExpression(statement.value, context),
+    value: coerceOperand(
+      lowerExpression(statement.value, context),
+      context.localTypes.get(target) ??
+        typeFromNode(context.checkResult, statement.value),
+      context,
+      statement.span,
+    ),
     span: statement.span,
   });
 }
@@ -871,11 +912,18 @@ function lowerIdentifier(
 ): IrOperand {
   const local = context.locals.get(expression.name);
   if (local) {
-    return {
-      kind: "local",
-      id: local,
-      type: typeFromNode(context.checkResult, expression),
-    };
+    return maybeUnwrapNullable(
+      {
+        kind: "local",
+        id: local,
+        type:
+          context.localTypes.get(local) ??
+          typeFromNode(context.checkResult, expression),
+      },
+      typeFromNode(context.checkResult, expression),
+      context,
+      expression.span,
+    );
   }
   const globalId = context.globals.get(expression.name);
   if (globalId) {
@@ -886,11 +934,18 @@ function lowerIdentifier(
         span: expression.span,
       });
     }
-    return {
-      kind: "global",
-      id: globalId,
-      type: typeFromNode(context.checkResult, expression),
-    };
+    return maybeUnwrapNullable(
+      {
+        kind: "global",
+        id: globalId,
+        type:
+          context.globalTypes.get(globalId) ??
+          typeFromNode(context.checkResult, expression),
+      },
+      typeFromNode(context.checkResult, expression),
+      context,
+      expression.span,
+    );
   }
   const variant = context.variantInfos.get(expression.name);
   if (variant && variant.payloadTypes.length === 0) {
@@ -931,6 +986,9 @@ function lowerBinary(
   expression: BinaryExpression,
   context: LowerContext,
 ): IrOperand {
+  const nullComparison = lowerNullComparison(expression, context);
+  if (nullComparison) return nullComparison;
+
   const target = nextTemp(context);
   const type = typeFromNode(context.checkResult, expression);
   context.currentBlock.instructions.push({
@@ -943,6 +1001,48 @@ function lowerBinary(
     span: expression.span,
   });
   return { kind: "temp", id: target, type };
+}
+
+function lowerNullComparison(
+  expression: BinaryExpression,
+  context: LowerContext,
+): IrOperand | undefined {
+  if (expression.operator !== "==" && expression.operator !== "!=")
+    return undefined;
+
+  const leftIsNull = isNullLiteral(expression.left);
+  const rightIsNull = isNullLiteral(expression.right);
+  if (!leftIsNull && !rightIsNull) return undefined;
+
+  const nullable = lowerExpression(
+    leftIsNull ? expression.right : expression.left,
+    context,
+  );
+  if (nullable.type.kind !== "nullable") return undefined;
+
+  const isNullTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "is_null",
+    target: isNullTarget,
+    value: nullable,
+    type: irPrimitive("bool"),
+    span: expression.span,
+  });
+
+  if (expression.operator === "==") {
+    return { kind: "temp", id: isNullTarget, type: irPrimitive("bool") };
+  }
+
+  const notTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "unary",
+    target: notTarget,
+    operator: "!",
+    argument: { kind: "temp", id: isNullTarget, type: irPrimitive("bool") },
+    type: irPrimitive("bool"),
+    span: expression.span,
+  });
+  return { kind: "temp", id: notTarget, type: irPrimitive("bool") };
 }
 
 function lowerUnary(
@@ -1045,6 +1145,69 @@ function lowerCast(
     span: expression.span,
   });
   return { kind: "temp", id: target, type };
+}
+
+function maybeUnwrapNullable(
+  operand: IrOperand,
+  expressionType: IrType,
+  context: LowerContext,
+  span: IrLocal["span"],
+): IrOperand {
+  if (
+    operand.type.kind === "nullable" &&
+    irTypeEquals(operand.type.base, expressionType)
+  ) {
+    const target = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "unwrap_nullable",
+      target,
+      value: operand,
+      type: expressionType,
+      span,
+    });
+    return { kind: "temp", id: target, type: expressionType };
+  }
+  return {
+    ...operand,
+    type: expressionType.kind === "unknown" ? operand.type : expressionType,
+  };
+}
+
+function coerceOperand(
+  operand: IrOperand,
+  targetType: IrType,
+  context: LowerContext,
+  span: IrLocal["span"],
+): IrOperand {
+  if (targetType.kind !== "nullable") return operand;
+  if (operand.type.kind === "primitive" && operand.type.name === "null") {
+    const target = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "make_null",
+      target,
+      type: targetType,
+      span,
+    });
+    return { kind: "temp", id: target, type: targetType };
+  }
+  if (irTypeEquals(operand.type, targetType.base)) {
+    const target = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "make_nullable",
+      target,
+      value: operand,
+      type: targetType,
+      span,
+    });
+    return { kind: "temp", id: target, type: targetType };
+  }
+  return operand;
+}
+
+function isNullLiteral(expression: Expression): boolean {
+  return (
+    expression.kind === "LiteralExpression" && expression.literalType === "Null"
+  );
 }
 
 function lowerTupleLiteral(
@@ -1169,8 +1332,44 @@ function declareLocal(
     span,
   };
   context.locals.set(sourceName, local.id);
+  context.localTypes.set(local.id, type);
   context.localDecls.push(local);
   return local;
+}
+
+function irTypeEquals(left: IrType, right: IrType): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "primitive" && right.kind === "primitive")
+    return left.name === right.name;
+  if (left.kind === "nullable" && right.kind === "nullable")
+    return irTypeEquals(left.base, right.base);
+  if (left.kind === "tuple" && right.kind === "tuple") {
+    return (
+      left.elements.length === right.elements.length &&
+      left.elements.every((element, index) =>
+        irTypeEquals(element, right.elements[index]),
+      )
+    );
+  }
+  if (left.kind === "named" && right.kind === "named") {
+    return (
+      left.name === right.name &&
+      left.args.length === right.args.length &&
+      left.args.every((arg, index) => irTypeEquals(arg, right.args[index]))
+    );
+  }
+  if (left.kind === "function" && right.kind === "function") {
+    return (
+      left.params.length === right.params.length &&
+      left.params.every(
+        (param, index) =>
+          param.mutable === right.params[index].mutable &&
+          irTypeEquals(param.type, right.params[index].type),
+      ) &&
+      irTypeEquals(left.returnType, right.returnType)
+    );
+  }
+  return left.kind === right.kind;
 }
 
 function nextTemp(context: LowerContext): IrTempId {

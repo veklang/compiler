@@ -132,6 +132,27 @@ fn second() -> i32 {
     assert.ok(c.includes("._1;"));
   });
 
+  test("emits nullable typedefs, construction, checks, and unwraps", () => {
+    const c = emitOk(`
+fn main() -> i32 {
+  let maybe_num: i32? = 42;
+  if maybe_num != null {
+    return maybe_num;
+  }
+  return 0;
+}
+`);
+
+    assert.ok(c.includes("typedef struct {"));
+    assert.ok(c.includes("  bool is_null;"));
+    assert.ok(c.includes("  int32_t value;"));
+    assert.ok(c.includes("} __vek_nullable_i32;"));
+    assert.ok(c.includes(".is_null = false"));
+    assert.ok(c.includes(".value = 42"));
+    assert.ok(c.includes(".is_null;"));
+    assert.ok(c.includes(".value;"));
+  });
+
   test("emits if/else as labels and conditional goto", () => {
     const c = emitOk(`
 fn max(a: i32, b: i32) -> i32 {

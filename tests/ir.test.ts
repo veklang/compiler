@@ -146,6 +146,23 @@ fn second() -> i32 {
     assert.ok(dump.includes(".1"));
   });
 
+  test("lowers nullable construction, null checks, and narrowed unwraps", () => {
+    const ir = irOk(`
+fn main() -> i32 {
+  let maybe_num: i32? = 42;
+  if maybe_num != null {
+    return maybe_num;
+  }
+  return 0;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("make_nullable"));
+    assert.ok(dump.includes("is_null"));
+    assert.ok(dump.includes("unwrap_nullable"));
+  });
+
   test("lowers if with no else to cond_branch + join", () => {
     const ir = irOk(`
 fn main() -> void {

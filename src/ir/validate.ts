@@ -272,6 +272,37 @@ function validateInstruction(
     return;
   }
 
+  if (instruction.kind === "make_null") {
+    return;
+  }
+
+  if (instruction.kind === "make_nullable") {
+    validateOperand(
+      fn,
+      instruction.value,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
+    return;
+  }
+
+  if (
+    instruction.kind === "is_null" ||
+    instruction.kind === "unwrap_nullable"
+  ) {
+    validateOperand(
+      fn,
+      instruction.value,
+      locals,
+      temps,
+      globalIds,
+      diagnostics,
+    );
+    return;
+  }
+
   if (instruction.kind === "construct_tuple") {
     for (const element of instruction.elements) {
       validateOperand(fn, element, locals, temps, globalIds, diagnostics);

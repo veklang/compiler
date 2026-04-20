@@ -115,6 +115,18 @@ function dumpInstruction(instruction: IrInstruction): string {
       .map(dumpOperand)
       .join(", ")})`;
   }
+  if (instruction.kind === "make_null") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = make_null`;
+  }
+  if (instruction.kind === "make_nullable") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = make_nullable ${dumpOperand(instruction.value)}`;
+  }
+  if (instruction.kind === "is_null") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = is_null ${dumpOperand(instruction.value)}`;
+  }
+  if (instruction.kind === "unwrap_nullable") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = unwrap_nullable ${dumpOperand(instruction.value)}`;
+  }
   if (instruction.kind === "construct_tuple") {
     return `${instruction.target}: ${dumpType(instruction.type)} = construct_tuple (${instruction.elements.map(dumpOperand).join(", ")})`;
   }

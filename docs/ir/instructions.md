@@ -296,27 +296,29 @@ Rules:
 ```ts
 interface IrMakeNullable {
   kind: "make_nullable";
-  result: IrTempValue;
-  value: IrValue;
+  target: IrTempId;
+  value: IrOperand;
   type: IrNullableType;
 }
 
 interface IrMakeNull {
   kind: "make_null";
-  result: IrTempValue;
+  target: IrTempId;
   type: IrNullableType;
 }
 
 interface IrIsNull {
   kind: "is_null";
-  result: IrTempValue;
-  value: IrValue;
+  target: IrTempId;
+  value: IrOperand;
+  type: IrPrimitiveType; // bool
 }
 
 interface IrUnwrapNullable {
   kind: "unwrap_nullable";
-  result: IrTempValue;
-  value: IrValue;
+  target: IrTempId;
+  value: IrOperand;
+  type: IrType;
 }
 ```
 

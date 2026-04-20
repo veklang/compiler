@@ -4,6 +4,7 @@ import type {
   IrFunction,
   IrGlobal,
   IrInstruction,
+  IrNullableType,
   IrOperand,
   IrProgram,
   IrStructDeclaration,
@@ -63,6 +64,12 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
     lines.push(...emitTupleTypedef(tuple));
   }
   if (tuples.length > 0) lines.push("");
+
+  const nullables = collectNullableTypes(program);
+  for (const nullable of nullables) {
+    lines.push(...emitNullableTypedef(nullable));
+  }
+  if (nullables.length > 0) lines.push("");
 
   const globals = program.declarations.filter(
     (declaration): declaration is IrGlobal => declaration.kind === "global",
@@ -127,7 +134,7 @@ function emitGlobalDeclaration(
 ): string {
   const name = requireGlobal(globalNames, global.id);
   const type = emitType(global.type);
-  const init = global.initializer ? ` = ${emitConst(global.initializer)}` : "";
+  const init = global.initializer ? ` = ${emitGlobalInitializer(global)}` : "";
   const qualifier =
     global.mutable || global.initializerFunction ? "" : "const ";
 
@@ -233,6 +240,26 @@ function emitInstruction(
     if (!instruction.target) return `${call};`;
     const target = declareTemp(context, instruction.target);
     return `${emitType(instruction.type)} ${target} = ${call};`;
+  }
+
+  if (instruction.kind === "make_null") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitType(instruction.type)} ${target} = (${emitType(instruction.type)}){ .is_null = true };`;
+  }
+
+  if (instruction.kind === "make_nullable") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitType(instruction.type)} ${target} = (${emitType(instruction.type)}){ .is_null = false, .value = ${emitOperand(instruction.value, context)} };`;
+  }
+
+  if (instruction.kind === "is_null") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.value, context)}.is_null;`;
+  }
+
+  if (instruction.kind === "unwrap_nullable") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.value, context)}.value;`;
   }
 
   if (instruction.kind === "construct_tuple") {
@@ -378,6 +405,15 @@ function emitConst(value: IrConst): string {
   return "";
 }
 
+function emitGlobalInitializer(global: IrGlobal): string {
+  if (!global.initializer) return "";
+  if (global.type.kind === "nullable") {
+    if (global.initializer.kind === "null") return "{ .is_null = true }";
+    return `{ .is_null = false, .value = ${emitConst(global.initializer)} }`;
+  }
+  return emitConst(global.initializer);
+}
+
 function emitStructTypedef(s: IrStructDeclaration): string[] {
   const fields = s.fields.map((f) => `  ${emitType(f.type)} ${f.name};`);
   return [`typedef struct {`, ...fields, `} ${cStructName(s.linkName)};`];
@@ -408,7 +444,17 @@ function emitTupleTypedef(tuple: IrTupleType): string[] {
   return [`typedef struct {`, ...fields, `} ${cTupleName(tuple)};`];
 }
 
+function emitNullableTypedef(nullable: IrNullableType): string[] {
+  return [
+    "typedef struct {",
+    "  bool is_null;",
+    `  ${emitType(nullable.base)} value;`,
+    `} ${cNullableName(nullable)};`,
+  ];
+}
+
 function emitType(type: IrType): string {
+  if (type.kind === "nullable") return cNullableName(type);
   if (type.kind === "tuple") return cTupleName(type);
   if (type.kind === "named") {
     return type.decl === "enum" ? cEnumName(type.name) : cStructName(type.name);
@@ -497,6 +543,10 @@ function cTupleName(type: IrTupleType): string {
   return `__vek_tuple_${parts.join("__")}`;
 }
 
+function cNullableName(type: IrNullableType): string {
+  return `__vek_nullable_${typeNamePart(type.base)}`;
+}
+
 function typeNamePart(type: IrType): string {
   if (type.kind === "primitive") return sanitizeName(type.name);
   if (type.kind === "named") {
@@ -550,6 +600,59 @@ function collectTupleTypes(program: IrProgram): IrTupleType[] {
   );
 }
 
+function collectNullableTypes(program: IrProgram): IrNullableType[] {
+  const nullables = new Map<string, IrNullableType>();
+  collectProgramTypes(program, (type) => {
+    if (type.kind === "nullable") collectNullableType(type, nullables);
+  });
+  return [...nullables.values()].sort(
+    (left, right) => nullableDepth(left) - nullableDepth(right),
+  );
+}
+
+function collectNullableType(
+  type: IrNullableType,
+  nullables: Map<string, IrNullableType>,
+) {
+  if (type.base.kind === "nullable") collectNullableType(type.base, nullables);
+  nullables.set(cNullableName(type), type);
+}
+
+function collectProgramTypes(
+  program: IrProgram,
+  visit: (type: IrType) => void,
+) {
+  for (const declaration of program.declarations) {
+    if (declaration.kind === "global") {
+      walkType(declaration.type, visit);
+      continue;
+    }
+    if (declaration.kind === "struct_decl") {
+      for (const field of declaration.fields) walkType(field.type, visit);
+      continue;
+    }
+    if (declaration.kind === "enum_decl") {
+      for (const variant of declaration.variants) {
+        for (const payloadType of variant.payloadTypes) {
+          walkType(payloadType, visit);
+        }
+      }
+      continue;
+    }
+    walkType(declaration.signature.returnType, visit);
+    for (const param of declaration.params) walkType(param.type, visit);
+    for (const local of declaration.locals) walkType(local.type, visit);
+    for (const block of declaration.blocks) {
+      for (const instruction of block.instructions) {
+        walkInstructionTypes(instruction, visit);
+      }
+      if (block.terminator?.kind === "return" && block.terminator.value) {
+        walkType(block.terminator.value.type, visit);
+      }
+    }
+  }
+}
+
 function collectInstructionTypes(
   instruction: IrInstruction,
   tuples: Map<string, IrTupleType>,
@@ -584,6 +687,13 @@ function collectInstructionTypes(
     instruction.kind === "get_enum_payload"
   ) {
     collectType(instruction.object.type, tuples);
+  } else if (instruction.kind === "make_nullable") {
+    collectType(instruction.value.type, tuples);
+  } else if (
+    instruction.kind === "is_null" ||
+    instruction.kind === "unwrap_nullable"
+  ) {
+    collectType(instruction.value.type, tuples);
   }
 }
 
@@ -617,6 +727,70 @@ function tupleDepth(type: IrTupleType): number {
       ),
     )
   );
+}
+
+function walkInstructionTypes(
+  instruction: IrInstruction,
+  visit: (type: IrType) => void,
+) {
+  if ("type" in instruction) walkType(instruction.type, visit);
+  if ("value" in instruction) walkType(instruction.value.type, visit);
+  if (instruction.kind === "binary") {
+    walkType(instruction.left.type, visit);
+    walkType(instruction.right.type, visit);
+  } else if (instruction.kind === "unary") {
+    walkType(instruction.argument.type, visit);
+  } else if (instruction.kind === "call") {
+    walkType(instruction.callee.type, visit);
+    for (const arg of instruction.args) walkType(arg.type, visit);
+  } else if (instruction.kind === "construct_tuple") {
+    for (const element of instruction.elements) walkType(element.type, visit);
+  } else if (instruction.kind === "get_tuple_field") {
+    walkType(instruction.object.type, visit);
+  } else if (instruction.kind === "construct_struct") {
+    for (const field of instruction.fields) walkType(field.value.type, visit);
+  } else if (instruction.kind === "get_field") {
+    walkType(instruction.object.type, visit);
+  } else if (instruction.kind === "set_field") {
+    walkType(instruction.value.type, visit);
+  } else if (instruction.kind === "construct_enum") {
+    for (const payload of instruction.payload) walkType(payload.type, visit);
+  } else if (
+    instruction.kind === "get_tag" ||
+    instruction.kind === "get_enum_payload"
+  ) {
+    walkType(instruction.object.type, visit);
+  } else if (
+    instruction.kind === "make_nullable" ||
+    instruction.kind === "is_null" ||
+    instruction.kind === "unwrap_nullable"
+  ) {
+    walkType(instruction.value.type, visit);
+  }
+}
+
+function walkType(type: IrType, visit: (type: IrType) => void) {
+  visit(type);
+  if (type.kind === "nullable") {
+    walkType(type.base, visit);
+    return;
+  }
+  if (type.kind === "tuple") {
+    for (const element of type.elements) walkType(element, visit);
+    return;
+  }
+  if (type.kind === "named") {
+    for (const arg of type.args) walkType(arg, visit);
+    return;
+  }
+  if (type.kind === "function") {
+    for (const param of type.params) walkType(param.type, visit);
+    walkType(type.returnType, visit);
+  }
+}
+
+function nullableDepth(type: IrNullableType): number {
+  return type.base.kind === "nullable" ? 1 + nullableDepth(type.base) : 1;
 }
 
 function declareTemp(context: FunctionEmitContext, id: string): string {
