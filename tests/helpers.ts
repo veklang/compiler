@@ -2,6 +2,7 @@ import { strict as nodeAssert } from "node:assert";
 import { Checker } from "@/core/checker";
 import { Lexer } from "@/core/lexer";
 import { Parser } from "@/core/parser";
+import { analyzeInitializers } from "@/passes/initializers";
 import { monomorphize } from "@/passes/mono";
 import { analyzeReachability } from "@/passes/reachability";
 import type { Program } from "@/types/ast";
@@ -35,6 +36,12 @@ export const mono = (source: string) => {
     checkDiagnostics: checkResult.diagnostics,
     ...monoResult,
   };
+};
+
+export const initCheck = (source: string) => {
+  const parsed = parse(source);
+  const result = analyzeInitializers(parsed.program);
+  return { ...parsed, ...result };
 };
 
 export const reach = (source: string) => {
