@@ -3354,6 +3354,15 @@ export class Checker {
     return false;
   }
 
+  // Built-in trait satisfactions (spec/08):
+  // Primitives (int/float): Equal<T>, Hashable, Ordered<T> (not bool), Cloneable, Defaultable, Formattable
+  // bool:                   Equal<bool>, Hashable, Cloneable, Defaultable, Formattable
+  // string:                 Equal<string>, Hashable, Ordered<string>, Cloneable, Defaultable, Formattable
+  // Array<T>:               Iterable<T>, Formattable (T: Formattable), Cloneable (T: Cloneable), Defaultable
+  // (T1,T2,...):            Equal, Hashable, Formattable, Cloneable — when every Ti satisfies
+  // T?:                     Equal (T: Equal), Formattable (T: Formattable), Unwrappable<T>
+  // Ordering:               Equal<Ordering>, Hashable, Formattable
+  // Result<T,E>:            Unwrappable<T> (via satisfies block), Formattable (T,E: Formattable)
   private typeSatisfiesTrait(
     type: Type,
     trait: NamedRefType,
@@ -3364,7 +3373,13 @@ export class Checker {
     }
 
     if (type.kind === "Named") {
-      if (type.name === "Array" && trait.name === "Iterable") return true;
+      if (type.name === "Array" && trait.name === "Iterable") {
+        const traitArg = trait.typeArgs?.[0];
+        const elemType = type.typeArgs?.[0];
+        if (!traitArg) return true;
+        if (!elemType) return false;
+        return this.typeEquals(traitArg, elemType);
+      }
       if (trait.name === "Equal" && this.isBuiltinEquatable(type, trait))
         return true;
       if (trait.name === "Formattable") {

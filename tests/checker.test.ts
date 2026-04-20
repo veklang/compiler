@@ -1231,6 +1231,115 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2816"]);
   });
 
+  test("Array satisfies Cloneable when element is Cloneable", () => {
+    checkOk(`
+fn needs_clone<T: Cloneable>(_x: T) -> void { return; }
+
+fn main() -> void {
+  let xs: i32[] = [1, 2, 3];
+  needs_clone(xs);
+}
+`);
+  });
+
+  test("Array of non-Cloneable element fails Cloneable bound", () => {
+    const result = check(`
+struct Widget {
+  id: i32;
+}
+
+fn needs_clone<T: Cloneable>(_x: T) -> void { return; }
+
+fn main() -> void {
+  let xs: Widget[] = [];
+  needs_clone(xs);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("Array satisfies Defaultable", () => {
+    checkOk(`
+fn needs_default<T: Defaultable>(_x: T) -> void { return; }
+
+fn main() -> void {
+  let xs: i32[] = [];
+  needs_default(xs);
+}
+`);
+  });
+
+  test("Array satisfies Iterable<T> when element types match", () => {
+    checkOk(`
+fn consume<T: Iterable<i32>>(_t: T) -> void { return; }
+
+fn main() -> void {
+  let xs: i32[] = [1, 2, 3];
+  consume(xs);
+}
+`);
+  });
+
+  test("Array fails Iterable bound when element type mismatches", () => {
+    const result = check(`
+fn consume<T: Iterable<i32>>(_t: T) -> void { return; }
+
+fn main() -> void {
+  let xs: string[] = [];
+  consume(xs);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("Tuple fails Equal bound when an element has no Equal", () => {
+    const result = check(`
+struct Item {
+  value: i32;
+}
+
+fn needs_eq<T: Equal<T>>(_a: T, _b: T) -> void { return; }
+
+fn main() -> void {
+  let pair: (i32, Item) = (1, Item { value: 2 });
+  needs_eq(pair, pair);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("Tuple fails Hashable when an element is not Hashable", () => {
+    const result = check(`
+struct Item {
+  value: i32;
+}
+
+fn needs_hash<T: Hashable>(_x: T) -> void { return; }
+
+fn main() -> void {
+  let pair: (i32, Item) = (1, Item { value: 2 });
+  needs_hash(pair);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("Nullable fails Equal when base type has no Equal", () => {
+    const result = check(`
+struct Item {
+  value: i32;
+}
+
+fn needs_eq<T: Equal<T>>(_a: T, _b: T) -> void { return; }
+
+fn main() -> void {
+  let x: Item? = null;
+  needs_eq(x, x);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
   test("unused local variable gets W2901 warning", () => {
     const result = check(`
 fn main() -> void {
