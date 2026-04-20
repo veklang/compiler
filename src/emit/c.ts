@@ -121,11 +121,12 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
 
 function functionPrototype(fn: IrFunction): string {
   const params = fn.params
-    .map((param) => `${emitType(param.type)} ${cLocalName(param.local)}`)
+    .map((param) => emitDeclaration(param.type, cLocalName(param.local)))
     .join(", ");
-  return `static ${emitType(fn.signature.returnType)} ${cFunctionName(fn.linkName)}(${
-    params || "void"
-  })`;
+  return `static ${emitDeclaration(
+    fn.signature.returnType,
+    `${cFunctionName(fn.linkName)}(${params || "void"})`,
+  )}`;
 }
 
 function emitGlobalDeclaration(
@@ -133,15 +134,19 @@ function emitGlobalDeclaration(
   globalNames: Map<string, string>,
 ): string {
   const name = requireGlobal(globalNames, global.id);
-  const type = emitType(global.type);
   const init = global.initializer ? ` = ${emitGlobalInitializer(global)}` : "";
   const qualifier =
     global.mutable || global.initializerFunction ? "" : "const ";
 
-  if (!global.mutable && !global.initializerFunction && type.endsWith("*")) {
-    return `static ${type} const ${name}${init};`;
+  if (
+    !global.mutable &&
+    !global.initializerFunction &&
+    global.type.kind === "primitive" &&
+    global.type.name === "string"
+  ) {
+    return `static const char * const ${name}${init};`;
   }
-  return `static ${qualifier}${type} ${name}${init};`;
+  return `static ${qualifier}${emitDeclaration(global.type, name)}${init};`;
 }
 
 function emitGlobalStateDeclaration(global: IrGlobal): string {
@@ -186,7 +191,7 @@ function emitFunction(
 
   for (const local of fn.locals) {
     if (context.paramIds.has(local.id)) continue;
-    lines.push(`  ${emitType(local.type)} ${cLocalName(local.id)};`);
+    lines.push(`  ${emitDeclaration(local.type, cLocalName(local.id))};`);
   }
 
   for (const block of fn.blocks) {
@@ -220,7 +225,7 @@ function emitInstruction(
 
   if (instruction.kind === "binary") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${emitOperand(
+    return `${emitDeclaration(instruction.type, target)} = ${emitOperand(
       instruction.left,
       context,
     )} ${instruction.operator} ${emitOperand(instruction.right, context)};`;
@@ -228,7 +233,7 @@ function emitInstruction(
 
   if (instruction.kind === "unary") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${
+    return `${emitDeclaration(instruction.type, target)} = ${
       instruction.operator
     }${emitOperand(instruction.argument, context)};`;
   }
@@ -239,27 +244,27 @@ function emitInstruction(
       .join(", ")})`;
     if (!instruction.target) return `${call};`;
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${call};`;
+    return `${emitDeclaration(instruction.type, target)} = ${call};`;
   }
 
   if (instruction.kind === "make_null") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = (${emitType(instruction.type)}){ .is_null = true };`;
+    return `${emitDeclaration(instruction.type, target)} = (${emitType(instruction.type)}){ .is_null = true };`;
   }
 
   if (instruction.kind === "make_nullable") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = (${emitType(instruction.type)}){ .is_null = false, .value = ${emitOperand(instruction.value, context)} };`;
+    return `${emitDeclaration(instruction.type, target)} = (${emitType(instruction.type)}){ .is_null = false, .value = ${emitOperand(instruction.value, context)} };`;
   }
 
   if (instruction.kind === "is_null") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.value, context)}.is_null;`;
+    return `${emitDeclaration(instruction.type, target)} = ${emitOperand(instruction.value, context)}.is_null;`;
   }
 
   if (instruction.kind === "unwrap_nullable") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.value, context)}.value;`;
+    return `${emitDeclaration(instruction.type, target)} = ${emitOperand(instruction.value, context)}.value;`;
   }
 
   if (instruction.kind === "construct_tuple") {
@@ -273,19 +278,19 @@ function emitInstruction(
             )
             .join(", ")
         : "._empty = 0";
-    return `${emitType(instruction.type)} ${target} = (${emitType(instruction.type)}){ ${elements} };`;
+    return `${emitDeclaration(instruction.type, target)} = (${emitType(instruction.type)}){ ${elements} };`;
   }
 
   if (instruction.kind === "get_tuple_field") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.object, context)}._${instruction.index};`;
+    return `${emitDeclaration(instruction.type, target)} = ${emitOperand(instruction.object, context)}._${instruction.index};`;
   }
 
   if (instruction.kind === "construct_enum") {
     const target = declareTemp(context, instruction.target);
     const enumType = emitType(instruction.type);
     if (instruction.payload.length === 0) {
-      return `${enumType} ${target} = (${enumType}){ .tag = ${instruction.tag} };`;
+      return `${emitDeclaration(instruction.type, target)} = (${enumType}){ .tag = ${instruction.tag} };`;
     }
     const payloadFields = instruction.payload
       .map(
@@ -293,17 +298,17 @@ function emitInstruction(
           `.data.${instruction.variant}._${i} = ${emitOperand(p, context)}`,
       )
       .join(", ");
-    return `${enumType} ${target} = (${enumType}){ .tag = ${instruction.tag}, ${payloadFields} };`;
+    return `${emitDeclaration(instruction.type, target)} = (${enumType}){ .tag = ${instruction.tag}, ${payloadFields} };`;
   }
 
   if (instruction.kind === "get_tag") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.object, context)}.tag;`;
+    return `${emitDeclaration(instruction.type, target)} = ${emitOperand(instruction.object, context)}.tag;`;
   }
 
   if (instruction.kind === "get_enum_payload") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.object, context)}.data.${instruction.variant}._${instruction.index};`;
+    return `${emitDeclaration(instruction.type, target)} = ${emitOperand(instruction.object, context)}.data.${instruction.variant}._${instruction.index};`;
   }
 
   if (instruction.kind === "construct_struct") {
@@ -311,12 +316,12 @@ function emitInstruction(
     const fields = instruction.fields
       .map((f) => `.${f.name} = ${emitOperand(f.value, context)}`)
       .join(", ");
-    return `${emitType(instruction.type)} ${target} = (${emitType(instruction.type)}){ ${fields} };`;
+    return `${emitDeclaration(instruction.type, target)} = (${emitType(instruction.type)}){ ${fields} };`;
   }
 
   if (instruction.kind === "get_field") {
     const target = declareTemp(context, instruction.target);
-    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.object, context)}.${instruction.field};`;
+    return `${emitDeclaration(instruction.type, target)} = ${emitOperand(instruction.object, context)}.${instruction.field};`;
   }
 
   if (instruction.kind === "set_field") {
@@ -332,7 +337,7 @@ function emitInstruction(
   }
 
   const target = declareTemp(context, instruction.target);
-  return `${emitType(instruction.type)} ${target} = (${emitType(
+  return `${emitDeclaration(instruction.type, target)} = (${emitType(
     instruction.type,
   )})${emitOperand(instruction.value, context)};`;
 }
@@ -415,7 +420,7 @@ function emitGlobalInitializer(global: IrGlobal): string {
 }
 
 function emitStructTypedef(s: IrStructDeclaration): string[] {
-  const fields = s.fields.map((f) => `  ${emitType(f.type)} ${f.name};`);
+  const fields = s.fields.map((f) => `  ${emitDeclaration(f.type, f.name)};`);
   return [`typedef struct {`, ...fields, `} ${cStructName(s.linkName)};`];
 }
 
@@ -426,7 +431,7 @@ function emitEnumTypedef(e: IrEnumDeclaration): string[] {
     lines.push(`  union {`);
     for (const v of payloadVariants) {
       const fields = v.payloadTypes
-        .map((t, i) => `${emitType(t)} _${i};`)
+        .map((t, i) => `${emitDeclaration(t, `_${i}`)};`)
         .join(" ");
       lines.push(`    struct { ${fields} } ${v.name};`);
     }
@@ -439,7 +444,9 @@ function emitEnumTypedef(e: IrEnumDeclaration): string[] {
 function emitTupleTypedef(tuple: IrTupleType): string[] {
   const fields =
     tuple.elements.length > 0
-      ? tuple.elements.map((type, index) => `  ${emitType(type)} _${index};`)
+      ? tuple.elements.map(
+          (type, index) => `  ${emitDeclaration(type, `_${index}`)};`,
+        )
       : ["  char _empty;"];
   return [`typedef struct {`, ...fields, `} ${cTupleName(tuple)};`];
 }
@@ -448,9 +455,29 @@ function emitNullableTypedef(nullable: IrNullableType): string[] {
   return [
     "typedef struct {",
     "  bool is_null;",
-    `  ${emitType(nullable.base)} value;`,
+    `  ${emitDeclaration(nullable.base, "value")};`,
     `} ${cNullableName(nullable)};`,
   ];
+}
+
+function emitDeclaration(type: IrType, name: string): string {
+  if (type.kind === "function") {
+    const params = type.params
+      .map((param) => emitAbstractDeclaration(param.type))
+      .join(", ");
+    return emitDeclaration(type.returnType, `(*${name})(${params || "void"})`);
+  }
+  return `${emitType(type)} ${name}`;
+}
+
+function emitAbstractDeclaration(type: IrType): string {
+  if (type.kind === "function") {
+    const params = type.params
+      .map((param) => emitAbstractDeclaration(param.type))
+      .join(", ");
+    return emitDeclaration(type.returnType, `(*)(${params || "void"})`);
+  }
+  return emitType(type);
 }
 
 function emitType(type: IrType): string {

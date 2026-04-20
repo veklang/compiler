@@ -226,10 +226,19 @@ IR lowering.
 
 ## Function Values
 
-Named functions and type-qualified method references lower to `IrFunctionValue`.
+Named functions lower to function operands with concrete `IrFunctionValueType`
+signatures.
 
 Anonymous functions lower to generated `IrFunction` declarations and then to
-`IrFunctionValue` when used as values.
+function operands when used as values. Generated anonymous functions use stable
+internal link names such as `__vek_anon_0`.
+
+Calling through a function value lowers to an ordinary `call` instruction whose
+callee is a local/temp/global/function operand of function type.
+
+Type-qualified method references lower to function operands after the method is
+resolved to a concrete static function with the receiver represented as the
+first parameter. This is still pending in the current implementation.
 
 Captured closures are not supported in v1 and must never reach IR.
 

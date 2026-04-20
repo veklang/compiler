@@ -20,6 +20,7 @@ export interface IrValidationResult {
 export function validateIr(program: IrProgram): IrValidationResult {
   const diagnostics: IrValidationDiagnostic[] = [];
   const functionIds = new Set<string>();
+  const functionNames = new Set<string>();
   const structIds = new Set<IrTypeDeclId>();
   const globalIds = new Set<IrGlobalId>();
   const functionIdsSeenForGlobals = new Set<string>();
@@ -49,6 +50,8 @@ export function validateIr(program: IrProgram): IrValidationResult {
       if (declaration.initializerFunction) {
         functionIdsSeenForGlobals.add(declaration.initializerFunction);
       }
+    } else if (declaration.kind === "function") {
+      functionNames.add(declaration.linkName);
     }
   }
 
@@ -60,7 +63,13 @@ export function validateIr(program: IrProgram): IrValidationResult {
       });
     }
     functionIds.add(declaration.id);
-    validateFunction(declaration, structIds, globalIds, diagnostics);
+    validateFunction(
+      declaration,
+      structIds,
+      globalIds,
+      functionNames,
+      diagnostics,
+    );
   }
 
   for (const initializerFunction of functionIdsSeenForGlobals) {
@@ -84,6 +93,7 @@ function validateFunction(
   fn: IrFunction,
   structIds: Set<IrTypeDeclId>,
   globalIds: Set<IrGlobalId>,
+  functionNames: Set<string>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   const locals = new Set<string>();
@@ -121,6 +131,7 @@ function validateFunction(
       temps,
       structIds,
       globalIds,
+      functionNames,
       diagnostics,
     );
 }
@@ -133,6 +144,7 @@ function validateBlock(
   temps: Set<string>,
   structIds: Set<IrTypeDeclId>,
   globalIds: Set<IrGlobalId>,
+  functionNames: Set<string>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   for (const instruction of block.instructions) {
@@ -143,6 +155,7 @@ function validateBlock(
       temps,
       structIds,
       globalIds,
+      functionNames,
       diagnostics,
     );
   }
@@ -161,6 +174,7 @@ function validateBlock(
     locals,
     temps,
     globalIds,
+    functionNames,
     diagnostics,
   );
 }
@@ -172,22 +186,27 @@ function validateInstruction(
   temps: Set<string>,
   structIds: Set<IrTypeDeclId>,
   globalIds: Set<IrGlobalId>,
+  functionNames: Set<string>,
   diagnostics: IrValidationDiagnostic[],
 ) {
+  const validate = (operand: IrOperand) =>
+    validateOperand(
+      fn,
+      operand,
+      locals,
+      temps,
+      globalIds,
+      functionNames,
+      diagnostics,
+    );
+
   if (instruction.kind === "assign") {
     if (!locals.has(instruction.target)) {
       diagnostics.push({
         message: `Assignment in '${fn.id}' targets unknown local '${instruction.target}'.`,
       });
     }
-    validateOperand(
-      fn,
-      instruction.value,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.value);
     return;
   }
 
@@ -197,14 +216,7 @@ function validateInstruction(
         message: `store_global in '${fn.id}' targets unknown global '${instruction.globalId}'.`,
       });
     }
-    validateOperand(
-      fn,
-      instruction.value,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.value);
     return;
   }
 
@@ -227,48 +239,19 @@ function validateInstruction(
   }
 
   if (instruction.kind === "binary") {
-    validateOperand(
-      fn,
-      instruction.left,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
-    validateOperand(
-      fn,
-      instruction.right,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.left);
+    validate(instruction.right);
     return;
   }
 
   if (instruction.kind === "unary") {
-    validateOperand(
-      fn,
-      instruction.argument,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.argument);
     return;
   }
 
   if (instruction.kind === "call") {
-    validateOperand(
-      fn,
-      instruction.callee,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
-    for (const arg of instruction.args)
-      validateOperand(fn, arg, locals, temps, globalIds, diagnostics);
+    validate(instruction.callee);
+    for (const arg of instruction.args) validate(arg);
     return;
   }
 
@@ -277,14 +260,7 @@ function validateInstruction(
   }
 
   if (instruction.kind === "make_nullable") {
-    validateOperand(
-      fn,
-      instruction.value,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.value);
     return;
   }
 
@@ -292,33 +268,19 @@ function validateInstruction(
     instruction.kind === "is_null" ||
     instruction.kind === "unwrap_nullable"
   ) {
-    validateOperand(
-      fn,
-      instruction.value,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.value);
     return;
   }
 
   if (instruction.kind === "construct_tuple") {
     for (const element of instruction.elements) {
-      validateOperand(fn, element, locals, temps, globalIds, diagnostics);
+      validate(element);
     }
     return;
   }
 
   if (instruction.kind === "get_tuple_field") {
-    validateOperand(
-      fn,
-      instruction.object,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.object);
     return;
   }
 
@@ -328,32 +290,17 @@ function validateInstruction(
         message: `construct_enum in '${fn.id}' references unknown enum '${instruction.declId}'.`,
       });
     }
-    for (const p of instruction.payload)
-      validateOperand(fn, p, locals, temps, globalIds, diagnostics);
+    for (const p of instruction.payload) validate(p);
     return;
   }
 
   if (instruction.kind === "get_tag") {
-    validateOperand(
-      fn,
-      instruction.object,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.object);
     return;
   }
 
   if (instruction.kind === "get_enum_payload") {
-    validateOperand(
-      fn,
-      instruction.object,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.object);
     return;
   }
 
@@ -363,20 +310,12 @@ function validateInstruction(
         message: `construct_struct in '${fn.id}' references unknown struct '${instruction.declId}'.`,
       });
     }
-    for (const f of instruction.fields)
-      validateOperand(fn, f.value, locals, temps, globalIds, diagnostics);
+    for (const f of instruction.fields) validate(f.value);
     return;
   }
 
   if (instruction.kind === "get_field") {
-    validateOperand(
-      fn,
-      instruction.object,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.object);
     return;
   }
 
@@ -386,18 +325,11 @@ function validateInstruction(
         message: `set_field in '${fn.id}' targets unknown local '${instruction.target}'.`,
       });
     }
-    validateOperand(
-      fn,
-      instruction.value,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(instruction.value);
     return;
   }
 
-  validateOperand(fn, instruction.value, locals, temps, globalIds, diagnostics);
+  validate(instruction.value);
 }
 
 function validateTerminator(
@@ -407,18 +339,22 @@ function validateTerminator(
   locals: Set<string>,
   temps: Set<string>,
   globalIds: Set<IrGlobalId>,
+  functionNames: Set<string>,
   diagnostics: IrValidationDiagnostic[],
 ) {
+  const validate = (operand: IrOperand) =>
+    validateOperand(
+      fn,
+      operand,
+      locals,
+      temps,
+      globalIds,
+      functionNames,
+      diagnostics,
+    );
+
   if (terminator.kind === "return") {
-    if (terminator.value)
-      validateOperand(
-        fn,
-        terminator.value,
-        locals,
-        temps,
-        globalIds,
-        diagnostics,
-      );
+    if (terminator.value) validate(terminator.value);
     return;
   }
 
@@ -428,28 +364,14 @@ function validateTerminator(
   }
 
   if (terminator.kind === "cond_branch") {
-    validateOperand(
-      fn,
-      terminator.condition,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(terminator.condition);
     requireBlockTarget(fn, terminator.thenTarget, blockIds, diagnostics);
     requireBlockTarget(fn, terminator.elseTarget, blockIds, diagnostics);
     return;
   }
 
   if (terminator.kind === "switch") {
-    validateOperand(
-      fn,
-      terminator.value,
-      locals,
-      temps,
-      globalIds,
-      diagnostics,
-    );
+    validate(terminator.value);
     for (const c of terminator.cases)
       requireBlockTarget(fn, c.target, blockIds, diagnostics);
     requireBlockTarget(fn, terminator.defaultTarget, blockIds, diagnostics);
@@ -478,6 +400,7 @@ function validateOperand(
   locals: Set<string>,
   temps: Set<string>,
   globalIds: Set<IrGlobalId>,
+  functionNames: Set<string>,
   diagnostics: IrValidationDiagnostic[],
 ) {
   if (operand.kind === "local" && !locals.has(operand.id)) {
@@ -495,6 +418,16 @@ function validateOperand(
   if (operand.kind === "global" && !globalIds.has(operand.id)) {
     diagnostics.push({
       message: `Operand in '${fn.id}' references unknown global '${operand.id}'.`,
+    });
+  }
+
+  if (
+    operand.kind === "function" &&
+    operand.name !== "panic" &&
+    !functionNames.has(operand.name)
+  ) {
+    diagnostics.push({
+      message: `Operand in '${fn.id}' references unknown function '${operand.name}'.`,
     });
   }
 }

@@ -471,4 +471,46 @@ fn area(s: Shape) -> i32 {
     assert.ok(dump.includes("get_enum_payload"));
     assert.ok(dump.includes("Circle"));
   });
+
+  test("lowers named function values and indirect calls", () => {
+    const ir = irOk(`
+fn add_one(x: i32) -> i32 {
+  return x + 1;
+}
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+  return f(x);
+}
+
+fn main() -> i32 {
+  let f: fn(i32) -> i32 = add_one;
+  return apply(f, 41);
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("local local.0 const f: fn(i32) -> i32"));
+    assert.ok(dump.includes("local.0 = @add_one"));
+    assert.ok(dump.includes("call local.0(local.1)"));
+  });
+
+  test("lowers non-capturing anonymous functions to generated functions", () => {
+    const ir = irOk(`
+fn main() -> i32 {
+  let f: fn(i32) -> i32 = fn(x: i32) -> i32 {
+    return x + 1;
+  };
+  return f(41);
+}
+`);
+
+    const generated = ir.declarations.find(
+      (d) => d.kind === "function" && d.id === "fn.__vek_anon_0",
+    );
+    assert.ok(generated?.kind === "function");
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.__vek_anon_0 __vek_anon_0"));
+    assert.ok(dump.includes("local.0 = @__vek_anon_0"));
+    assert.ok(dump.includes("call local.0(41)"));
+  });
 });

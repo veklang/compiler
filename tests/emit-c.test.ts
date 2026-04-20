@@ -345,4 +345,46 @@ fn half(x: f16) -> f16 {
 
     assert.throws(() => emitC(ir), /f16/);
   });
+
+  test("emits function pointer declarations and indirect calls", () => {
+    const c = emitOk(`
+fn add_one(x: i32) -> i32 {
+  return x + 1;
+}
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+  return f(x);
+}
+
+fn main() -> i32 {
+  let f: fn(i32) -> i32 = add_one;
+  return apply(f, 41);
+}
+`);
+
+    assert.ok(
+      c.includes(
+        "static int32_t __vek_fn_apply(int32_t (*v0)(int32_t), int32_t v1);",
+      ),
+    );
+    assert.ok(c.includes("int32_t (*v0)(int32_t);"));
+    assert.ok(c.includes("v0 = __vek_fn_add_one;"));
+    assert.ok(c.includes("t0 = v0(v1);"));
+  });
+
+  test("emits non-capturing anonymous functions as generated functions", () => {
+    const c = emitOk(`
+fn main() -> i32 {
+  let f: fn(i32) -> i32 = fn(x: i32) -> i32 {
+    return x + 1;
+  };
+  return f(41);
+}
+`);
+
+    assert.ok(c.includes("static int32_t __vek_fn___vek_anon_0(int32_t v0);"));
+    assert.ok(c.includes("int32_t (*v0)(int32_t);"));
+    assert.ok(c.includes("v0 = __vek_fn___vek_anon_0;"));
+    assert.ok(c.includes("= v0(41);"));
+  });
 });

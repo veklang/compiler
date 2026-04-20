@@ -34,6 +34,7 @@ import type {
   Expression,
   ForStatement,
   FunctionDeclaration,
+  FunctionExpression,
   GroupingExpression,
   IdentifierExpression,
   IfStatement,
@@ -91,6 +92,12 @@ interface LowerContext {
   globalTypes: Map<IrGlobalId, IrType>;
   lazyGlobals: Set<IrGlobalId>;
   returnType: IrType;
+  session: LowerSession;
+}
+
+interface LowerSession {
+  generatedFunctions: IrFunction[];
+  nextAnonymousFunction: number;
 }
 
 export function lowerProgramToIr(
@@ -102,6 +109,10 @@ export function lowerProgramToIr(
   const declarations: IrDeclaration[] = [];
   const structFields = new Map<string, IrStructField[]>();
   const variantInfos = new Map<string, VariantInfo>();
+  const session: LowerSession = {
+    generatedFunctions: [],
+    nextAnonymousFunction: 0,
+  };
   let entry: string | undefined;
 
   for (const statement of program.body) {
@@ -143,6 +154,7 @@ export function lowerProgramToIr(
         globals,
         globalTypes,
         lazyGlobals,
+        session,
       ),
     );
   }
@@ -158,10 +170,13 @@ export function lowerProgramToIr(
       globals,
       globalTypes,
       lazyGlobals,
+      session,
     );
     declarations.push(lowered);
     if (statement.name.name === "main") entry = lowered.id;
   }
+
+  declarations.push(...session.generatedFunctions);
 
   return {
     version: 1,
@@ -265,6 +280,7 @@ function lowerGlobalInitializerFunction(
   globals: Map<string, IrGlobalId>,
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
+  session: LowerSession,
 ): IrFunction {
   if (!node.initializer) {
     throw new Error("IR lowering: missing global initializer.");
@@ -288,6 +304,7 @@ function lowerGlobalInitializerFunction(
     globalTypes,
     lazyGlobals,
     returnType: irPrimitive("void"),
+    session,
   };
 
   context.currentBlock.instructions.push({
@@ -330,6 +347,7 @@ function lowerFunction(
   globals: Map<string, IrGlobalId>,
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
+  session: LowerSession,
 ): IrFunction {
   const returnType = node.returnType
     ? typeFromTypeNode(node.returnType)
@@ -351,6 +369,7 @@ function lowerFunction(
     globalTypes,
     lazyGlobals,
     returnType,
+    session,
   };
 
   const params = node.params
@@ -896,9 +915,97 @@ function lowerExpression(
       return lowerTupleLiteral(expression, context);
     case "TupleMemberExpression":
       return lowerTupleMemberExpression(expression, context);
+    case "FunctionExpression":
+      return lowerFunctionExpression(expression, context);
     default:
       throw new Error(`IR lowering does not support ${expression.kind} yet.`);
   }
+}
+
+function lowerFunctionExpression(
+  expression: FunctionExpression,
+  outerContext: LowerContext,
+): IrOperand {
+  const functionType = typeFromNode(outerContext.checkResult, expression);
+  if (functionType.kind !== "function") {
+    throw new Error(
+      "IR lowering: function expression did not have function type.",
+    );
+  }
+
+  const index = outerContext.session.nextAnonymousFunction++;
+  const sourceName = `__vek_anon_${index}`;
+  const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
+  const context: LowerContext = {
+    checkResult: outerContext.checkResult,
+    runtime: outerContext.runtime,
+    locals: new Map(),
+    localTypes: new Map(),
+    localDecls: [],
+    blocks: [entryBlock],
+    currentBlock: entryBlock,
+    nextLocal: 0,
+    nextTemp: 0,
+    structFields: outerContext.structFields,
+    variantInfos: outerContext.variantInfos,
+    globals: outerContext.globals,
+    globalTypes: outerContext.globalTypes,
+    lazyGlobals: outerContext.lazyGlobals,
+    returnType: functionType.returnType,
+    session: outerContext.session,
+  };
+
+  const params = expression.params
+    .filter((param): param is NamedParameter => param.kind === "NamedParameter")
+    .map((param, paramIndex) => {
+      const paramType = functionType.params[paramIndex]?.type ?? {
+        kind: "unknown" as const,
+      };
+      const local = declareLocal(
+        context,
+        param.name.name,
+        paramType,
+        param.isMutable,
+        param.span,
+      );
+      return {
+        local: local.id,
+        sourceName: param.name.name,
+        type: local.type,
+        mutable: param.isMutable,
+        span: param.span,
+      };
+    });
+
+  lowerBlock(expression.body, context);
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = {
+      kind: "return",
+      value: voidOperand(),
+      span: expression.body.span,
+    };
+  }
+
+  outerContext.session.generatedFunctions.push({
+    kind: "function",
+    id: `fn.${sourceName}`,
+    sourceName,
+    linkName: sourceName,
+    signature: {
+      params: params.map((param) => ({
+        type: param.type,
+        mutable: param.mutable,
+      })),
+      returnType: functionType.returnType,
+    },
+    params,
+    locals: context.localDecls,
+    blocks: context.blocks,
+    body: "defined",
+    span: expression.span,
+  });
+
+  return { kind: "function", name: sourceName, type: functionType };
 }
 
 function lowerLiteral(expression: LiteralExpression): IrOperand {

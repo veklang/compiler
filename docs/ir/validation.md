@@ -133,19 +133,19 @@ Recommended order after the initial slice:
 
 1. Primitive function calls and non-void returns. ✅
 2. `if` / `while` / `break` / `continue` (branch, cond_branch terminators). ✅
-3. Struct declarations, struct literals, field get.
-4. Field set for non-heap-backed structs.
-5. Enum declarations and unit variants.
-6. Enum payload variants and match lowering.
-7. Nullable values and null checks.
+3. Struct declarations, struct literals, field get. ✅
+4. Field set for non-heap-backed structs. ✅
+5. Enum declarations and unit variants. ✅
+6. Enum payload variants and match lowering. ✅
+7. Nullable values and null checks. ✅
 8. Runtime strings beyond panic literals.
 9. Arrays and array indexing.
 10. `for` loops (requires array runtime helpers).
 11. Copy-on-write detach for array mutation.
 12. Retain/release for strings and arrays.
 13. Aggregate retain/release helpers.
-14. Top-level lazy initializers.
-15. Function values.
+14. Top-level lazy initializers. ✅
+15. Function values. ✅ for named functions and non-capturing anonymous functions; type-qualified method references remain pending.
 16. Specialized generic functions and methods beyond direct primitive cases.
 
 Each step must include:

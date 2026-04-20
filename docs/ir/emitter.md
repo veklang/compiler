@@ -53,6 +53,17 @@ It is not responsible for:
 | enum | generated tagged `struct` with discriminator + payload union |
 | function | function pointer |
 
+Function pointer declarations use C declarators rather than a plain type string
+so function values can appear consistently in parameters, locals, globals, and
+return positions.
+
+Examples:
+
+```c
+int32_t (*f)(int32_t);
+static int32_t (*choose(void))(int32_t);
+```
+
 ## Control Flow Emission
 
 Blocks lower to C labels. All blocks in a multi-block function get a label, even

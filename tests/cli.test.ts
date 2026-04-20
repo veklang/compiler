@@ -318,4 +318,46 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs function values", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn add_one(x: i32) -> i32 {
+  return x + 1;
+}
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+  return f(x);
+}
+
+fn choose() -> fn(i32) -> i32 {
+  return fn(x: i32) -> i32 {
+    return x + 1;
+  };
+}
+
+fn main() -> i32 {
+  let named: fn(i32) -> i32 = add_one;
+  let anon: fn(i32) -> i32 = choose();
+  return apply(named, 20) + anon(20);
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });
