@@ -6,6 +6,7 @@ import "./reachability.test";
 import "./mono.test";
 import "./initializers.test";
 import "./ir.test";
+import "./emit-c.test";
 import { run } from "./tester";
 
 run();
