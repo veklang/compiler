@@ -205,9 +205,17 @@ interface TypeSymbol extends BaseSymbol {
   satisfactions?: TraitSatisfactionInfo[];
 }
 
+export interface GenericInstantiation {
+  kind: "Function" | "Method" | "Struct";
+  name: string;
+  ownerName?: string;
+  typeArgs: string[];
+}
+
 export interface CheckResult {
   diagnostics: Diagnostic[];
   types: WeakMap<Node, Type>;
+  instantiations: GenericInstantiation[];
 }
 
 const primitiveNames: PrimitiveName[] = [
@@ -241,6 +249,7 @@ export class Checker {
   private currentFunctionInferReturn = false;
   private currentFunctionInferredReturn: Type | null = null;
   private functionLocals: ValueSymbol[][] = [];
+  private instantiations: GenericInstantiation[] = [];
 
   constructor(private program: Program) {
     this.globalScope = this.createScope();
@@ -259,6 +268,7 @@ export class Checker {
     return {
       diagnostics: this.diagnostics,
       types: this.types,
+      instantiations: this.instantiations,
     };
   }
 
@@ -1643,6 +1653,23 @@ export class Checker {
       }
     }
 
+    if (callable.target) {
+      const resolvedArgs = callable.typeParams.map((tp) =>
+        bindings.has(tp.name) ? this.displayType(bindings.get(tp.name)!) : "?",
+      );
+      const isMethod = callable.target.kind === "method";
+      const ownerName =
+        isMethod && callable.target.receiver?.type.kind === "Named"
+          ? callable.target.receiver.type.name
+          : undefined;
+      this.instantiations.push({
+        kind: isMethod ? "Method" : "Function",
+        name: callable.target.name,
+        ownerName,
+        typeArgs: resolvedArgs,
+      });
+    }
+
     return {
       ...callable,
       typeParams: [],
@@ -2028,6 +2055,14 @@ export class Checker {
       if (!seen.has(name)) {
         this.report(`Missing struct field '${name}'.`, node.span, "E2103");
       }
+    }
+
+    if (typeArgs?.length && symbol.typeParams.length > 0) {
+      this.instantiations.push({
+        kind: "Struct",
+        name: symbol.name,
+        typeArgs: typeArgs.map((t) => this.displayType(t)),
+      });
     }
 
     return structType;
