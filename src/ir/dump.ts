@@ -140,6 +140,9 @@ function dumpInstruction(instruction: IrInstruction): string {
   if (instruction.kind === "set_field") {
     return `set_field ${instruction.target}.${instruction.field} = ${dumpOperand(instruction.value)}`;
   }
+  if (instruction.kind === "ensure_global_initialized") {
+    return `ensure_global_initialized ${instruction.globalId}`;
+  }
   if (instruction.kind === "store_global") {
     return `store_global ${instruction.globalId} = ${dumpOperand(instruction.value)}`;
   }

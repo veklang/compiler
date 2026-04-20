@@ -102,6 +102,36 @@ fn inc() -> i32 {
     assert.ok(dump.includes("return global.counter"));
   });
 
+  test("lowers non-literal global initializers to lazy init functions", () => {
+    const ir = irOk(`
+fn make() -> i32 {
+  return 41;
+}
+
+let answer: i32 = make();
+
+fn main() -> i32 {
+  return answer;
+}
+`);
+
+    const global = ir.declarations.find(
+      (d) => d.kind === "global" && d.sourceName === "answer",
+    );
+    assert.ok(global?.kind === "global");
+    assert.equal(global.initializer, undefined);
+    assert.equal(global.initializerFunction, "fn.__vek_init_global_answer");
+
+    const initFn = ir.declarations.find(
+      (d) => d.kind === "function" && d.id === "fn.__vek_init_global_answer",
+    );
+    assert.ok(initFn?.kind === "function");
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("ensure_global_initialized global.answer"));
+    assert.ok(dump.includes("store_global global.answer"));
+  });
+
   test("lowers if with no else to cond_branch + join", () => {
     const ir = irOk(`
 fn main() -> void {

@@ -19,6 +19,7 @@ interface FunctionEmitContext {
   localNames: Map<string, string>;
   tempNames: Map<string, string>;
   globalNames: Map<string, string>;
+  ensureGlobalNames: Map<string, string>;
   paramIds: Set<string>;
   multiBlock: boolean;
 }
@@ -62,9 +63,19 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   const globalNames = new Map(
     globals.map((global) => [global.id, cGlobalName(global.linkName)]),
   );
+  const lazyGlobals = globals.filter((global) => global.initializerFunction);
+  const ensureGlobalNames = new Map(
+    lazyGlobals.map((global) => [
+      global.id,
+      cEnsureGlobalName(global.linkName),
+    ]),
+  );
 
   for (const global of globals) {
     lines.push(emitGlobalDeclaration(global, globalNames));
+  }
+  for (const global of lazyGlobals) {
+    lines.push(emitGlobalStateDeclaration(global));
   }
   if (globals.length > 0) lines.push("");
 
@@ -78,8 +89,12 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   }
   if (functions.length > 0) lines.push("");
 
+  for (const global of lazyGlobals) {
+    lines.push(...emitEnsureGlobalFunction(global, ensureGlobalNames), "");
+  }
+
   for (const fn of functions) {
-    lines.push(...emitFunction(fn, globalNames), "");
+    lines.push(...emitFunction(fn, globalNames, ensureGlobalNames), "");
   }
 
   const entry = program.entry
@@ -106,17 +121,41 @@ function emitGlobalDeclaration(
   const name = requireGlobal(globalNames, global.id);
   const type = emitType(global.type);
   const init = global.initializer ? ` = ${emitConst(global.initializer)}` : "";
-  const qualifier = global.mutable ? "" : "const ";
+  const qualifier =
+    global.mutable || global.initializerFunction ? "" : "const ";
 
-  if (!global.mutable && type.endsWith("*")) {
+  if (!global.mutable && !global.initializerFunction && type.endsWith("*")) {
     return `static ${type} const ${name}${init};`;
   }
   return `static ${qualifier}${type} ${name}${init};`;
 }
 
+function emitGlobalStateDeclaration(global: IrGlobal): string {
+  return `static int ${cGlobalStateName(global.linkName)} = 0;`;
+}
+
+function emitEnsureGlobalFunction(
+  global: IrGlobal,
+  ensureGlobalNames: Map<string, string>,
+): string[] {
+  const ensureName = requireGlobal(ensureGlobalNames, global.id);
+  const stateName = cGlobalStateName(global.linkName);
+  const initName = cFunctionName(`__vek_init_global_${global.linkName}`);
+  return [
+    `static void ${ensureName}(void) {`,
+    `  if (${stateName} == 2) return;`,
+    `  if (${stateName} == 1) __vek_panic_cstr("cyclic top-level initializer");`,
+    `  ${stateName} = 1;`,
+    `  ${initName}();`,
+    `  ${stateName} = 2;`,
+    "}",
+  ];
+}
+
 function emitFunction(
   fn: IrFunction,
   globalNames: Map<string, string>,
+  ensureGlobalNames: Map<string, string>,
 ): string[] {
   const multiBlock = fn.blocks.length > 1;
   const context: FunctionEmitContext = {
@@ -125,6 +164,7 @@ function emitFunction(
     ),
     tempNames: new Map(),
     globalNames,
+    ensureGlobalNames,
     paramIds: new Set(fn.params.map((param) => param.local)),
     multiBlock,
   };
@@ -228,6 +268,10 @@ function emitInstruction(
 
   if (instruction.kind === "set_field") {
     return `${requireLocal(context, instruction.target)}.${instruction.field} = ${emitOperand(instruction.value, context)};`;
+  }
+
+  if (instruction.kind === "ensure_global_initialized") {
+    return `${requireGlobal(context.ensureGlobalNames, instruction.globalId)}();`;
   }
 
   if (instruction.kind === "store_global") {
@@ -390,6 +434,14 @@ function cBlockLabel(id: string): string {
 
 function cGlobalName(name: string): string {
   return `__vek_global_${sanitizeName(name)}`;
+}
+
+function cGlobalStateName(name: string): string {
+  return `__vek_global_${sanitizeName(name)}_state`;
+}
+
+function cEnsureGlobalName(name: string): string {
+  return `__vek_ensure_global_${sanitizeName(name)}`;
 }
 
 function sanitizeName(name: string): string {

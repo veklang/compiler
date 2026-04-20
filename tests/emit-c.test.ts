@@ -92,6 +92,29 @@ fn inc() -> i32 {
     assert.ok(c.includes("return __vek_global_counter;"));
   });
 
+  test("emits lazy global initializer guards", () => {
+    const c = emitOk(`
+fn make() -> i32 {
+  return 41;
+}
+
+const answer: i32 = make();
+
+fn main() -> i32 {
+  return answer;
+}
+`);
+
+    assert.ok(c.includes("static int32_t __vek_global_answer;"));
+    assert.ok(c.includes("static int __vek_global_answer_state = 0;"));
+    assert.ok(c.includes("static void __vek_ensure_global_answer(void) {"));
+    assert.ok(c.includes("if (__vek_global_answer_state == 2) return;"));
+    assert.ok(c.includes('__vek_panic_cstr("cyclic top-level initializer");'));
+    assert.ok(c.includes("__vek_fn___vek_init_global_answer();"));
+    assert.ok(c.includes("__vek_ensure_global_answer();"));
+    assert.ok(c.includes("__vek_global_answer ="));
+  });
+
   test("emits if/else as labels and conditional goto", () => {
     const c = emitOk(`
 fn max(a: i32, b: i32) -> i32 {

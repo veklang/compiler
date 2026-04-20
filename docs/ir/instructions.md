@@ -414,7 +414,7 @@ See [ownership.md](./ownership.md) for full rules.
 ```ts
 interface IrEnsureGlobalInitialized {
   kind: "ensure_global_initialized";
-  global: IrGlobalId;
+  globalId: IrGlobalId;
 }
 ```
 

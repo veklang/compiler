@@ -126,6 +126,33 @@ Rules:
 - Runtime helpers use reserved `__vek_*` names.
 - User-visible names must never be trusted as already C-safe.
 
+## Globals
+
+```ts
+interface IrGlobal {
+  kind: "global";
+  id: IrGlobalId;
+  sourceName?: string;
+  linkName: string;
+  type: IrType;
+  mutable: boolean;
+  initializer?: IrConst;
+  initializerFunction?: IrFunctionId;
+  span?: IrSpan;
+}
+```
+
+Rules:
+
+- `initializer` is used only for values that can be emitted as static C
+  initializers.
+- Non-literal/runtime initializers lower to a hidden zero-argument
+  `initializerFunction` that stores the computed value into the global.
+- Reads of globals with `initializerFunction` must be preceded by
+  `ensure_global_initialized`.
+- Lazy initializer state is emitted by the C backend as uninitialized,
+  initializing, or initialized. Re-entry while initializing panics.
+
 ## Source Spans
 
 ```ts

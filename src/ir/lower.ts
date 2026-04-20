@@ -85,6 +85,7 @@ interface LowerContext {
   structFields: Map<string, IrStructField[]>;
   variantInfos: Map<string, VariantInfo>;
   globals: Map<string, IrGlobalId>;
+  lazyGlobals: Set<IrGlobalId>;
 }
 
 export function lowerProgramToIr(
@@ -107,12 +108,35 @@ export function lowerProgramToIr(
   }
 
   const globals = new Map<string, IrGlobalId>();
+  const lazyGlobals = new Set<IrGlobalId>();
+  const globalStatements: VariableDeclaration[] = [];
   for (const statement of program.body) {
     if (statement.kind === "VariableDeclaration") {
       const global = lowerGlobalDeclaration(statement, checkResult, runtime);
       declarations.push(global);
       globals.set(statement.name.name, global.id);
+      if (global.initializerFunction) lazyGlobals.add(global.id);
+      globalStatements.push(statement);
     }
+  }
+
+  for (const statement of globalStatements) {
+    if (
+      !statement.initializer ||
+      statement.initializer.kind === "LiteralExpression"
+    )
+      continue;
+    declarations.push(
+      lowerGlobalInitializerFunction(
+        statement,
+        checkResult,
+        runtime,
+        structFields,
+        variantInfos,
+        globals,
+        lazyGlobals,
+      ),
+    );
   }
 
   for (const statement of program.body) {
@@ -124,6 +148,7 @@ export function lowerProgramToIr(
       structFields,
       variantInfos,
       globals,
+      lazyGlobals,
     );
     declarations.push(lowered);
     if (statement.name.name === "main") entry = lowered.id;
@@ -203,13 +228,12 @@ function lowerGlobalDeclaration(
     node.initializer?.kind === "LiteralExpression"
       ? constFromLiteral(node.initializer)
       : undefined;
-  if (node.initializer && !initializer) {
-    throw new Error(
-      `IR lowering does not support non-literal global initializer '${node.name.name}' yet.`,
-    );
-  }
   if (initializer?.kind === "string") runtime.strings = true;
   const id: IrGlobalId = `global.${node.name.name}`;
+  const initializerFunction =
+    node.initializer && !initializer
+      ? `fn.__vek_init_global_${node.name.name}`
+      : undefined;
   return {
     kind: "global",
     id,
@@ -218,6 +242,63 @@ function lowerGlobalDeclaration(
     type,
     mutable: node.declarationKind === "let",
     initializer,
+    initializerFunction,
+    span: node.span,
+  };
+}
+
+function lowerGlobalInitializerFunction(
+  node: VariableDeclaration,
+  checkResult: IrTypeSource,
+  runtime: IrRuntimeRequirements,
+  structFields: Map<string, IrStructField[]>,
+  variantInfos: Map<string, VariantInfo>,
+  globals: Map<string, IrGlobalId>,
+  lazyGlobals: Set<IrGlobalId>,
+): IrFunction {
+  if (!node.initializer) {
+    throw new Error("IR lowering: missing global initializer.");
+  }
+
+  const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
+  const globalId: IrGlobalId = `global.${node.name.name}`;
+  const context: LowerContext = {
+    checkResult,
+    runtime,
+    locals: new Map(),
+    localDecls: [],
+    blocks: [entryBlock],
+    currentBlock: entryBlock,
+    nextLocal: 0,
+    nextTemp: 0,
+    structFields,
+    variantInfos,
+    globals,
+    lazyGlobals,
+  };
+
+  context.currentBlock.instructions.push({
+    kind: "store_global",
+    globalId,
+    value: lowerExpression(node.initializer, context),
+    span: node.span,
+  });
+  context.currentBlock.terminator = {
+    kind: "return",
+    value: voidOperand(),
+    span: node.span,
+  };
+
+  return {
+    kind: "function",
+    id: `fn.__vek_init_global_${node.name.name}`,
+    sourceName: `__vek_init_global_${node.name.name}`,
+    linkName: `__vek_init_global_${node.name.name}`,
+    signature: { params: [], returnType: irPrimitive("void") },
+    params: [],
+    locals: context.localDecls,
+    blocks: context.blocks,
+    body: "defined",
     span: node.span,
   };
 }
@@ -229,6 +310,7 @@ function lowerFunction(
   structFields: Map<string, IrStructField[]>,
   variantInfos: Map<string, VariantInfo>,
   globals: Map<string, IrGlobalId>,
+  lazyGlobals: Set<IrGlobalId>,
 ): IrFunction {
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
@@ -243,6 +325,7 @@ function lowerFunction(
     structFields,
     variantInfos,
     globals,
+    lazyGlobals,
   };
 
   const params = node.params
@@ -790,6 +873,13 @@ function lowerIdentifier(
   }
   const globalId = context.globals.get(expression.name);
   if (globalId) {
+    if (context.lazyGlobals.has(globalId)) {
+      context.currentBlock.instructions.push({
+        kind: "ensure_global_initialized",
+        globalId,
+        span: expression.span,
+      });
+    }
     return {
       kind: "global",
       id: globalId,

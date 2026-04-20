@@ -9,6 +9,7 @@ import { Lexer } from "@/core/lexer";
 import { Parser } from "@/core/parser";
 import { emitC } from "@/emit/c";
 import { lowerProgramToIr } from "@/ir/lower";
+import { analyzeInitializers } from "@/passes/initializers";
 import type { Diagnostic } from "@/types/diagnostic";
 
 export const defaultToolchainPrefix =
@@ -88,10 +89,12 @@ export function compileFile(options: CliOptions): CompileResult {
   const lexed = new Lexer(source).lex();
   const parsed = new Parser(lexed.tokens).parseProgram();
   const checked = new Checker(parsed.program).checkProgram();
+  const initialized = analyzeInitializers(parsed.program);
   const diagnostics = [
     ...lexed.diagnostics,
     ...parsed.diagnostics,
     ...checked.diagnostics,
+    ...initialized.diagnostics,
   ];
 
   if (diagnostics.length > 0) {

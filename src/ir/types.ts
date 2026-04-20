@@ -59,6 +59,7 @@ export interface IrGlobal {
   type: IrType;
   mutable: boolean;
   initializer?: IrConst;
+  initializerFunction?: IrFunctionId;
   span?: Span;
 }
 
@@ -241,6 +242,7 @@ export type IrInstruction =
   | IrConstructEnumInstruction
   | IrGetTagInstruction
   | IrGetEnumPayloadInstruction
+  | IrEnsureGlobalInitializedInstruction
   | IrStoreGlobalInstruction;
 
 export interface IrAssignInstruction {
@@ -345,6 +347,12 @@ export interface IrStoreGlobalInstruction {
   kind: "store_global";
   globalId: IrGlobalId;
   value: IrOperand;
+  span?: Span;
+}
+
+export interface IrEnsureGlobalInitializedInstruction {
+  kind: "ensure_global_initialized";
+  globalId: IrGlobalId;
   span?: Span;
 }
 

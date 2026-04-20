@@ -22,6 +22,7 @@ export function validateIr(program: IrProgram): IrValidationResult {
   const functionIds = new Set<string>();
   const structIds = new Set<IrTypeDeclId>();
   const globalIds = new Set<IrGlobalId>();
+  const functionIdsSeenForGlobals = new Set<string>();
 
   for (const declaration of program.declarations) {
     if (declaration.kind === "struct_decl") {
@@ -45,6 +46,9 @@ export function validateIr(program: IrProgram): IrValidationResult {
         });
       }
       globalIds.add(declaration.id);
+      if (declaration.initializerFunction) {
+        functionIdsSeenForGlobals.add(declaration.initializerFunction);
+      }
     }
   }
 
@@ -57,6 +61,14 @@ export function validateIr(program: IrProgram): IrValidationResult {
     }
     functionIds.add(declaration.id);
     validateFunction(declaration, structIds, globalIds, diagnostics);
+  }
+
+  for (const initializerFunction of functionIdsSeenForGlobals) {
+    if (!functionIds.has(initializerFunction)) {
+      diagnostics.push({
+        message: `Global initializer function '${initializerFunction}' does not exist.`,
+      });
+    }
   }
 
   if (program.entry && !functionIds.has(program.entry)) {
@@ -193,6 +205,15 @@ function validateInstruction(
       globalIds,
       diagnostics,
     );
+    return;
+  }
+
+  if (instruction.kind === "ensure_global_initialized") {
+    if (!globalIds.has(instruction.globalId)) {
+      diagnostics.push({
+        message: `ensure_global_initialized in '${fn.id}' references unknown global '${instruction.globalId}'.`,
+      });
+    }
     return;
   }
 

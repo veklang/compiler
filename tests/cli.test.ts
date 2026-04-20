@@ -180,4 +180,81 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs lazy global initialization once", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+let hits: i32 = 0;
+let value: i32 = bump();
+
+fn bump() -> i32 {
+  hits = hits + 1;
+  return 41;
+}
+
+fn main() -> i32 {
+  let _a: i32 = value;
+  let _b: i32 = value;
+  return hits;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("panics on re-entrant lazy global initialization", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+let a: i32 = read_b();
+let b: i32 = read_a();
+
+fn read_a() -> i32 {
+  return a;
+}
+
+fn read_b() -> i32 {
+  return b;
+}
+
+fn main() -> i32 {
+  return a;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+          assert.equal(
+            result.stderr.includes("cyclic top-level initializer"),
+            true,
+          );
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });
