@@ -1,6 +1,9 @@
 {
   "name": "veklang",
   "main": "./src/index.ts",
+  "bin": {
+    "vekc": "./build/index.js"
+  },
   "type": "commonjs",
   "scripts": {
     "build": "cd src && swc . -d ../build --config-file ../.swcrc && cd ..",

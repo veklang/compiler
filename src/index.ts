@@ -1,156 +1,218 @@
-import { inspect } from "node:util";
+#!/usr/bin/env node
+
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Checker } from "@/core/checker";
 import { Lexer } from "@/core/lexer";
 import { Parser } from "@/core/parser";
+import { emitC } from "@/emit/c";
+import { lowerProgramToIr } from "@/ir/lower";
+import type { Diagnostic } from "@/types/diagnostic";
 
-const source = `
-type MaybeI32 = i32?;
+export const defaultToolchainPrefix =
+  "musl-gcc -Wall -Wextra -O3 -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections -D_FORTIFY_SOURCE=2 -fstack-protector-strong -static";
 
-trait Measure<T> {
-  fn compare(self, other: T) -> Ordering;
+export const defaultRuntimeHeaderPath = path.resolve(
+  __dirname,
+  "../../runtime/dist/vek_runtime.h",
+);
+
+interface CliOptions {
+  sourcePath: string;
+  runtimeHeaderPath: string;
+  toolchainPrefix: string;
+  preserveTemps: boolean;
+  outputPath: string;
 }
 
-struct Counter {
-  current: i32;
-  end: i32;
+interface CompileResult {
+  outputPath: string;
+  cPath: string;
+  tempDir: string;
+}
 
-  fn new(end: i32) -> Self {
-    return Self { current: 0, end };
-  }
+export function parseCliArgs(argv: string[]): CliOptions {
+  let sourcePath: string | undefined;
+  let runtimeHeaderPath = defaultRuntimeHeaderPath;
+  let toolchainPrefix = defaultToolchainPrefix;
+  let preserveTemps = false;
 
-  fn done(self) -> bool {
-    return self.current == self.end;
-  }
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
 
-  satisfies Iterable<i32> {
-    fn next(mut self) -> i32? {
-      if self.done() {
-        return null;
-      }
-
-      let value = self.current;
-      self.current = self.current + 1;
-      return value;
+    if (arg === "--help" || arg === "-h") {
+      throw new CliUsage(usage(), 0);
     }
-  }
-}
 
-struct UserId {
-  value: i32;
-
-  fn new(value: i32) -> Self {
-    return Self { value };
-  }
-
-  satisfies Equal<UserId> {
-    fn equals(self, other: UserId) -> bool {
-      return self.value == other.value;
+    if (arg === "--runtime-header") {
+      runtimeHeaderPath = requireFlagValue(argv, ++i, arg);
+      continue;
     }
-  }
 
-  satisfies Measure<UserId> {
-    fn compare(self, other: UserId) -> Ordering {
-      if self.value < other.value {
-        return Less;
-      }
-
-      if self.value > other.value {
-        return Greater;
-      }
-
-      return Equal;
+    if (arg === "--toolchain-prefix") {
+      toolchainPrefix = requireFlagValue(argv, ++i, arg);
+      continue;
     }
+
+    if (arg === "--preserve-temp" || arg === "--preserve-temps") {
+      preserveTemps = true;
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      throw new CliUsage(`Unknown flag: ${arg}\n\n${usage()}`, 1);
+    }
+
+    if (sourcePath) {
+      throw new CliUsage(`Unexpected extra path: ${arg}\n\n${usage()}`, 1);
+    }
+    sourcePath = arg;
   }
-}
 
-enum Packet<T> {
-  Empty;
-  Data(T);
+  if (!sourcePath) throw new CliUsage(usage(), 1);
 
-  fn take(self) -> T? {
-    return match self {
-      Data(value) => value,
-      _ => null,
-    };
-  }
-}
-
-fn id<T>(value: T) -> T {
-  return value;
-}
-
-fn render(flag: bool, value: i32) -> string {
-  return match flag {
-    true => value.format(),
-    _ => "disabled",
+  const absoluteSource = path.resolve(sourcePath);
+  return {
+    sourcePath: absoluteSource,
+    runtimeHeaderPath: path.resolve(runtimeHeaderPath),
+    toolchainPrefix,
+    preserveTemps,
+    outputPath: defaultOutputPath(absoluteSource),
   };
 }
 
-fn main() -> void {
-  const maybe_num: MaybeI32 = 3;
-  let values: i32[] = [1, 2, 3];
-  let unit: () = ();
-  let single: (i32,) = (values[0],);
-  let first: i32 = single.0;
-  let packet: Packet<UserId> = Data(UserId.new(first));
-  let counter = Counter.new(3);
+export function compileFile(options: CliOptions): CompileResult {
+  const source = fs.readFileSync(options.sourcePath, "utf8");
+  const lexed = new Lexer(source).lex();
+  const parsed = new Parser(lexed.tokens).parseProgram();
+  const checked = new Checker(parsed.program).checkProgram();
+  const diagnostics = [
+    ...lexed.diagnostics,
+    ...parsed.diagnostics,
+    ...checked.diagnostics,
+  ];
 
-  if maybe_num != null {
-    let exact: i32 = maybe_num;
-    let shown = render(true, exact as i32);
-    panic(shown);
+  if (diagnostics.length > 0) {
+    throw new Error(formatDiagnostics(diagnostics));
   }
 
-  for item in counter {
-    values[0] = id<i32>(item);
-  }
+  const ir = lowerProgramToIr(parsed.program, checked, {
+    sourcePath: options.sourcePath,
+  });
+  const c = emitC(ir, { runtimeHeader: options.runtimeHeaderPath });
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vek-"));
+  const cPath = path.join(
+    tempDir,
+    `${path.basename(options.sourcePath, path.extname(options.sourcePath))}.c`,
+  );
+  fs.writeFileSync(cPath, c, "utf8");
 
-  let taken = packet.take();
-  if taken != null {
-    let same = taken.equals(UserId.new(values[0]));
-    let ordering = taken.compare(UserId.new(9));
-    let summary = match ordering {
-      Less => "less",
-      Equal => "equal",
-      _ => "greater",
-    };
-    if same {
-      panic(summary);
+  try {
+    runToolchain(options.toolchainPrefix, cPath, options.outputPath);
+  } finally {
+    if (!options.preserveTemps) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 
-  let _sink = unit;
+  return { outputPath: options.outputPath, cPath, tempDir };
 }
-`;
-const { tokens, diagnostics: lexDiagnostics } = new Lexer(source).lex();
-const { program, diagnostics: parseDiagnostics } = new Parser(
-  tokens,
-).parseProgram();
-const { diagnostics: checkDiagnostics } = new Checker(program).checkProgram();
 
-if (
-  lexDiagnostics.length ||
-  parseDiagnostics.length ||
-  checkDiagnostics.length
+export function buildToolchainCommand(
+  toolchainPrefix: string,
+  cPath: string,
+  outputPath: string,
+): string {
+  return `${toolchainPrefix} ${shellQuote(cPath)} -o ${shellQuote(outputPath)}`;
+}
+
+function runToolchain(
+  toolchainPrefix: string,
+  cPath: string,
+  outputPath: string,
 ) {
-  console.log(
-    inspect(
-      { lexDiagnostics, parseDiagnostics, checkDiagnostics },
-      { depth: 50, colors: true },
-    ),
-  );
-} else {
-  console.log(
-    inspect(tokens, {
-      depth: 50,
-      colors: true,
-    }),
-  );
+  const command = buildToolchainCommand(toolchainPrefix, cPath, outputPath);
+  const result = spawnSync(command, {
+    shell: true,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
 
-  console.log(
-    inspect(program, {
-      depth: 50,
-      colors: true,
-    }),
-  );
+  if (result.status === 0) return;
+
+  const details = [
+    `Toolchain failed: ${command}`,
+    result.stdout.trim(),
+    result.stderr.trim(),
+  ].filter(Boolean);
+  throw new Error(details.join("\n"));
 }
+
+function requireFlagValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index];
+  if (!value || value.startsWith("-")) {
+    throw new CliUsage(`Missing value for ${flag}\n\n${usage()}`, 1);
+  }
+  return value;
+}
+
+function defaultOutputPath(sourcePath: string): string {
+  const ext = path.extname(sourcePath);
+  return path.join(path.dirname(sourcePath), path.basename(sourcePath, ext));
+}
+
+function formatDiagnostics(diagnostics: Diagnostic[]): string {
+  return diagnostics
+    .map((diagnostic) => {
+      const code = diagnostic.code ? ` (${diagnostic.code})` : "";
+      return `${diagnostic.severity}: ${diagnostic.message}${code}`;
+    })
+    .join("\n");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function usage(): string {
+  return [
+    "Usage: vekc <path-to-file.vek> [flags]",
+    "",
+    "Flags:",
+    "  --runtime-header <path>       Runtime header path. Defaults to ../runtime/dist/vek_runtime.h from this compiler.",
+    "  --toolchain-prefix <command>  C toolchain command before source path, -o, and output path.",
+    "  --preserve-temp              Keep temporary emitted C files under /tmp.",
+    "  -h, --help                   Show this help.",
+  ].join("\n");
+}
+
+class CliUsage extends Error {
+  constructor(
+    message: string,
+    public readonly exitCode: number,
+  ) {
+    super(message);
+  }
+}
+
+function main() {
+  try {
+    const options = parseCliArgs(process.argv.slice(2));
+    const result = compileFile(options);
+    console.log(`wrote ${result.outputPath}`);
+    if (options.preserveTemps) console.log(`kept ${result.cPath}`);
+  } catch (error) {
+    if (error instanceof CliUsage) {
+      const write = error.exitCode === 0 ? console.log : console.error;
+      write(error.message);
+      process.exitCode = error.exitCode;
+      return;
+    }
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+
+if (require.main === module) main();
