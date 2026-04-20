@@ -43,52 +43,6 @@ pub fn add(a: i32, b: i32) -> i32 { return a + b; }
     );
   });
 
-  test("rejects non-std package imports", () => {
-    withProject(
-      {
-        "main.vek": `
-import "foo:bar" as x;
-fn main() -> void { return; }
-`,
-      },
-      (entry) => {
-        assert.deepEqual(codes(entry), ["E2706"]);
-      },
-    );
-  });
-
-  test("errors when module is not found", () => {
-    withProject(
-      {
-        "main.vek": `
-import "./missing" as x;
-fn main() -> void { return; }
-`,
-      },
-      (entry) => {
-        assert.deepEqual(codes(entry), ["E2707"]);
-      },
-    );
-  });
-
-  test("named import requires exported symbol", () => {
-    withProject(
-      {
-        "main.vek": `
-import hidden, shown from "./lib";
-fn main() -> void { return; }
-`,
-        "lib.vek": `
-const hidden: i32 = 1;
-pub const shown: i32 = 2;
-`,
-      },
-      (entry) => {
-        assert.deepEqual(codes(entry), ["E2702"]);
-      },
-    );
-  });
-
   test("named imports require exported symbols only", () => {
     withProject(
       {
@@ -159,6 +113,54 @@ pub fn b_fn() -> i32 { return 2; }
       },
       (entry) => {
         assert.deepEqual(codes(entry), []);
+      },
+    );
+  });
+});
+
+describe("modules diagnostics", () => {
+  test("E2706: rejects non-std package imports", () => {
+    withProject(
+      {
+        "main.vek": `
+import "foo:bar" as x;
+fn main() -> void { return; }
+`,
+      },
+      (entry) => {
+        assert.deepEqual(codes(entry), ["E2706"]);
+      },
+    );
+  });
+
+  test("E2707: errors when module is not found", () => {
+    withProject(
+      {
+        "main.vek": `
+import "./missing" as x;
+fn main() -> void { return; }
+`,
+      },
+      (entry) => {
+        assert.deepEqual(codes(entry), ["E2707"]);
+      },
+    );
+  });
+
+  test("E2702: named import requires exported symbol", () => {
+    withProject(
+      {
+        "main.vek": `
+import hidden, shown from "./lib";
+fn main() -> void { return; }
+`,
+        "lib.vek": `
+const hidden: i32 = 1;
+pub const shown: i32 = 2;
+`,
+      },
+      (entry) => {
+        assert.deepEqual(codes(entry), ["E2702"]);
       },
     );
   });

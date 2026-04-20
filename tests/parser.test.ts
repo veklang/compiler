@@ -233,38 +233,6 @@ let add_one = fn(x: i32) -> i32 {
     assert.equal(program.body[0].kind, "VariableDeclaration");
   });
 
-  test("missing semicolon reports error", () => {
-    const result = parse("let x = 1");
-    expectDiagnostics(result.parseDiagnostics, ["E1020"]);
-  });
-
-  test("rejects 'name: mut Type' parameter syntax", () => {
-    const result = parse(`
-fn push_one(xs: mut i32[]) -> void {
-  return;
-}
-`);
-    assert.equal(
-      result.parseDiagnostics.some((diagnostic) => diagnostic.code === "E1050"),
-      true,
-    );
-  });
-
-  test("struct keyword in type position is rejected", () => {
-    const result = parse(`let x: struct = 1;`);
-    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
-  });
-
-  test("let keyword in type position is rejected", () => {
-    const result = parse(`let x: let = 1;`);
-    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
-  });
-
-  test("trait keyword in type position is rejected", () => {
-    const result = parse(`let x: trait = 1;`);
-    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
-  });
-
   test("void and null are valid in type position", () => {
     parseOk(`
 fn nothing() -> void {
@@ -314,5 +282,39 @@ extern fn add(a: i32, b: i32) -> i32;
       "FunctionDeclaration",
       "FunctionDeclaration",
     ]);
+  });
+});
+
+describe("parser diagnostics", () => {
+  test("E1020: missing semicolon reports error", () => {
+    const result = parse("let x = 1");
+    expectDiagnostics(result.parseDiagnostics, ["E1020"]);
+  });
+
+  test("E1050: rejects 'name: mut Type' parameter syntax", () => {
+    const result = parse(`
+fn push_one(xs: mut i32[]) -> void {
+  return;
+}
+`);
+    assert.equal(
+      result.parseDiagnostics.some((diagnostic) => diagnostic.code === "E1050"),
+      true,
+    );
+  });
+
+  test("E1051: struct keyword in type position is rejected", () => {
+    const result = parse(`let x: struct = 1;`);
+    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
+  });
+
+  test("E1051: let keyword in type position is rejected", () => {
+    const result = parse(`let x: let = 1;`);
+    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
+  });
+
+  test("E1051: trait keyword in type position is rejected", () => {
+    const result = parse(`let x: trait = 1;`);
+    expectDiagnostics(result.parseDiagnostics, ["E1051"]);
   });
 });

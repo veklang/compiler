@@ -34,30 +34,6 @@ fn main() -> void {
     assert.ok(reachableNames.has("main"));
   });
 
-  test("unused private function gets W2900 warning", () => {
-    const { diagnostics } = reach(`
-fn unused() -> void {
-  return;
-}
-
-fn main() -> void {
-  return;
-}
-`);
-    expectDiagnostics(diagnostics, ["W2900"]);
-  });
-
-  test("multiple unused private declarations each get a warning", () => {
-    const { diagnostics } = reach(`
-fn unused_a() -> void { return; }
-fn unused_b() -> void { return; }
-
-fn main() -> void { return; }
-`);
-    assert.equal(diagnostics.length, 2);
-    assert.ok(diagnostics.every((d) => d.code === "W2900"));
-  });
-
   test("struct referenced in main body is reachable", () => {
     const { reachableNames } = reach(`
 struct Point {
@@ -70,18 +46,6 @@ fn main() -> void {
 }
 `);
     assert.ok(reachableNames.has("Point"));
-  });
-
-  test("unreachable struct gets warning", () => {
-    const { diagnostics } = reach(`
-struct Unused {
-  x: i32;
-}
-
-fn main() -> void { return; }
-`);
-    expectDiagnostics(diagnostics, ["W2900"]);
-    assert.equal(diagnostics[0].message, "Declaration 'Unused' is never used.");
   });
 
   test("enum referenced via variant in match is reachable", () => {
@@ -150,17 +114,6 @@ fn main() -> void {
     assert.ok(reachableNames.has("Printable"));
   });
 
-  test("unreachable trait gets warning", () => {
-    const { diagnostics } = reach(`
-trait Unused {
-  fn method(self) -> void;
-}
-
-fn main() -> void { return; }
-`);
-    expectDiagnostics(diagnostics, ["W2900"]);
-  });
-
   test("pub item not in main is still reachable (pub is always a root)", () => {
     const { reachableNames, diagnostics } = reach(`
 pub struct Config {
@@ -180,5 +133,54 @@ fn main() -> void {
 }
 `);
     assert.ok(reachableNames.has("compute"));
+  });
+});
+
+describe("reachability diagnostics", () => {
+  test("W2900: unused private function gets W2900 warning", () => {
+    const { diagnostics } = reach(`
+fn unused() -> void {
+  return;
+}
+
+fn main() -> void {
+  return;
+}
+`);
+    expectDiagnostics(diagnostics, ["W2900"]);
+  });
+
+  test("W2900: multiple unused private declarations each get a warning", () => {
+    const { diagnostics } = reach(`
+fn unused_a() -> void { return; }
+fn unused_b() -> void { return; }
+
+fn main() -> void { return; }
+`);
+    assert.equal(diagnostics.length, 2);
+    assert.ok(diagnostics.every((d) => d.code === "W2900"));
+  });
+
+  test("W2900: unreachable struct gets warning", () => {
+    const { diagnostics } = reach(`
+struct Unused {
+  x: i32;
+}
+
+fn main() -> void { return; }
+`);
+    expectDiagnostics(diagnostics, ["W2900"]);
+    assert.equal(diagnostics[0].message, "Declaration 'Unused' is never used.");
+  });
+
+  test("W2900: unreachable trait gets warning", () => {
+    const { diagnostics } = reach(`
+trait Unused {
+  fn method(self) -> void;
+}
+
+fn main() -> void { return; }
+`);
+    expectDiagnostics(diagnostics, ["W2900"]);
   });
 });

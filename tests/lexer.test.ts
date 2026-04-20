@@ -102,24 +102,26 @@ describe("lexer", () => {
       ["let", "x", "=", "1", ";", "let", "y", "=", "2", ";"],
     );
   });
+});
 
-  test("invalid escapes", () => {
+describe("lexer diagnostics", () => {
+  test("E0004: invalid escapes", () => {
     expectDiagnostics(lex('"\\q"').diagnostics, ["E0004"]);
   });
 
-  test("invalid unicode escapes", () => {
+  test("E0004: invalid unicode escapes", () => {
     expectDiagnostics(lex('"\\u{0G}"').diagnostics, ["E0004"]);
     expectDiagnostics(lex('"\\u{110000}"').diagnostics, ["E0004"]);
     expectDiagnostics(lex('"\\u{D800}"').diagnostics, ["E0004"]);
   });
 
-  test("invalid numeric forms", () => {
+  test("E0010/E0011/E0013: invalid numeric forms", () => {
     expectDiagnostics(lex("0x").diagnostics, ["E0010"]);
     expectDiagnostics(lex("0b").diagnostics, ["E0011"]);
     expectDiagnostics(lex("1e+").diagnostics, ["E0013"]);
   });
 
-  test("unterminated string and block comment", () => {
+  test("E0002/E0003: unterminated string and block comment", () => {
     expectDiagnostics(lex('"oops').diagnostics, ["E0002"]);
     expectDiagnostics(lex("/* nope").diagnostics, ["E0003"]);
   });

@@ -18,50 +18,6 @@ let b: i32 = a + 1;
     assert.equal(diagnostics.length, 0);
   });
 
-  test("self-cycle emits E2700", () => {
-    const { diagnostics } = initCheck(`
-let a: i32 = a;
-`);
-    expectDiagnostics(diagnostics, ["E2700"]);
-  });
-
-  test("direct two-way cycle emits E2700", () => {
-    const { diagnostics } = initCheck(`
-let a: i32 = b;
-let b: i32 = a;
-`);
-    expectDiagnostics(diagnostics, ["E2700"]);
-  });
-
-  test("transitive three-way cycle emits E2700", () => {
-    const { diagnostics } = initCheck(`
-let a: i32 = b;
-let b: i32 = c;
-let c: i32 = a;
-`);
-    expectDiagnostics(diagnostics, ["E2700"]);
-  });
-
-  test("two independent cycles each emit E2700", () => {
-    const { diagnostics } = initCheck(`
-let a: i32 = b;
-let b: i32 = a;
-let c: i32 = d;
-let d: i32 = c;
-`);
-    expectDiagnostics(diagnostics, ["E2700", "E2700"]);
-  });
-
-  test("cycle among subset does not affect non-cyclic declarations", () => {
-    const { diagnostics } = initCheck(`
-let x: i32 = 1;
-let a: i32 = b;
-let b: i32 = a;
-let y: i32 = x + 1;
-`);
-    expectDiagnostics(diagnostics, ["E2700"]);
-  });
-
   test("function declarations are not tracked as initializer deps", () => {
     const { diagnostics } = initCheck(`
 fn foo() -> i32 { return 0; }
@@ -79,7 +35,68 @@ let f = fn() -> i32 { return a; };
     assert.equal(diagnostics.length, 0);
   });
 
-  test("cycle error message includes the cycle path", () => {
+  test("declaration without initializer is not tracked", () => {
+    const { diagnostics } = initCheck(`
+let a: i32 = 1;
+`);
+    assert.equal(diagnostics.length, 0);
+  });
+});
+
+describe("top-level initializer diagnostics", () => {
+  test("E2700: self-cycle emits E2700", () => {
+    const { diagnostics } = initCheck(`
+let a: i32 = a;
+`);
+    expectDiagnostics(diagnostics, ["E2700"]);
+  });
+
+  test("E2700: direct two-way cycle emits E2700", () => {
+    const { diagnostics } = initCheck(`
+let a: i32 = b;
+let b: i32 = a;
+`);
+    expectDiagnostics(diagnostics, ["E2700"]);
+  });
+
+  test("E2700: transitive three-way cycle emits E2700", () => {
+    const { diagnostics } = initCheck(`
+let a: i32 = b;
+let b: i32 = c;
+let c: i32 = a;
+`);
+    expectDiagnostics(diagnostics, ["E2700"]);
+  });
+
+  test("E2700: two independent cycles each emit E2700", () => {
+    const { diagnostics } = initCheck(`
+let a: i32 = b;
+let b: i32 = a;
+let c: i32 = d;
+let d: i32 = c;
+`);
+    expectDiagnostics(diagnostics, ["E2700", "E2700"]);
+  });
+
+  test("E2700: cycle among subset does not affect non-cyclic declarations", () => {
+    const { diagnostics } = initCheck(`
+let x: i32 = 1;
+let a: i32 = b;
+let b: i32 = a;
+let y: i32 = x + 1;
+`);
+    expectDiagnostics(diagnostics, ["E2700"]);
+  });
+
+  test("E2700: top-level const declarations are also checked", () => {
+    const { diagnostics } = initCheck(`
+const a: i32 = b;
+const b: i32 = a;
+`);
+    expectDiagnostics(diagnostics, ["E2700"]);
+  });
+
+  test("E2700: cycle error message includes the cycle path", () => {
     const { diagnostics } = initCheck(`
 let x: i32 = y;
 let y: i32 = x;
@@ -91,20 +108,5 @@ let y: i32 = x;
       `expected cycle path in message, got: ${diagnostics[0].message}`,
     );
     assert.equal(diagnostics[0].code, "E2700");
-  });
-
-  test("top-level const declarations are also checked", () => {
-    const { diagnostics } = initCheck(`
-const a: i32 = b;
-const b: i32 = a;
-`);
-    expectDiagnostics(diagnostics, ["E2700"]);
-  });
-
-  test("declaration without initializer is not tracked", () => {
-    const { diagnostics } = initCheck(`
-let a: i32 = 1;
-`);
-    assert.equal(diagnostics.length, 0);
   });
 });
