@@ -8,8 +8,8 @@
   "scripts": {
     "build": "cd src && swc . -d ../build --config-file ../.swcrc && cd ..",
     "bundle": "cd src && swc . -d ../build --config-file ../.swcrc && cd .. && esbuild build/index.js --bundle --platform=node --format=cjs --minify --outfile=dist/bundle.js",
-    "format": "biome format --write .",
-    "lint": "biome lint --write .",
+    "format": "biome format --write src tests",
+    "lint": "biome lint --write src tests",
     "test": "tsx tests/run.ts"
   },
   "devDependencies": {
