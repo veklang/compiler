@@ -115,6 +115,12 @@ function dumpInstruction(instruction: IrInstruction): string {
       .map(dumpOperand)
       .join(", ")})`;
   }
+  if (instruction.kind === "construct_tuple") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = construct_tuple (${instruction.elements.map(dumpOperand).join(", ")})`;
+  }
+  if (instruction.kind === "get_tuple_field") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = get_tuple_field ${dumpOperand(instruction.object)}.${instruction.index}`;
+  }
   if (instruction.kind === "construct_enum") {
     const payload =
       instruction.payload.length > 0

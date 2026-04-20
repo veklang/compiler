@@ -239,16 +239,17 @@ Rules:
 ```ts
 interface IrConstructTuple {
   kind: "construct_tuple";
-  result: IrTempValue;
+  target: IrTempId;
   type: IrTupleType;
-  elements: IrValue[];
+  elements: IrOperand[];
 }
 
 interface IrGetTupleField {
   kind: "get_tuple_field";
-  result: IrTempValue;
-  object: IrValue;
+  target: IrTempId;
+  object: IrOperand;
   index: number;
+  type: IrType;
 }
 ```
 

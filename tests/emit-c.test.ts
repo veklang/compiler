@@ -115,6 +115,23 @@ fn main() -> i32 {
     assert.ok(c.includes("__vek_global_answer ="));
   });
 
+  test("emits tuple typedefs, construction, and field access", () => {
+    const c = emitOk(`
+fn second() -> i32 {
+  let pair: (bool, i32) = (true, 42);
+  return pair.1;
+}
+`);
+
+    assert.ok(c.includes("typedef struct {"));
+    assert.ok(c.includes("  bool _0;"));
+    assert.ok(c.includes("  int32_t _1;"));
+    assert.ok(c.includes("} __vek_tuple_bool__i32;"));
+    assert.ok(c.includes("._0 = true"));
+    assert.ok(c.includes("._1 = 42"));
+    assert.ok(c.includes("._1;"));
+  });
+
   test("emits if/else as labels and conditional goto", () => {
     const c = emitOk(`
 fn max(a: i32, b: i32) -> i32 {

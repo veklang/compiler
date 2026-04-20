@@ -8,6 +8,7 @@ import type {
   IrProgram,
   IrStructDeclaration,
   IrTerminator,
+  IrTupleType,
   IrType,
 } from "@/ir/types";
 
@@ -56,6 +57,12 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
     lines.push(...emitEnumTypedef(e));
   }
   if (enums.length > 0) lines.push("");
+
+  const tuples = collectTupleTypes(program);
+  for (const tuple of tuples) {
+    lines.push(...emitTupleTypedef(tuple));
+  }
+  if (tuples.length > 0) lines.push("");
 
   const globals = program.declarations.filter(
     (declaration): declaration is IrGlobal => declaration.kind === "global",
@@ -228,6 +235,25 @@ function emitInstruction(
     return `${emitType(instruction.type)} ${target} = ${call};`;
   }
 
+  if (instruction.kind === "construct_tuple") {
+    const target = declareTemp(context, instruction.target);
+    const elements =
+      instruction.elements.length > 0
+        ? instruction.elements
+            .map(
+              (element, index) =>
+                `._${index} = ${emitOperand(element, context)}`,
+            )
+            .join(", ")
+        : "._empty = 0";
+    return `${emitType(instruction.type)} ${target} = (${emitType(instruction.type)}){ ${elements} };`;
+  }
+
+  if (instruction.kind === "get_tuple_field") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitType(instruction.type)} ${target} = ${emitOperand(instruction.object, context)}._${instruction.index};`;
+  }
+
   if (instruction.kind === "construct_enum") {
     const target = declareTemp(context, instruction.target);
     const enumType = emitType(instruction.type);
@@ -374,7 +400,16 @@ function emitEnumTypedef(e: IrEnumDeclaration): string[] {
   return lines;
 }
 
+function emitTupleTypedef(tuple: IrTupleType): string[] {
+  const fields =
+    tuple.elements.length > 0
+      ? tuple.elements.map((type, index) => `  ${emitType(type)} _${index};`)
+      : ["  char _empty;"];
+  return [`typedef struct {`, ...fields, `} ${cTupleName(tuple)};`];
+}
+
 function emitType(type: IrType): string {
+  if (type.kind === "tuple") return cTupleName(type);
   if (type.kind === "named") {
     return type.decl === "enum" ? cEnumName(type.name) : cStructName(type.name);
   }
@@ -454,6 +489,134 @@ function cStructName(name: string): string {
 
 function cEnumName(name: string): string {
   return `__vek_enum_${sanitizeName(name)}`;
+}
+
+function cTupleName(type: IrTupleType): string {
+  const parts =
+    type.elements.length > 0 ? type.elements.map(typeNamePart) : ["empty"];
+  return `__vek_tuple_${parts.join("__")}`;
+}
+
+function typeNamePart(type: IrType): string {
+  if (type.kind === "primitive") return sanitizeName(type.name);
+  if (type.kind === "named") {
+    const args =
+      type.args.length > 0 ? `_${type.args.map(typeNamePart).join("_")}` : "";
+    return sanitizeName(`${type.name}${args}`);
+  }
+  if (type.kind === "nullable") return `opt_${typeNamePart(type.base)}`;
+  if (type.kind === "tuple") {
+    const parts =
+      type.elements.length > 0 ? type.elements.map(typeNamePart) : ["empty"];
+    return `tuple_${parts.join("_")}`;
+  }
+  if (type.kind === "function") return "fn";
+  return type.kind;
+}
+
+function collectTupleTypes(program: IrProgram): IrTupleType[] {
+  const tuples = new Map<string, IrTupleType>();
+  for (const declaration of program.declarations) {
+    if (declaration.kind === "global") {
+      collectType(declaration.type, tuples);
+      continue;
+    }
+    if (declaration.kind === "struct_decl") {
+      for (const field of declaration.fields) collectType(field.type, tuples);
+      continue;
+    }
+    if (declaration.kind === "enum_decl") {
+      for (const variant of declaration.variants) {
+        for (const payloadType of variant.payloadTypes) {
+          collectType(payloadType, tuples);
+        }
+      }
+      continue;
+    }
+    collectType(declaration.signature.returnType, tuples);
+    for (const param of declaration.params) collectType(param.type, tuples);
+    for (const local of declaration.locals) collectType(local.type, tuples);
+    for (const block of declaration.blocks) {
+      for (const instruction of block.instructions) {
+        collectInstructionTypes(instruction, tuples);
+      }
+      if (block.terminator?.kind === "return" && block.terminator.value) {
+        collectType(block.terminator.value.type, tuples);
+      }
+    }
+  }
+  return [...tuples.values()].sort(
+    (left, right) => tupleDepth(left) - tupleDepth(right),
+  );
+}
+
+function collectInstructionTypes(
+  instruction: IrInstruction,
+  tuples: Map<string, IrTupleType>,
+) {
+  if ("type" in instruction) collectType(instruction.type, tuples);
+  if ("value" in instruction) collectType(instruction.value.type, tuples);
+  if (instruction.kind === "binary") {
+    collectType(instruction.left.type, tuples);
+    collectType(instruction.right.type, tuples);
+  } else if (instruction.kind === "unary") {
+    collectType(instruction.argument.type, tuples);
+  } else if (instruction.kind === "call") {
+    collectType(instruction.callee.type, tuples);
+    for (const arg of instruction.args) collectType(arg.type, tuples);
+  } else if (instruction.kind === "construct_tuple") {
+    for (const element of instruction.elements)
+      collectType(element.type, tuples);
+  } else if (instruction.kind === "get_tuple_field") {
+    collectType(instruction.object.type, tuples);
+  } else if (instruction.kind === "construct_struct") {
+    for (const field of instruction.fields)
+      collectType(field.value.type, tuples);
+  } else if (instruction.kind === "get_field") {
+    collectType(instruction.object.type, tuples);
+  } else if (instruction.kind === "set_field") {
+    collectType(instruction.value.type, tuples);
+  } else if (instruction.kind === "construct_enum") {
+    for (const payload of instruction.payload)
+      collectType(payload.type, tuples);
+  } else if (
+    instruction.kind === "get_tag" ||
+    instruction.kind === "get_enum_payload"
+  ) {
+    collectType(instruction.object.type, tuples);
+  }
+}
+
+function collectType(type: IrType, tuples: Map<string, IrTupleType>) {
+  if (type.kind === "tuple") {
+    tuples.set(cTupleName(type), type);
+    for (const element of type.elements) collectType(element, tuples);
+    return;
+  }
+  if (type.kind === "nullable") {
+    collectType(type.base, tuples);
+    return;
+  }
+  if (type.kind === "named") {
+    for (const arg of type.args) collectType(arg, tuples);
+    return;
+  }
+  if (type.kind === "function") {
+    for (const param of type.params) collectType(param.type, tuples);
+    collectType(type.returnType, tuples);
+  }
+}
+
+function tupleDepth(type: IrTupleType): number {
+  return (
+    1 +
+    Math.max(
+      0,
+      ...type.elements.map((element) =>
+        element.kind === "tuple" ? tupleDepth(element) : 0,
+      ),
+    )
+  );
 }
 
 function declareTemp(context: FunctionEmitContext, id: string): string {

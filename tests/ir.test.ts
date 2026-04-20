@@ -132,6 +132,20 @@ fn main() -> i32 {
     assert.ok(dump.includes("store_global global.answer"));
   });
 
+  test("lowers tuple literals and tuple member access", () => {
+    const ir = irOk(`
+fn second() -> i32 {
+  let pair: (bool, i32) = (true, 42);
+  return pair.1;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("construct_tuple"));
+    assert.ok(dump.includes("get_tuple_field"));
+    assert.ok(dump.includes(".1"));
+  });
+
   test("lowers if with no else to cond_branch + join", () => {
     const ir = irOk(`
 fn main() -> void {

@@ -257,4 +257,35 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs tuple construction and field access", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn make_pair() -> (i32, i32) {
+  return (17, 25);
+}
+
+fn main() -> i32 {
+  let pair: (i32, i32) = make_pair();
+  return pair.0 + pair.1;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

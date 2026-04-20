@@ -49,6 +49,8 @@ import type {
   StructDeclaration,
   StructField,
   StructLiteralExpression,
+  TupleLiteralExpression,
+  TupleMemberExpression,
   TypeNode,
   UnaryExpression,
   VariableDeclaration,
@@ -849,6 +851,10 @@ function lowerExpression(
       return lowerStructLiteral(expression, context);
     case "MemberExpression":
       return lowerMemberExpression(expression, context);
+    case "TupleLiteralExpression":
+      return lowerTupleLiteral(expression, context);
+    case "TupleMemberExpression":
+      return lowerTupleMemberExpression(expression, context);
     default:
       throw new Error(`IR lowering does not support ${expression.kind} yet.`);
   }
@@ -1035,6 +1041,44 @@ function lowerCast(
     kind: "cast",
     target,
     value: lowerExpression(expression.expression, context),
+    type,
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type };
+}
+
+function lowerTupleLiteral(
+  expression: TupleLiteralExpression,
+  context: LowerContext,
+): IrOperand {
+  const type = typeFromNode(context.checkResult, expression);
+  if (type.kind !== "tuple") {
+    throw new Error("IR lowering: tuple literal did not have tuple type.");
+  }
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "construct_tuple",
+    target,
+    elements: expression.elements.map((element) =>
+      lowerExpression(element, context),
+    ),
+    type,
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type };
+}
+
+function lowerTupleMemberExpression(
+  expression: TupleMemberExpression,
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  const type = typeFromNode(context.checkResult, expression);
+  context.currentBlock.instructions.push({
+    kind: "get_tuple_field",
+    target,
+    object: lowerExpression(expression.object, context),
+    index: expression.index,
     type,
     span: expression.span,
   });

@@ -236,6 +236,8 @@ export type IrInstruction =
   | IrUnaryInstruction
   | IrCallInstruction
   | IrCastInstruction
+  | IrConstructTupleInstruction
+  | IrGetTupleFieldInstruction
   | IrConstructStructInstruction
   | IrGetFieldInstruction
   | IrSetFieldInstruction
@@ -284,6 +286,23 @@ export interface IrCastInstruction {
   kind: "cast";
   target: IrTempId;
   value: IrOperand;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrConstructTupleInstruction {
+  kind: "construct_tuple";
+  target: IrTempId;
+  elements: IrOperand[];
+  type: IrTupleType;
+  span?: Span;
+}
+
+export interface IrGetTupleFieldInstruction {
+  kind: "get_tuple_field";
+  target: IrTempId;
+  object: IrOperand;
+  index: number;
   type: IrType;
   span?: Span;
 }
