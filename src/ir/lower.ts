@@ -1004,6 +1004,12 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
     type: elementType,
     span: statement.span,
   });
+  const elemValue: IrOperand = {
+    kind: "temp",
+    id: elemTarget,
+    type: elementType,
+  };
+  retainIfBorrowedHeap(elemValue, context, statement.span);
   const iterLocal = declareLocal(
     context,
     statement.iterator.name,
@@ -1014,9 +1020,10 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
   context.currentBlock.instructions.push({
     kind: "assign",
     target: iterLocal.id,
-    value: { kind: "temp", id: elemTarget, type: elementType },
+    value: elemValue,
     span: statement.span,
   });
+  markLocalOwns(iterLocal.id, elemValue, context);
 
   const savedExit = context.loopExit;
   const savedContinue = context.loopContinue;
@@ -1840,14 +1847,18 @@ function lowerArrayLiteral(
       ? type.args[0]
       : { kind: "unknown" };
   const target = nextTemp(context);
+  const elements = expression.elements.map((el) =>
+    lowerExpression(el, context),
+  );
   context.currentBlock.instructions.push({
     kind: "array_new",
     target,
     elementType,
-    elements: expression.elements.map((el) => lowerExpression(el, context)),
+    elements,
     type,
     span: expression.span,
   });
+  for (const element of elements) releaseIfOwnedTemp(element, context);
   if (!context.runtime.arrays.some((t) => irTypeEquals(t, elementType))) {
     context.runtime.arrays.push(elementType);
   }
@@ -1887,6 +1898,9 @@ function lowerIndexExpression(
     span: expression.span,
   });
   releaseIfOwnedTemp(object, context);
+  const result = { kind: "temp" as const, id: target, type };
+  retainIfBorrowedHeap(result, context, expression.span);
+  markOwnedTemp(target, type, context);
   return { kind: "temp", id: target, type };
 }
 

@@ -142,7 +142,7 @@ Recommended order after the initial slice:
 9. Arrays and array indexing. ✅
 10. `for` loops (requires array runtime helpers). ✅
 11. Copy-on-write detach for array mutation. ✅ for direct array element mutation.
-12. Retain/release for strings and arrays. ✅ for direct heap values.
+12. Retain/release for strings and arrays. ✅ for direct heap values and owned array elements.
 13. Aggregate retain/release helpers. ✅ for structs, tuples, nullable values, and enums containing owned values.
 14. Top-level lazy initializers. ✅
 15. Function values. ✅ for named functions, non-capturing anonymous functions, inherent methods, type-qualified method references, and direct instance method calls.

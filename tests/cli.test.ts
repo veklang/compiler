@@ -637,4 +637,38 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs CoW string array element mutation", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let xs: string[] = ["a", "b"];
+  let ys: string[] = xs;
+  xs[0] = "c";
+  if ys[0] == "a" {
+    if xs[0] == "c" {
+      return 42;
+    }
+  }
+  return 0;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

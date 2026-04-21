@@ -390,6 +390,9 @@ Rules:
 - Bounds checks may be emitted as runtime helper calls or explicit IR branches
   to panic.
 - `array_set` must be preceded by detach when the array may be shared.
+- `array_new` for an element type that owns storage must pass element
+  retain/release callbacks to the runtime; trivial element types pass `NULL`
+  callbacks.
 - `string_len` and `string_at` operate on Unicode scalar positions, not UTF-8
   byte offsets.
 - Strings are immutable; there is no `string_set`.

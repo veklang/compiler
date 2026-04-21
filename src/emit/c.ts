@@ -74,6 +74,16 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   }
   if (nullables.length > 0) lines.push("");
 
+  const structMap = new Map(structs.map((s) => [s.linkName, s]));
+  const enumMap = new Map(enums.map((e) => [e.linkName, e]));
+  const ownedArrayElements = program.runtime.arrays.filter((type) =>
+    hasOwnedStorage(type, structMap, enumMap),
+  );
+  for (const type of ownedArrayElements) {
+    lines.push(...emitArrayElementOwnershipHelpers(type, structMap, enumMap));
+  }
+  if (ownedArrayElements.length > 0) lines.push("");
+
   const stringLiterals = collectStringLiterals(program);
   const stringLiteralNames = new Map<string, string>();
   if (stringLiterals.length > 0) {
@@ -132,8 +142,8 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
         globalNames,
         ensureGlobalNames,
         stringLiteralNames,
-        new Map(structs.map((s) => [s.linkName, s])),
-        new Map(enums.map((e) => [e.linkName, e])),
+        structMap,
+        enumMap,
       ),
       "",
     );
@@ -387,13 +397,23 @@ function emitInstruction(
   if (instruction.kind === "array_new") {
     const target = declareTemp(context, instruction.target);
     const elemCType = emitType(instruction.elementType);
+    const retainElem = arrayElementOwnershipHelper(
+      "retain",
+      instruction.elementType,
+      context,
+    );
+    const releaseElem = arrayElementOwnershipHelper(
+      "release",
+      instruction.elementType,
+      context,
+    );
     if (instruction.elements.length === 0) {
-      return `${emitDeclaration(instruction.type, target)} = __vek_array_new(sizeof(${elemCType}), 0, NULL);`;
+      return `${emitDeclaration(instruction.type, target)} = __vek_array_new(sizeof(${elemCType}), 0, NULL, ${retainElem}, ${releaseElem});`;
     }
     const elems = instruction.elements
       .map((el) => emitOperand(el, context))
       .join(", ");
-    return `${emitDeclaration(instruction.type, target)} = __vek_array_new(sizeof(${elemCType}), ${instruction.elements.length}, (${elemCType}[]){${elems}});`;
+    return `${emitDeclaration(instruction.type, target)} = __vek_array_new(sizeof(${elemCType}), ${instruction.elements.length}, (${elemCType}[]){${elems}}, ${retainElem}, ${releaseElem});`;
   }
 
   if (instruction.kind === "array_len") {
@@ -562,6 +582,54 @@ function emitOwnershipStatements(
   );
 }
 
+function arrayElementOwnershipHelper(
+  action: "retain" | "release",
+  type: IrType,
+  context: FunctionEmitContext,
+): string {
+  if (!hasOwnedStorage(type, context.structs, context.enums)) return "NULL";
+  return action === "retain"
+    ? cArrayElementRetainName(type)
+    : cArrayElementReleaseName(type);
+}
+
+function hasOwnedStorage(
+  type: IrType,
+  structs: Map<string, IrStructDeclaration>,
+  enums: Map<string, IrEnumDeclaration>,
+  seen = new Set<string>(),
+): boolean {
+  if (type.kind === "primitive" && type.name === "string") return true;
+  if (type.kind === "named" && type.name === "Array") return true;
+  if (type.kind === "nullable")
+    return hasOwnedStorage(type.base, structs, enums, seen);
+  if (type.kind === "tuple") {
+    return type.elements.some((element) =>
+      hasOwnedStorage(element, structs, enums, seen),
+    );
+  }
+  if (type.kind !== "named") return false;
+  const key = `${type.decl ?? "named"}:${type.name}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  if (type.decl === "enum") {
+    const enumDecl = enums.get(type.name);
+    return (
+      enumDecl?.variants.some((variant) =>
+        variant.payloadTypes.some((payloadType) =>
+          hasOwnedStorage(payloadType, structs, enums, seen),
+        ),
+      ) ?? false
+    );
+  }
+  const structDecl = structs.get(type.name);
+  return (
+    structDecl?.fields.some((field) =>
+      hasOwnedStorage(field.type, structs, enums, seen),
+    ) ?? false
+  );
+}
+
 function emitMainWrapper(entry: IrFunction): string[] {
   const call = `${cFunctionName(entry.linkName)}()`;
   if (
@@ -648,6 +716,45 @@ function emitNullableTypedef(nullable: IrNullableType): string[] {
     "  bool is_null;",
     `  ${emitDeclaration(nullable.base, "value")};`,
     `} ${cNullableName(nullable)};`,
+  ];
+}
+
+function emitArrayElementOwnershipHelpers(
+  type: IrType,
+  structs: Map<string, IrStructDeclaration>,
+  enums: Map<string, IrEnumDeclaration>,
+): string[] {
+  const context: FunctionEmitContext = {
+    localNames: new Map(),
+    tempNames: new Map(),
+    globalNames: new Map(),
+    ensureGlobalNames: new Map(),
+    stringLiteralNames: new Map(),
+    paramIds: new Set(),
+    multiBlock: false,
+    structs,
+    enums,
+  };
+  const value = `*(${emitType(type)} *)element`;
+  const retainStatements = emitOwnershipStatements(
+    "retain",
+    value,
+    type,
+    context,
+  );
+  const releaseStatements = emitOwnershipStatements(
+    "release",
+    value,
+    type,
+    context,
+  );
+  return [
+    `static void ${cArrayElementRetainName(type)}(void *element) {`,
+    `  ${retainStatements.join(" ")}`,
+    "}",
+    `static void ${cArrayElementReleaseName(type)}(void *element) {`,
+    `  ${releaseStatements.join(" ")}`,
+    "}",
   ];
 }
 
@@ -764,6 +871,14 @@ function cTupleName(type: IrTupleType): string {
 
 function cNullableName(type: IrNullableType): string {
   return `__vek_nullable_${typeNamePart(type.base)}`;
+}
+
+function cArrayElementRetainName(type: IrType): string {
+  return `__vek_array_elem_retain_${typeNamePart(type)}`;
+}
+
+function cArrayElementReleaseName(type: IrType): string {
+  return `__vek_array_elem_release_${typeNamePart(type)}`;
 }
 
 function typeNamePart(type: IrType): string {

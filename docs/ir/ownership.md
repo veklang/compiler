@@ -99,6 +99,7 @@ recursively. The current C emitter inlines recursive operations at each
 retain/release instruction. A future emitter may generate helper functions if
 the inline output becomes too repetitive.
 
-`Array<T>` remains a direct heap object at the IR boundary. Element destructors
-for arrays whose element type owns storage, such as `Array<string>`, require
-runtime support and are not modeled by recursive aggregate ownership.
+`Array<T>` remains a direct heap object at the IR boundary. When `T` owns
+storage, the C emitter generates element retain/release callbacks and passes
+them to the runtime array constructor. Runtime `release`, `set`, and `detach`
+use those callbacks to manage element lifetimes.

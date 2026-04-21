@@ -484,7 +484,9 @@ fn get() -> i32[] {
 }
 `);
 
-    assert.ok(c.includes("__vek_array_new(sizeof(int32_t), 0, NULL)"));
+    assert.ok(
+      c.includes("__vek_array_new(sizeof(int32_t), 0, NULL, NULL, NULL)"),
+    );
   });
 
   test("emits array literal with elements as __vek_array_new with compound literal", () => {
@@ -496,7 +498,29 @@ fn get() -> i32[] {
 
     assert.ok(
       c.includes(
-        "__vek_array_new(sizeof(int32_t), 3, (int32_t[]){10, 20, 30})",
+        "__vek_array_new(sizeof(int32_t), 3, (int32_t[]){10, 20, 30}, NULL, NULL)",
+      ),
+    );
+  });
+
+  test("emits array element ownership callbacks for string arrays", () => {
+    const c = emitOk(`
+fn get() -> string[] {
+  return ["a", "b"];
+}
+`);
+
+    assert.ok(c.includes("static void __vek_array_elem_retain_string"));
+    assert.ok(c.includes("static void __vek_array_elem_release_string"));
+    assert.ok(c.includes("__vek_string_retain(*(__vek_string * *)element);"));
+    assert.ok(
+      c.includes(
+        "__vek_array_new(sizeof(__vek_string *), 2, (__vek_string *[]){",
+      ),
+    );
+    assert.ok(
+      c.includes(
+        "__vek_array_elem_retain_string, __vek_array_elem_release_string",
       ),
     );
   });
