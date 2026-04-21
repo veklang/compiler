@@ -513,4 +513,120 @@ fn main() -> i32 {
     assert.ok(dump.includes("local.0 = @__vek_anon_0"));
     assert.ok(dump.includes("call local.0(41)"));
   });
+
+  test("lowers type-qualified method references to function operands", () => {
+    const ir = irOk(`
+struct User {
+  id: i32;
+
+  fn show(self) -> i32 {
+    return self.id;
+  }
+
+  fn new(id: i32) -> Self {
+    return Self { id };
+  }
+}
+
+fn main() -> i32 {
+  let make: fn(i32) -> User = User.new;
+  let show: fn(User) -> i32 = User.show;
+  let user: User = make(42);
+  return show(user);
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.User_show User_show(self: User) -> i32"));
+    assert.ok(dump.includes("fn fn.User_new User_new(id: i32) -> User"));
+    assert.ok(dump.includes("local.0 = @User_new"));
+    assert.ok(dump.includes("local.1 = @User_show"));
+    assert.ok(dump.includes("call local.0(42)"));
+    assert.ok(dump.includes("call local.1(local.2)"));
+  });
+
+  test("lowers direct instance method calls to static method calls", () => {
+    const ir = irOk(`
+struct User {
+  id: i32;
+
+  fn show(self) -> i32 {
+    return self.id;
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  return user.show();
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.User_show User_show(self: User) -> i32"));
+    assert.ok(dump.includes("call @User_show(local.0)"));
+  });
+
+  test("lowers an empty array literal and records runtime.arrays", () => {
+    const ir = irOk(`
+fn get() -> i32[] {
+  let xs: i32[] = [];
+  return xs;
+}
+`);
+
+    assert.ok(ir.runtime.arrays.length > 0);
+  });
+
+  test("lowers array literal with elements to array_new", () => {
+    const ir = irOk(`
+fn get() -> i32[] {
+  return [1, 2, 3];
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("array_new"));
+  });
+
+  test("lowers index expression to array_get", () => {
+    const ir = irOk(`
+fn first(xs: i32[]) -> i32 {
+  return xs[0];
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("array_get"));
+  });
+
+  test("lowers indexed assignment to array_set", () => {
+    const ir = irOk(`
+fn set_first(mut xs: i32[]) -> void {
+  xs[0] = 99;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("array_set"));
+  });
+
+  test("lowers for loop over array to while-style CFG", () => {
+    const ir = irOk(`
+fn sum(xs: i32[]) -> i32 {
+  let total: i32 = 0;
+  for x in xs {
+    total = total + x;
+  }
+  return total;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("array_len"));
+    assert.ok(dump.includes("array_get"));
+    assert.ok(ir.declarations.length === 1);
+    const fn_ = ir.declarations[0];
+    assert.ok(fn_.kind === "function");
+    assert.ok(fn_.blocks.length > 1);
+  });
 });

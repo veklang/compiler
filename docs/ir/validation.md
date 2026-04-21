@@ -145,7 +145,7 @@ Recommended order after the initial slice:
 12. Retain/release for strings and arrays.
 13. Aggregate retain/release helpers.
 14. Top-level lazy initializers. ✅
-15. Function values. ✅ for named functions and non-capturing anonymous functions; type-qualified method references remain pending.
+15. Function values. ✅ for named functions, non-capturing anonymous functions, inherent methods, type-qualified method references, and direct instance method calls.
 16. Specialized generic functions and methods beyond direct primitive cases.
 
 Each step must include:

@@ -328,6 +328,34 @@ function emitInstruction(
     return `${requireLocal(context, instruction.target)}.${instruction.field} = ${emitOperand(instruction.value, context)};`;
   }
 
+  if (instruction.kind === "array_new") {
+    const target = declareTemp(context, instruction.target);
+    const elemCType = emitType(instruction.elementType);
+    if (instruction.elements.length === 0) {
+      return `${emitDeclaration(instruction.type, target)} = __vek_array_new(sizeof(${elemCType}), 0, NULL);`;
+    }
+    const elems = instruction.elements
+      .map((el) => emitOperand(el, context))
+      .join(", ");
+    return `${emitDeclaration(instruction.type, target)} = __vek_array_new(sizeof(${elemCType}), ${instruction.elements.length}, (${elemCType}[]){${elems}});`;
+  }
+
+  if (instruction.kind === "array_len") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitDeclaration(instruction.type, target)} = __vek_array_len(${emitOperand(instruction.array, context)});`;
+  }
+
+  if (instruction.kind === "array_get") {
+    const target = declareTemp(context, instruction.target);
+    const elemCType = emitType(instruction.elementType);
+    return `${emitDeclaration(instruction.type, target)} = *(${elemCType} *)__vek_array_get(${emitOperand(instruction.array, context)}, ${emitOperand(instruction.index, context)});`;
+  }
+
+  if (instruction.kind === "array_set") {
+    const elemCType = emitType(instruction.elementType);
+    return `__vek_array_set(${emitOperand(instruction.array, context)}, ${emitOperand(instruction.index, context)}, &(${elemCType}){${emitOperand(instruction.value, context)}});`;
+  }
+
   if (instruction.kind === "ensure_global_initialized") {
     return `${requireGlobal(context.ensureGlobalNames, instruction.globalId)}();`;
   }
@@ -483,6 +511,7 @@ function emitAbstractDeclaration(type: IrType): string {
 function emitType(type: IrType): string {
   if (type.kind === "nullable") return cNullableName(type);
   if (type.kind === "tuple") return cTupleName(type);
+  if (type.kind === "named" && type.name === "Array") return "__vek_array *";
   if (type.kind === "named") {
     return type.decl === "enum" ? cEnumName(type.name) : cStructName(type.name);
   }
@@ -721,6 +750,17 @@ function collectInstructionTypes(
     instruction.kind === "unwrap_nullable"
   ) {
     collectType(instruction.value.type, tuples);
+  } else if (instruction.kind === "array_new") {
+    collectType(instruction.elementType, tuples);
+    for (const el of instruction.elements) collectType(el.type, tuples);
+  } else if (instruction.kind === "array_len") {
+    collectType(instruction.array.type, tuples);
+  } else if (instruction.kind === "array_get") {
+    collectType(instruction.array.type, tuples);
+    collectType(instruction.elementType, tuples);
+  } else if (instruction.kind === "array_set") {
+    collectType(instruction.array.type, tuples);
+    collectType(instruction.value.type, tuples);
   }
 }
 
@@ -792,6 +832,17 @@ function walkInstructionTypes(
     instruction.kind === "is_null" ||
     instruction.kind === "unwrap_nullable"
   ) {
+    walkType(instruction.value.type, visit);
+  } else if (instruction.kind === "array_new") {
+    walkType(instruction.elementType, visit);
+    for (const el of instruction.elements) walkType(el.type, visit);
+  } else if (instruction.kind === "array_len") {
+    walkType(instruction.array.type, visit);
+  } else if (instruction.kind === "array_get") {
+    walkType(instruction.array.type, visit);
+    walkType(instruction.elementType, visit);
+  } else if (instruction.kind === "array_set") {
+    walkType(instruction.array.type, visit);
     walkType(instruction.value.type, visit);
   }
 }

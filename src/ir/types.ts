@@ -248,6 +248,10 @@ export type IrInstruction =
   | IrConstructEnumInstruction
   | IrGetTagInstruction
   | IrGetEnumPayloadInstruction
+  | IrArrayNewInstruction
+  | IrArrayLenInstruction
+  | IrArrayGetInstruction
+  | IrArraySetInstruction
   | IrEnsureGlobalInitializedInstruction
   | IrStoreGlobalInstruction;
 
@@ -394,6 +398,42 @@ export interface IrGetEnumPayloadInstruction {
   variant: string;
   index: number;
   type: IrType;
+  span?: Span;
+}
+
+export interface IrArrayNewInstruction {
+  kind: "array_new";
+  target: IrTempId;
+  elementType: IrType;
+  elements: IrOperand[];
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrArrayLenInstruction {
+  kind: "array_len";
+  target: IrTempId;
+  array: IrOperand;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrArrayGetInstruction {
+  kind: "array_get";
+  target: IrTempId;
+  array: IrOperand;
+  index: IrOperand;
+  elementType: IrType;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrArraySetInstruction {
+  kind: "array_set";
+  array: IrOperand;
+  index: IrOperand;
+  value: IrOperand;
+  elementType: IrType;
   span?: Span;
 }
 

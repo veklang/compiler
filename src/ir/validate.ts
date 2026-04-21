@@ -329,6 +329,29 @@ function validateInstruction(
     return;
   }
 
+  if (instruction.kind === "array_new") {
+    for (const el of instruction.elements) validate(el);
+    return;
+  }
+
+  if (instruction.kind === "array_len") {
+    validate(instruction.array);
+    return;
+  }
+
+  if (instruction.kind === "array_get") {
+    validate(instruction.array);
+    validate(instruction.index);
+    return;
+  }
+
+  if (instruction.kind === "array_set") {
+    validate(instruction.array);
+    validate(instruction.index);
+    validate(instruction.value);
+    return;
+  }
+
   validate(instruction.value);
 }
 

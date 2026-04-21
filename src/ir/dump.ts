@@ -158,6 +158,19 @@ function dumpInstruction(instruction: IrInstruction): string {
   if (instruction.kind === "set_field") {
     return `set_field ${instruction.target}.${instruction.field} = ${dumpOperand(instruction.value)}`;
   }
+  if (instruction.kind === "array_new") {
+    const elems = instruction.elements.map(dumpOperand).join(", ");
+    return `${instruction.target}: ${dumpType(instruction.type)} = array_new<${dumpType(instruction.elementType)}>[${elems}]`;
+  }
+  if (instruction.kind === "array_len") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = array_len ${dumpOperand(instruction.array)}`;
+  }
+  if (instruction.kind === "array_get") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = array_get ${dumpOperand(instruction.array)}[${dumpOperand(instruction.index)}]`;
+  }
+  if (instruction.kind === "array_set") {
+    return `array_set ${dumpOperand(instruction.array)}[${dumpOperand(instruction.index)}] = ${dumpOperand(instruction.value)}`;
+  }
   if (instruction.kind === "ensure_global_initialized") {
     return `ensure_global_initialized ${instruction.globalId}`;
   }

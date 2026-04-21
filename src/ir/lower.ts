@@ -22,6 +22,7 @@ import type {
 } from "@/ir/types";
 import { irPrimitive } from "@/ir/types";
 import type {
+  ArrayLiteralExpression,
   AssignmentStatement,
   BinaryExpression,
   BlockStatement,
@@ -38,12 +39,15 @@ import type {
   GroupingExpression,
   IdentifierExpression,
   IfStatement,
+  IndexExpression,
   LiteralExpression,
   MatchStatement,
   MatchStatementArm,
   MemberExpression,
+  MethodDeclaration,
   NamedParameter,
   Node,
+  Parameter,
   Program,
   ReturnStatement,
   Statement,
@@ -88,10 +92,12 @@ interface LowerContext {
   loopContinue?: IrBlockId;
   structFields: Map<string, IrStructField[]>;
   variantInfos: Map<string, VariantInfo>;
+  methodLinks: Map<string, string>;
   globals: Map<string, IrGlobalId>;
   globalTypes: Map<IrGlobalId, IrType>;
   lazyGlobals: Set<IrGlobalId>;
   returnType: IrType;
+  selfTypeName?: string;
   session: LowerSession;
 }
 
@@ -109,6 +115,7 @@ export function lowerProgramToIr(
   const declarations: IrDeclaration[] = [];
   const structFields = new Map<string, IrStructField[]>();
   const variantInfos = new Map<string, VariantInfo>();
+  const methodLinks = new Map<string, string>();
   const session: LowerSession = {
     generatedFunctions: [],
     nextAnonymousFunction: 0,
@@ -117,9 +124,13 @@ export function lowerProgramToIr(
 
   for (const statement of program.body) {
     if (statement.kind === "StructDeclaration") {
-      declarations.push(lowerStructDeclaration(statement, structFields));
+      declarations.push(
+        lowerStructDeclaration(statement, structFields, methodLinks),
+      );
     } else if (statement.kind === "EnumDeclaration") {
-      declarations.push(lowerEnumDeclaration(statement, variantInfos));
+      declarations.push(
+        lowerEnumDeclaration(statement, variantInfos, methodLinks),
+      );
     }
   }
 
@@ -138,6 +149,32 @@ export function lowerProgramToIr(
     }
   }
 
+  for (const statement of program.body) {
+    if (
+      statement.kind !== "StructDeclaration" &&
+      statement.kind !== "EnumDeclaration"
+    )
+      continue;
+    for (const member of statement.members) {
+      if (member.kind !== "MethodDeclaration") continue;
+      declarations.push(
+        lowerMethod(
+          member,
+          statement.name.name,
+          checkResult,
+          runtime,
+          structFields,
+          variantInfos,
+          methodLinks,
+          globals,
+          globalTypes,
+          lazyGlobals,
+          session,
+        ),
+      );
+    }
+  }
+
   for (const statement of globalStatements) {
     if (
       !statement.initializer ||
@@ -151,6 +188,7 @@ export function lowerProgramToIr(
         runtime,
         structFields,
         variantInfos,
+        methodLinks,
         globals,
         globalTypes,
         lazyGlobals,
@@ -167,6 +205,7 @@ export function lowerProgramToIr(
       runtime,
       structFields,
       variantInfos,
+      methodLinks,
       globals,
       globalTypes,
       lazyGlobals,
@@ -190,6 +229,7 @@ export function lowerProgramToIr(
 function lowerStructDeclaration(
   node: StructDeclaration,
   structFields: Map<string, IrStructField[]>,
+  methodLinks: Map<string, string>,
 ): IrStructDeclaration {
   const fields: IrStructField[] = node.members
     .filter((m): m is StructField => m.kind === "StructField")
@@ -200,6 +240,7 @@ function lowerStructDeclaration(
     }));
   const id: IrTypeDeclId = `struct.${node.name.name}`;
   structFields.set(node.name.name, fields);
+  recordMethodLinks(node.name.name, node.members, methodLinks);
   return {
     kind: "struct_decl",
     id,
@@ -213,9 +254,11 @@ function lowerStructDeclaration(
 function lowerEnumDeclaration(
   node: EnumDeclaration,
   variantInfos: Map<string, VariantInfo>,
+  methodLinks: Map<string, string>,
 ): IrEnumDeclaration {
   const id: IrTypeDeclId = `enum.${node.name.name}`;
   const declId = id;
+  recordMethodLinks(node.name.name, node.members, methodLinks);
   const variants: IrEnumVariant[] = node.members
     .filter((m): m is EnumVariant => m.kind === "EnumVariant")
     .map((variant, tag) => {
@@ -238,6 +281,20 @@ function lowerEnumDeclaration(
     variants,
     span: node.span,
   };
+}
+
+function recordMethodLinks(
+  ownerName: string,
+  members: Array<{ kind: string; name?: { name: string } }>,
+  methodLinks: Map<string, string>,
+) {
+  for (const member of members) {
+    if (member.kind !== "MethodDeclaration" || !member.name) continue;
+    methodLinks.set(
+      methodKey(ownerName, member.name.name),
+      methodLinkName(ownerName, member.name.name),
+    );
+  }
 }
 
 function lowerGlobalDeclaration(
@@ -277,6 +334,7 @@ function lowerGlobalInitializerFunction(
   runtime: IrRuntimeRequirements,
   structFields: Map<string, IrStructField[]>,
   variantInfos: Map<string, VariantInfo>,
+  methodLinks: Map<string, string>,
   globals: Map<string, IrGlobalId>,
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
@@ -300,6 +358,7 @@ function lowerGlobalInitializerFunction(
     nextTemp: 0,
     structFields,
     variantInfos,
+    methodLinks,
     globals,
     globalTypes,
     lazyGlobals,
@@ -338,12 +397,125 @@ function lowerGlobalInitializerFunction(
   };
 }
 
+function lowerMethod(
+  node: MethodDeclaration,
+  ownerName: string,
+  checkResult: IrTypeSource,
+  runtime: IrRuntimeRequirements,
+  structFields: Map<string, IrStructField[]>,
+  variantInfos: Map<string, VariantInfo>,
+  methodLinks: Map<string, string>,
+  globals: Map<string, IrGlobalId>,
+  globalTypes: Map<IrGlobalId, IrType>,
+  lazyGlobals: Set<IrGlobalId>,
+  session: LowerSession,
+): IrFunction {
+  const ownerType: IrType = { kind: "named", name: ownerName, args: [] };
+  const returnType = node.returnType
+    ? typeFromTypeNodeWithSelf(node.returnType, ownerName)
+    : irPrimitive("void");
+  const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
+  const context: LowerContext = {
+    checkResult,
+    runtime,
+    locals: new Map(),
+    localTypes: new Map(),
+    localDecls: [],
+    blocks: [entryBlock],
+    currentBlock: entryBlock,
+    nextLocal: 0,
+    nextTemp: 0,
+    structFields,
+    variantInfos,
+    methodLinks,
+    globals,
+    globalTypes,
+    lazyGlobals,
+    returnType,
+    selfTypeName: ownerName,
+    session,
+  };
+
+  const params = node.params.map((param) =>
+    lowerMethodParameter(param, ownerType, ownerName, context),
+  );
+
+  lowerBlock(node.body, context);
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = {
+      kind: "return",
+      value: voidOperand(),
+      span: node.body.span,
+    };
+  }
+
+  const linkName = methodLinkName(ownerName, node.name.name);
+  return {
+    kind: "function",
+    id: `fn.${linkName}`,
+    sourceName: `${ownerName}.${node.name.name}`,
+    linkName,
+    signature: {
+      params: params.map((param) => ({
+        type: param.type,
+        mutable: param.mutable,
+      })),
+      returnType,
+    },
+    params,
+    locals: context.localDecls,
+    blocks: context.blocks,
+    body: "defined",
+    span: node.span,
+  };
+}
+
+function lowerMethodParameter(
+  param: Parameter,
+  ownerType: IrType,
+  ownerName: string,
+  context: LowerContext,
+) {
+  if (param.kind === "SelfParameter") {
+    const local = declareLocal(
+      context,
+      "self",
+      ownerType,
+      param.isMutable,
+      param.span,
+    );
+    return {
+      local: local.id,
+      sourceName: "self",
+      type: local.type,
+      mutable: param.isMutable,
+      span: param.span,
+    };
+  }
+
+  const local = declareLocal(
+    context,
+    param.name.name,
+    typeFromTypeNodeWithSelf(param.type, ownerName),
+    param.isMutable,
+    param.span,
+  );
+  return {
+    local: local.id,
+    sourceName: param.name.name,
+    type: local.type,
+    mutable: param.isMutable,
+    span: param.span,
+  };
+}
+
 function lowerFunction(
   node: FunctionDeclaration,
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
   structFields: Map<string, IrStructField[]>,
   variantInfos: Map<string, VariantInfo>,
+  methodLinks: Map<string, string>,
   globals: Map<string, IrGlobalId>,
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
@@ -365,6 +537,7 @@ function lowerFunction(
     nextTemp: 0,
     structFields,
     variantInfos,
+    methodLinks,
     globals,
     globalTypes,
     lazyGlobals,
@@ -523,6 +696,20 @@ function lowerAssignment(
       target: localId,
       field: statement.target.property.name,
       value: lowerExpression(statement.value, context),
+      span: statement.span,
+    });
+    return;
+  }
+  if (statement.target.kind === "IndexExpression") {
+    const arrayOperand = lowerExpression(statement.target.object, context);
+    const indexOperand = lowerExpression(statement.target.index, context);
+    const valueOperand = lowerExpression(statement.value, context);
+    context.currentBlock.instructions.push({
+      kind: "array_set",
+      array: arrayOperand,
+      index: indexOperand,
+      value: valueOperand,
+      elementType: valueOperand.type,
       span: statement.span,
     });
     return;
@@ -686,10 +873,142 @@ function lowerContinue(statement: ContinueStatement, context: LowerContext) {
   };
 }
 
-function lowerForStatement(_statement: ForStatement, _context: LowerContext) {
-  throw new Error(
-    "IR lowering does not support for loops yet (requires array runtime helpers).",
+function lowerForStatement(statement: ForStatement, context: LowerContext) {
+  const arrayOperand = lowerExpression(statement.iterable, context);
+  const arrayType = arrayOperand.type;
+  const elementType: IrType =
+    arrayType.kind === "named" && arrayType.args.length > 0
+      ? arrayType.args[0]
+      : { kind: "unknown" };
+
+  const lenTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "array_len",
+    target: lenTarget,
+    array: arrayOperand,
+    type: irPrimitive("i32"),
+    span: statement.span,
+  });
+
+  const idxLocal = declareLocal(
+    context,
+    "__vek_for_idx",
+    irPrimitive("i32"),
+    true,
+    statement.span,
   );
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: idxLocal.id,
+    value: {
+      kind: "const",
+      value: { kind: "int", value: "0" },
+      type: irPrimitive("i32"),
+    },
+    span: statement.span,
+  });
+
+  const condBlock = newBlock(context);
+  const bodyBlock = newBlock(context);
+  const incBlock = newBlock(context);
+  const exitBlock = newBlock(context);
+
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: condBlock.id,
+    span: statement.span,
+  };
+
+  switchBlock(context, condBlock);
+  const condTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "binary",
+    target: condTarget,
+    operator: "<",
+    left: { kind: "local", id: idxLocal.id, type: irPrimitive("i32") },
+    right: { kind: "temp", id: lenTarget, type: irPrimitive("i32") },
+    type: irPrimitive("bool"),
+    span: statement.span,
+  });
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: { kind: "temp", id: condTarget, type: irPrimitive("bool") },
+    thenTarget: bodyBlock.id,
+    elseTarget: exitBlock.id,
+    span: statement.span,
+  };
+
+  switchBlock(context, bodyBlock);
+  const elemTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "array_get",
+    target: elemTarget,
+    array: arrayOperand,
+    index: { kind: "local", id: idxLocal.id, type: irPrimitive("i32") },
+    elementType,
+    type: elementType,
+    span: statement.span,
+  });
+  const iterLocal = declareLocal(
+    context,
+    statement.iterator.name,
+    elementType,
+    false,
+    statement.span,
+  );
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: iterLocal.id,
+    value: { kind: "temp", id: elemTarget, type: elementType },
+    span: statement.span,
+  });
+
+  const savedExit = context.loopExit;
+  const savedContinue = context.loopContinue;
+  context.loopExit = exitBlock.id;
+  context.loopContinue = incBlock.id;
+
+  const savedLocals = saveLocals(context);
+  lowerBlock(statement.body, context);
+  restoreLocals(context, savedLocals);
+
+  context.loopExit = savedExit;
+  context.loopContinue = savedContinue;
+
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: incBlock.id,
+    };
+  }
+
+  switchBlock(context, incBlock);
+  const incTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "binary",
+    target: incTarget,
+    operator: "+",
+    left: { kind: "local", id: idxLocal.id, type: irPrimitive("i32") },
+    right: {
+      kind: "const",
+      value: { kind: "int", value: "1" },
+      type: irPrimitive("i32"),
+    },
+    type: irPrimitive("i32"),
+    span: statement.span,
+  });
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: idxLocal.id,
+    value: { kind: "temp", id: incTarget, type: irPrimitive("i32") },
+    span: statement.span,
+  });
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: condBlock.id,
+  };
+
+  switchBlock(context, exitBlock);
 }
 
 function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
@@ -917,6 +1236,10 @@ function lowerExpression(
       return lowerTupleMemberExpression(expression, context);
     case "FunctionExpression":
       return lowerFunctionExpression(expression, context);
+    case "ArrayLiteralExpression":
+      return lowerArrayLiteral(expression, context);
+    case "IndexExpression":
+      return lowerIndexExpression(expression, context);
     default:
       throw new Error(`IR lowering does not support ${expression.kind} yet.`);
   }
@@ -948,6 +1271,7 @@ function lowerFunctionExpression(
     nextTemp: 0,
     structFields: outerContext.structFields,
     variantInfos: outerContext.variantInfos,
+    methodLinks: outerContext.methodLinks,
     globals: outerContext.globals,
     globalTypes: outerContext.globalTypes,
     lazyGlobals: outerContext.lazyGlobals,
@@ -1173,6 +1497,9 @@ function lowerCall(
   expression: CallExpression,
   context: LowerContext,
 ): IrOperand {
+  const methodCall = lowerInstanceMethodCall(expression, context);
+  if (methodCall) return methodCall;
+
   const target = nextTemp(context);
   const type = typeFromNode(context.checkResult, expression);
   const callee = lowerExpression(expression.callee, context);
@@ -1230,6 +1557,53 @@ function lowerCall(
     target: returnsVoid ? undefined : target,
     callee,
     args: expression.args.map((arg) => lowerExpression(arg, context)),
+    type,
+    span: expression.span,
+  });
+
+  if (returnsVoid) return voidOperand();
+  return { kind: "temp", id: target, type };
+}
+
+function lowerInstanceMethodCall(
+  expression: CallExpression,
+  context: LowerContext,
+): IrOperand | undefined {
+  if (expression.callee.kind !== "MemberExpression") return undefined;
+  if (
+    expression.callee.object.kind === "IdentifierExpression" &&
+    context.methodLinks.has(
+      methodKey(expression.callee.object.name, expression.callee.property.name),
+    )
+  ) {
+    return undefined;
+  }
+
+  const calleeType = typeFromNode(context.checkResult, expression.callee);
+  if (calleeType.kind !== "function") return undefined;
+
+  const objectType = typeFromNode(
+    context.checkResult,
+    expression.callee.object,
+  );
+  if (objectType.kind !== "named") return undefined;
+
+  const linkName = context.methodLinks.get(
+    methodKey(objectType.name, expression.callee.property.name),
+  );
+  if (!linkName) return undefined;
+
+  const type = typeFromNode(context.checkResult, expression);
+  const returnsVoid = type.kind === "primitive" && type.name === "void";
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "call",
+    target: returnsVoid ? undefined : target,
+    callee: { kind: "function", name: linkName, type: calleeType },
+    args: [
+      lowerExpression(expression.callee.object, context),
+      ...expression.args.map((arg) => lowerExpression(arg, context)),
+    ],
     type,
     span: expression.span,
   });
@@ -1317,6 +1691,48 @@ function isNullLiteral(expression: Expression): boolean {
   );
 }
 
+function lowerArrayLiteral(
+  expression: ArrayLiteralExpression,
+  context: LowerContext,
+): IrOperand {
+  const type = typeFromNode(context.checkResult, expression);
+  const elementType: IrType =
+    type.kind === "named" && type.args.length > 0
+      ? type.args[0]
+      : { kind: "unknown" };
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "array_new",
+    target,
+    elementType,
+    elements: expression.elements.map((el) => lowerExpression(el, context)),
+    type,
+    span: expression.span,
+  });
+  if (!context.runtime.arrays.some((t) => irTypeEquals(t, elementType))) {
+    context.runtime.arrays.push(elementType);
+  }
+  return { kind: "temp", id: target, type };
+}
+
+function lowerIndexExpression(
+  expression: IndexExpression,
+  context: LowerContext,
+): IrOperand {
+  const type = typeFromNode(context.checkResult, expression);
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "array_get",
+    target,
+    array: lowerExpression(expression.object, context),
+    index: lowerExpression(expression.index, context),
+    elementType: type,
+    type,
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type };
+}
+
 function lowerTupleLiteral(
   expression: TupleLiteralExpression,
   context: LowerContext,
@@ -1359,9 +1775,16 @@ function lowerStructLiteral(
   expression: StructLiteralExpression,
   context: LowerContext,
 ): IrOperand {
-  const structName = expression.name.name;
+  const structName =
+    expression.name.name === "Self" && context.selfTypeName
+      ? context.selfTypeName
+      : expression.name.name;
   const declId: IrTypeDeclId = `struct.${structName}`;
-  const type: IrType = { kind: "named", name: structName, args: [] };
+  const type = typeFromNode(context.checkResult, expression);
+  const structType: IrType =
+    type.kind === "named"
+      ? { ...type, name: structName }
+      : { kind: "named", name: structName, args: [] };
   const target = nextTemp(context);
   const fields = expression.fields.map((f) => ({
     name: f.name.name,
@@ -1372,18 +1795,28 @@ function lowerStructLiteral(
     target,
     declId,
     fields,
-    type,
+    type: structType,
     span: expression.span,
   });
-  return { kind: "temp", id: target, type };
+  return { kind: "temp", id: target, type: structType };
 }
 
 function lowerMemberExpression(
   expression: MemberExpression,
   context: LowerContext,
 ): IrOperand {
-  const target = nextTemp(context);
   const type = typeFromNode(context.checkResult, expression);
+  if (
+    expression.object.kind === "IdentifierExpression" &&
+    type.kind === "function"
+  ) {
+    const linkName = context.methodLinks.get(
+      methodKey(expression.object.name, expression.property.name),
+    );
+    if (linkName) return { kind: "function", name: linkName, type };
+  }
+
+  const target = nextTemp(context);
   const object = lowerExpression(expression.object, context);
   context.currentBlock.instructions.push({
     kind: "get_field",
@@ -1570,6 +2003,48 @@ function typeFromTypeNode(node: TypeNode): IrType {
   return { kind: "named", name: "Self", args: [] };
 }
 
+function typeFromTypeNodeWithSelf(
+  node: TypeNode,
+  selfTypeName: string,
+): IrType {
+  const type = typeFromTypeNode(node);
+  return replaceSelfType(type, selfTypeName);
+}
+
+function replaceSelfType(type: IrType, selfTypeName: string): IrType {
+  if (type.kind === "named" && type.name === "Self") {
+    return { ...type, name: selfTypeName };
+  }
+  if (type.kind === "nullable") {
+    return { ...type, base: replaceSelfType(type.base, selfTypeName) };
+  }
+  if (type.kind === "tuple") {
+    return {
+      ...type,
+      elements: type.elements.map((element) =>
+        replaceSelfType(element, selfTypeName),
+      ),
+    };
+  }
+  if (type.kind === "function") {
+    return {
+      ...type,
+      params: type.params.map((param) => ({
+        ...param,
+        type: replaceSelfType(param.type, selfTypeName),
+      })),
+      returnType: replaceSelfType(type.returnType, selfTypeName),
+    };
+  }
+  if (type.kind === "named" && type.args.length > 0) {
+    return {
+      ...type,
+      args: type.args.map((arg) => replaceSelfType(arg, selfTypeName)),
+    };
+  }
+  return type;
+}
+
 function typeFromCheckerType(type: unknown): IrType {
   if (!isRecord(type) || typeof type.kind !== "string")
     return { kind: "unknown" };
@@ -1635,4 +2110,12 @@ function isPrimitiveName(name: string): name is IrPrimitiveType["name"] {
     "void",
     "null",
   ].includes(name);
+}
+
+function methodKey(ownerName: string, methodName: string): string {
+  return `${ownerName}.${methodName}`;
+}
+
+function methodLinkName(ownerName: string, methodName: string): string {
+  return `${ownerName}_${methodName}`;
 }

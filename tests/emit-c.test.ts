@@ -387,4 +387,133 @@ fn main() -> i32 {
     assert.ok(c.includes("v0 = __vek_fn___vek_anon_0;"));
     assert.ok(c.includes("= v0(41);"));
   });
+
+  test("emits type-qualified method references as function pointers", () => {
+    const c = emitOk(`
+struct User {
+  id: i32;
+
+  fn show(self) -> i32 {
+    return self.id;
+  }
+
+  fn new(id: i32) -> Self {
+    return Self { id };
+  }
+}
+
+fn main() -> i32 {
+  let make: fn(i32) -> User = User.new;
+  let show: fn(User) -> i32 = User.show;
+  let user: User = make(42);
+  return show(user);
+}
+`);
+
+    assert.ok(
+      c.includes("static int32_t __vek_fn_User_show(__vek_struct_User v0);"),
+    );
+    assert.ok(
+      c.includes("static __vek_struct_User __vek_fn_User_new(int32_t v0);"),
+    );
+    assert.ok(c.includes("__vek_struct_User (*v0)(int32_t);"));
+    assert.ok(c.includes("int32_t (*v1)(__vek_struct_User);"));
+    assert.ok(c.includes("v0 = __vek_fn_User_new;"));
+    assert.ok(c.includes("v1 = __vek_fn_User_show;"));
+    assert.ok(c.includes("= v0(42);"));
+    assert.ok(c.includes("= v1(v2);"));
+  });
+
+  test("emits direct instance method calls as static function calls", () => {
+    const c = emitOk(`
+struct User {
+  id: i32;
+
+  fn show(self) -> i32 {
+    return self.id;
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  return user.show();
+}
+`);
+
+    assert.ok(
+      c.includes("static int32_t __vek_fn_User_show(__vek_struct_User v0);"),
+    );
+    assert.ok(c.includes("__vek_fn_User_show(v0);"));
+  });
+
+  test("emits Array<T> parameter and local as __vek_array *", () => {
+    const c = emitOk(`
+fn len(xs: i32[]) -> i32 {
+  return xs[0];
+}
+`);
+
+    assert.ok(c.includes("__vek_array *"));
+  });
+
+  test("emits empty array literal as __vek_array_new with NULL data", () => {
+    const c = emitOk(`
+fn get() -> i32[] {
+  let xs: i32[] = [];
+  return xs;
+}
+`);
+
+    assert.ok(c.includes("__vek_array_new(sizeof(int32_t), 0, NULL)"));
+  });
+
+  test("emits array literal with elements as __vek_array_new with compound literal", () => {
+    const c = emitOk(`
+fn get() -> i32[] {
+  return [10, 20, 30];
+}
+`);
+
+    assert.ok(
+      c.includes(
+        "__vek_array_new(sizeof(int32_t), 3, (int32_t[]){10, 20, 30})",
+      ),
+    );
+  });
+
+  test("emits index expression as dereferenced __vek_array_get", () => {
+    const c = emitOk(`
+fn first(xs: i32[]) -> i32 {
+  return xs[0];
+}
+`);
+
+    assert.ok(c.includes("*(int32_t *)__vek_array_get("));
+  });
+
+  test("emits indexed assignment as __vek_array_set", () => {
+    const c = emitOk(`
+fn set_first(mut xs: i32[]) -> void {
+  xs[0] = 42;
+}
+`);
+
+    assert.ok(c.includes("__vek_array_set("));
+    assert.ok(c.includes("&(int32_t){"));
+  });
+
+  test("emits for loop over array using __vek_array_len and __vek_array_get", () => {
+    const c = emitOk(`
+fn sum(xs: i32[]) -> i32 {
+  let total: i32 = 0;
+  for x in xs {
+    total = total + x;
+  }
+  return total;
+}
+`);
+
+    assert.ok(c.includes("__vek_array_len("));
+    assert.ok(c.includes("*(int32_t *)__vek_array_get("));
+  });
 });

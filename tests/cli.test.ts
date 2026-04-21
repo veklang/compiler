@@ -360,4 +360,111 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs type-qualified method references", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct User {
+  id: i32;
+
+  fn show(self) -> i32 {
+    return self.id;
+  }
+
+  fn new(id: i32) -> Self {
+    return Self { id };
+  }
+}
+
+fn main() -> i32 {
+  let make: fn(i32) -> User = User.new;
+  let show: fn(User) -> i32 = User.show;
+  let user: User = make(42);
+  return show(user);
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs array creation, index read, and for loop", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let xs: i32[] = [3, 5, 7];
+  let total: i32 = 0;
+  for x in xs {
+    total = total + x;
+  }
+  return total;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 15);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs direct instance method calls", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct User {
+  id: i32;
+
+  fn show(self) -> i32 {
+    return self.id;
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  return user.show();
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

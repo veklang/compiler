@@ -236,9 +236,16 @@ internal link names such as `__vek_anon_0`.
 Calling through a function value lowers to an ordinary `call` instruction whose
 callee is a local/temp/global/function operand of function type.
 
+Inherent methods lower to ordinary static `IrFunction` declarations with
+owner-qualified link names such as `User_show`.
+
 Type-qualified method references lower to function operands after the method is
-resolved to a concrete static function with the receiver represented as the
-first parameter. This is still pending in the current implementation.
+resolved to a concrete static function. Instance method references include the
+receiver as the first parameter, so `User.show` has a function type shaped like
+`fn(User) -> Ret`.
+
+Direct instance method calls lower to static calls with the receiver as the first
+argument.
 
 Captured closures are not supported in v1 and must never reach IR.
 
