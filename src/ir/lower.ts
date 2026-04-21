@@ -95,6 +95,8 @@ interface LowerContext {
   loopExit?: IrBlockId;
   loopContinue?: IrBlockId;
   loopCleanup?: LocalSnapshot;
+  cleanupBlocks: Map<string, IrBlock>;
+  returnValueLocalId?: IrLocalId;
   structFields: Map<string, IrStructField[]>;
   variantInfos: Map<string, VariantInfo>;
   enumNames: Set<string>;
@@ -380,6 +382,7 @@ function lowerGlobalInitializerFunction(
     globalTypes,
     lazyGlobals,
     returnType: irPrimitive("void"),
+    cleanupBlocks: new Map(),
     session,
   };
 
@@ -464,6 +467,7 @@ function lowerMethod(
     lazyGlobals,
     returnType,
     selfTypeName: ownerName,
+    cleanupBlocks: new Map(),
     session,
   };
 
@@ -578,6 +582,7 @@ function lowerFunction(
     globalTypes,
     lazyGlobals,
     returnType,
+    cleanupBlocks: new Map(),
     session,
   };
 
@@ -723,11 +728,46 @@ function lowerReturn(statement: ReturnStatement, context: LowerContext) {
       )
     : voidOperand();
   retainIfBorrowedHeap(value, context, statement.span);
-  releaseOwnedLocals(context, statement.span);
-  if (value.kind === "temp") context.ownedTemps.delete(value.id);
+
+  if (context.ownedLocals.size === 0) {
+    if (value.kind === "temp") context.ownedTemps.delete(value.id);
+    context.currentBlock.terminator = {
+      kind: "return",
+      value,
+      span: statement.span,
+    };
+    return;
+  }
+
+  if (statement.value) {
+    if (!context.returnValueLocalId) {
+      const local = declareLocal(
+        context,
+        "__return",
+        context.returnType,
+        true,
+        statement.span,
+      );
+      context.returnValueLocalId = local.id;
+    }
+    if (value.kind === "temp") context.ownedTemps.delete(value.id);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: context.returnValueLocalId,
+      value,
+      span: statement.span,
+    });
+  }
+
+  const cleanupBlock = getOrCreateCleanupBlock(
+    context,
+    context.ownedLocals,
+    statement.span,
+  );
+  context.ownedLocals.clear();
   context.currentBlock.terminator = {
-    kind: "return",
-    value,
+    kind: "branch",
+    target: cleanupBlock.id,
     span: statement.span,
   };
 }
@@ -1578,6 +1618,7 @@ function lowerFunctionExpression(
     globalTypes: outerContext.globalTypes,
     lazyGlobals: outerContext.lazyGlobals,
     returnType: functionType.returnType,
+    cleanupBlocks: new Map(),
     session: outerContext.session,
   };
 
@@ -2515,6 +2556,44 @@ function releaseGlobalIfHeap(
     span,
   });
   context.runtime.refCounting = true;
+}
+
+function getOrCreateCleanupBlock(
+  context: LowerContext,
+  ownedLocals: Set<IrLocalId>,
+  span?: IrLocal["span"],
+): IrBlock {
+  const sortedLocals = Array.from(ownedLocals).sort();
+  const key = sortedLocals.join(",");
+  const existing = context.cleanupBlocks.get(key);
+  if (existing) return existing;
+
+  const cleanupBlock = newBlock(context);
+  const savedBlock = context.currentBlock;
+  switchBlock(context, cleanupBlock);
+
+  for (const local of sortedLocals) {
+    releaseLocal(local, context, span);
+  }
+
+  const isVoid =
+    context.returnType.kind === "primitive" &&
+    context.returnType.name === "void";
+  if (isVoid || !context.returnValueLocalId) {
+    cleanupBlock.terminator = { kind: "return", span };
+  } else {
+    const retLocalId = context.returnValueLocalId;
+    const retLocalType = context.localTypes.get(retLocalId)!;
+    cleanupBlock.terminator = {
+      kind: "return",
+      value: { kind: "local", id: retLocalId, type: retLocalType },
+      span,
+    };
+  }
+
+  switchBlock(context, savedBlock);
+  context.cleanupBlocks.set(key, cleanupBlock);
+  return cleanupBlock;
 }
 
 function releaseOwnedLocals(context: LowerContext, span?: IrLocal["span"]) {
