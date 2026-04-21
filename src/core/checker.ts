@@ -2297,7 +2297,8 @@ export class Checker {
       }
     }
 
-    if (!hasWildcard) {
+    const missing = this.coverageMissing(coverage);
+    if (missing.length > 0 || (coverage.kind === "other" && !hasWildcard)) {
       this.report(
         "Match expressions require a catch-all '_' arm.",
         node.span,

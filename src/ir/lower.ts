@@ -41,6 +41,8 @@ import type {
   IfStatement,
   IndexExpression,
   LiteralExpression,
+  MatchExpression,
+  MatchExpressionArm,
   MatchStatement,
   MatchStatementArm,
   MemberExpression,
@@ -95,6 +97,7 @@ interface LowerContext {
   loopCleanup?: LocalSnapshot;
   structFields: Map<string, IrStructField[]>;
   variantInfos: Map<string, VariantInfo>;
+  enumNames: Set<string>;
   methodLinks: Map<string, string>;
   globals: Map<string, IrGlobalId>;
   globalTypes: Map<IrGlobalId, IrType>;
@@ -169,6 +172,7 @@ export function lowerProgramToIr(
         lowerMethod(
           member,
           statement.name.name,
+          statement.kind === "EnumDeclaration" ? "enum" : "struct",
           checkResult,
           runtime,
           structFields,
@@ -270,7 +274,9 @@ function lowerEnumDeclaration(
   const variants: IrEnumVariant[] = node.members
     .filter((m): m is EnumVariant => m.kind === "EnumVariant")
     .map((variant, tag) => {
-      const payloadTypes = (variant.payload ?? []).map(typeFromTypeNode);
+      const payloadTypes = (variant.payload ?? []).map((n) =>
+        typeFromTypeNode(n),
+      );
       const info: VariantInfo = {
         enumName: node.name.name,
         declId,
@@ -368,6 +374,7 @@ function lowerGlobalInitializerFunction(
     nextTemp: 0,
     structFields,
     variantInfos,
+    enumNames: new Set([...variantInfos.values()].map((v) => v.enumName)),
     methodLinks,
     globals,
     globalTypes,
@@ -414,6 +421,7 @@ function lowerGlobalInitializerFunction(
 function lowerMethod(
   node: MethodDeclaration,
   ownerName: string,
+  ownerDecl: "struct" | "enum",
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
   structFields: Map<string, IrStructField[]>,
@@ -424,9 +432,15 @@ function lowerMethod(
   lazyGlobals: Set<IrGlobalId>,
   session: LowerSession,
 ): IrFunction {
-  const ownerType: IrType = { kind: "named", name: ownerName, args: [] };
+  const enumNames = new Set([...variantInfos.values()].map((v) => v.enumName));
+  const ownerType: IrType = {
+    kind: "named",
+    name: ownerName,
+    args: [],
+    ...(ownerDecl === "enum" ? { decl: "enum" as const } : {}),
+  };
   const returnType = node.returnType
-    ? typeFromTypeNodeWithSelf(node.returnType, ownerName)
+    ? typeFromTypeNodeWithSelf(node.returnType, ownerName, enumNames)
     : irPrimitive("void");
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
@@ -443,6 +457,7 @@ function lowerMethod(
     nextTemp: 0,
     structFields,
     variantInfos,
+    enumNames,
     methodLinks,
     globals,
     globalTypes,
@@ -513,7 +528,7 @@ function lowerMethodParameter(
   const local = declareLocal(
     context,
     param.name.name,
-    typeFromTypeNodeWithSelf(param.type, ownerName),
+    typeFromTypeNodeWithSelf(param.type, ownerName, context.enumNames),
     param.isMutable,
     param.span,
   );
@@ -538,8 +553,9 @@ function lowerFunction(
   lazyGlobals: Set<IrGlobalId>,
   session: LowerSession,
 ): IrFunction {
+  const enumNames = new Set([...variantInfos.values()].map((v) => v.enumName));
   const returnType = node.returnType
-    ? typeFromTypeNode(node.returnType)
+    ? typeFromTypeNode(node.returnType, enumNames)
     : irPrimitive("void");
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
@@ -556,6 +572,7 @@ function lowerFunction(
     nextTemp: 0,
     structFields,
     variantInfos,
+    enumNames,
     methodLinks,
     globals,
     globalTypes,
@@ -570,7 +587,7 @@ function lowerFunction(
       const local = declareLocal(
         context,
         param.name.name,
-        typeFromTypeNode(param.type),
+        typeFromTypeNode(param.type, context.enumNames),
         param.isMutable,
         param.span,
       );
@@ -668,7 +685,7 @@ function lowerVariableDeclaration(
   context: LowerContext,
 ) {
   const type = statement.typeAnnotation
-    ? typeFromTypeNode(statement.typeAnnotation)
+    ? typeFromTypeNode(statement.typeAnnotation, context.enumNames)
     : typeFromNode(context.checkResult, statement.initializer);
   const local = declareLocal(
     context,
@@ -1176,6 +1193,210 @@ function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
   switchBlock(context, joinBlock);
 }
 
+function lowerMatchExpression(
+  expression: MatchExpression,
+  context: LowerContext,
+): IrOperand {
+  const matchOperand = lowerExpression(expression.expression, context);
+  const resultType = typeFromNode(context.checkResult, expression);
+  const resultLocalName = `__match_result_${context.nextLocal}`;
+  const resultLocal = declareLocal(
+    context,
+    resultLocalName,
+    resultType,
+    true,
+    expression.span,
+  );
+  const resultOperand: IrOperand = {
+    kind: "local",
+    id: resultLocal.id,
+    type: resultType,
+  };
+
+  const joinBlock = newBlock(context);
+  const armBlocks = expression.arms.map(() => newBlock(context));
+  const defaultBlock = newBlock(context);
+
+  const matchType = matchOperand.type;
+  const isEnum =
+    matchType.kind === "named" &&
+    [...context.variantInfos.values()].some(
+      (v) => v.enumName === (matchType as { name: string }).name,
+    );
+
+  if (isEnum) {
+    const tagTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "get_tag",
+      target: tagTarget,
+      object: matchOperand,
+      type: irPrimitive("i32"),
+    });
+    const tagOperand: IrOperand = {
+      kind: "temp",
+      id: tagTarget,
+      type: irPrimitive("i32"),
+    };
+    const switchCases: { value: IrConst; target: IrBlockId }[] = [];
+    let defaultTarget = defaultBlock.id;
+
+    for (let i = 0; i < expression.arms.length; i++) {
+      const arm = expression.arms[i];
+      const armBlock = armBlocks[i];
+      const pattern = arm.pattern;
+      if (pattern.kind === "WildcardPattern") {
+        defaultTarget = armBlock.id;
+      } else if (pattern.kind === "IdentifierPattern") {
+        const variantInfo = context.variantInfos.get(pattern.name.name);
+        if (variantInfo) {
+          switchCases.push({
+            value: { kind: "int", value: String(variantInfo.tag) },
+            target: armBlock.id,
+          });
+        } else {
+          defaultTarget = armBlock.id;
+        }
+      } else if (pattern.kind === "EnumPattern") {
+        const variantInfo = context.variantInfos.get(pattern.name.name);
+        if (variantInfo) {
+          switchCases.push({
+            value: { kind: "int", value: String(variantInfo.tag) },
+            target: armBlock.id,
+          });
+        }
+      }
+    }
+    context.currentBlock.terminator = {
+      kind: "switch",
+      value: tagOperand,
+      cases: switchCases,
+      defaultTarget,
+      span: expression.span,
+    };
+  } else {
+    let defaultTarget = defaultBlock.id;
+    const switchCases: { value: IrConst; target: IrBlockId }[] = [];
+    for (let i = 0; i < expression.arms.length; i++) {
+      const arm = expression.arms[i];
+      const armBlock = armBlocks[i];
+      const pattern = arm.pattern;
+      if (
+        pattern.kind === "WildcardPattern" ||
+        pattern.kind === "IdentifierPattern"
+      ) {
+        defaultTarget = armBlock.id;
+      } else if (pattern.kind === "LiteralPattern") {
+        switchCases.push({
+          value: constFromLiteral(pattern.literal),
+          target: armBlock.id,
+        });
+      }
+    }
+    context.currentBlock.terminator = {
+      kind: "switch",
+      value: matchOperand,
+      cases: switchCases,
+      defaultTarget,
+      span: expression.span,
+    };
+  }
+
+  for (let i = 0; i < expression.arms.length; i++) {
+    const arm = expression.arms[i];
+    const armBlock = armBlocks[i];
+    switchBlock(context, armBlock);
+    lowerMatchExpressionArmBindings(arm, matchOperand, context);
+    const armValue = lowerExpression(arm.expression, context);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal.id,
+      value: armValue,
+      span: arm.span,
+    });
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: joinBlock.id,
+    };
+  }
+
+  switchBlock(context, defaultBlock);
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = { kind: "branch", target: joinBlock.id };
+  }
+
+  switchBlock(context, joinBlock);
+  return resultOperand;
+}
+
+function lowerMatchExpressionArmBindings(
+  arm: MatchExpressionArm,
+  matchOperand: IrOperand,
+  context: LowerContext,
+) {
+  const pattern = arm.pattern;
+  if (
+    pattern.kind === "IdentifierPattern" &&
+    !context.variantInfos.has(pattern.name.name)
+  ) {
+    const local = declareLocal(
+      context,
+      pattern.name.name,
+      matchOperand.type,
+      true,
+      pattern.span,
+    );
+    retainIfBorrowedHeap(matchOperand, context, pattern.span);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: local.id,
+      value: matchOperand,
+      span: pattern.span,
+    });
+    markLocalOwns(local.id, matchOperand, context);
+  } else if (pattern.kind === "EnumPattern") {
+    const variantInfo = context.variantInfos.get(pattern.name.name);
+    if (variantInfo) {
+      for (let i = 0; i < pattern.args.length; i++) {
+        const arg = pattern.args[i];
+        if (arg.kind !== "IdentifierPattern") continue;
+        const payloadType = variantInfo.payloadTypes[i] ?? {
+          kind: "unknown" as const,
+        };
+        const tempId = nextTemp(context);
+        context.currentBlock.instructions.push({
+          kind: "get_enum_payload",
+          target: tempId,
+          object: matchOperand,
+          variant: variantInfo.variantName,
+          index: i,
+          type: payloadType,
+          span: arg.span,
+        });
+        const local = declareLocal(
+          context,
+          arg.name.name,
+          payloadType,
+          true,
+          arg.span,
+        );
+        const value: IrOperand = {
+          kind: "temp",
+          id: tempId,
+          type: payloadType,
+        };
+        retainIfBorrowedHeap(value, context, arg.span);
+        context.currentBlock.instructions.push({
+          kind: "assign",
+          target: local.id,
+          value,
+          span: arg.span,
+        });
+        markLocalOwns(local.id, value, context);
+      }
+    }
+  }
+}
+
 function lowerNonEnumMatch(
   statement: MatchStatement,
   matchOperand: IrOperand,
@@ -1314,8 +1535,12 @@ function lowerExpression(
       return lowerArrayLiteral(expression, context);
     case "IndexExpression":
       return lowerIndexExpression(expression, context);
+    case "MatchExpression":
+      return lowerMatchExpression(expression, context);
     default:
-      throw new Error(`IR lowering does not support ${expression.kind} yet.`);
+      throw new Error(
+        `IR lowering does not support ${(expression as { kind: string }).kind} yet.`,
+      );
   }
 }
 
@@ -1347,6 +1572,7 @@ function lowerFunctionExpression(
     nextTemp: 0,
     structFields: outerContext.structFields,
     variantInfos: outerContext.variantInfos,
+    enumNames: outerContext.enumNames,
     methodLinks: outerContext.methodLinks,
     globals: outerContext.globals,
     globalTypes: outerContext.globalTypes,
@@ -2403,37 +2629,41 @@ function typeFromNode(
   return typeFromCheckerType(checkResult.types.get(node) as unknown);
 }
 
-function typeFromTypeNode(node: TypeNode): IrType {
+function typeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
   if (node.kind === "NamedType") {
     const name = node.name.name;
     if (isPrimitiveName(name)) return irPrimitive(name);
     return {
       kind: "named",
       name,
-      args: (node.typeArgs ?? []).map(typeFromTypeNode),
+      args: (node.typeArgs ?? []).map((n) => typeFromTypeNode(n, enumNames)),
+      ...(enumNames?.has(name) ? { decl: "enum" as const } : {}),
     };
   }
   if (node.kind === "ArrayType") {
     return {
       kind: "named",
       name: "Array",
-      args: [typeFromTypeNode(node.element)],
+      args: [typeFromTypeNode(node.element, enumNames)],
     };
   }
   if (node.kind === "NullableType") {
-    return { kind: "nullable", base: typeFromTypeNode(node.base) };
+    return { kind: "nullable", base: typeFromTypeNode(node.base, enumNames) };
   }
   if (node.kind === "TupleType") {
-    return { kind: "tuple", elements: node.elements.map(typeFromTypeNode) };
+    return {
+      kind: "tuple",
+      elements: node.elements.map((e) => typeFromTypeNode(e, enumNames)),
+    };
   }
   if (node.kind === "FunctionType") {
     return {
       kind: "function",
       params: node.params.map((param) => ({
-        type: typeFromTypeNode(param.type),
+        type: typeFromTypeNode(param.type, enumNames),
         mutable: param.isMutable,
       })),
-      returnType: typeFromTypeNode(node.returnType),
+      returnType: typeFromTypeNode(node.returnType, enumNames),
     };
   }
   return { kind: "named", name: "Self", args: [] };
@@ -2442,8 +2672,9 @@ function typeFromTypeNode(node: TypeNode): IrType {
 function typeFromTypeNodeWithSelf(
   node: TypeNode,
   selfTypeName: string,
+  enumNames?: Set<string>,
 ): IrType {
-  const type = typeFromTypeNode(node);
+  const type = typeFromTypeNode(node, enumNames);
   return replaceSelfType(type, selfTypeName);
 }
 
@@ -2492,12 +2723,17 @@ function typeFromCheckerType(type: unknown): IrType {
   }
 
   if (type.kind === "Named" && typeof type.name === "string") {
+    const isEnum =
+      isRecord(type.symbol) &&
+      "enumDecl" in type.symbol &&
+      !!type.symbol.enumDecl;
     return {
       kind: "named",
       name: type.name,
       args: Array.isArray(type.typeArgs)
         ? type.typeArgs.map(typeFromCheckerType)
         : [],
+      ...(isEnum ? { decl: "enum" as const } : {}),
     };
   }
 

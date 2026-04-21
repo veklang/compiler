@@ -167,12 +167,7 @@ function defaultOutputPath(sourcePath: string): string {
 }
 
 function formatDiagnostics(diagnostics: Diagnostic[]): string {
-  return diagnostics
-    .map((diagnostic) => {
-      const code = diagnostic.code ? ` (${diagnostic.code})` : "";
-      return `${diagnostic.severity}: ${diagnostic.message}${code}`;
-    })
-    .join("\n");
+  return diagnostics.map((diagnostic) => JSON.stringify(diagnostic)).join("\n");
 }
 
 function shellQuote(value: string): string {

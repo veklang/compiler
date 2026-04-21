@@ -959,7 +959,7 @@ export class Parser {
           name: fieldName,
           value,
         });
-      } while (this.matchPunctuator(","));
+      } while (this.matchPunctuator(",") && !this.checkPunctuator("}"));
     }
     const end = this.expectPunctuator("}");
     return {
