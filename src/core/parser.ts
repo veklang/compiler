@@ -972,19 +972,13 @@ export class Parser {
 
   private parsePattern(): Pattern {
     if (this.matchPunctuator("(")) {
+      const start = this.previousSpan();
       const elements: Pattern[] = [];
-      if (!this.checkPunctuator(")")) {
-        do {
-          elements.push(this.parsePattern());
-        } while (this.matchPunctuator(","));
-      }
-      const end = this.expectPunctuator(")");
+      elements.push(...this.parsePatternList(")"));
+      const end = this.expectPatternListClose(")");
       return {
         kind: "TuplePattern",
-        span: this.spanFrom(
-          this.previousSpan(),
-          end?.span ?? this.currentSpan(),
-        ),
+        span: this.spanFrom(start, end?.span ?? this.currentSpan()),
         elements,
       };
     }
@@ -1003,12 +997,8 @@ export class Parser {
       const name = this.identifierFromToken(token);
       if (this.matchPunctuator("(")) {
         const args: Pattern[] = [];
-        if (!this.checkPunctuator(")")) {
-          do {
-            args.push(this.parsePattern());
-          } while (this.matchPunctuator(","));
-        }
-        const end = this.expectPunctuator(")");
+        args.push(...this.parsePatternList(")"));
+        const end = this.expectPatternListClose(")");
         return {
           kind: "EnumPattern",
           span: this.spanFrom(name.span, end?.span ?? name.span),
@@ -1051,6 +1041,40 @@ export class Parser {
 
     this.report("Invalid match pattern.", token.span, "E1030");
     return this.placeholderPattern(token.span);
+  }
+
+  private parsePatternList(close: string): Pattern[] {
+    const patterns: Pattern[] = [];
+    while (!this.isAtEnd() && !this.checkPunctuator(close)) {
+      if (this.checkPunctuator(",")) {
+        this.report("Invalid match pattern.", this.currentSpan(), "E1030");
+        this.advance();
+        continue;
+      }
+
+      patterns.push(this.parsePattern());
+      if (!this.matchPunctuator(",")) break;
+      if (this.checkPunctuator(close)) break;
+    }
+    return patterns;
+  }
+
+  private expectPatternListClose(close: string): Token | null {
+    const closeToken = this.matchPunctuator(close);
+    if (closeToken) return closeToken;
+
+    this.report(`Expected '${close}'.`, this.currentSpan(), "E1005");
+    while (
+      !this.isAtEnd() &&
+      !this.checkPunctuator(close) &&
+      !this.checkPunctuator(",") &&
+      !this.checkPunctuator("{") &&
+      !this.checkPunctuator("}") &&
+      !this.checkOperator("=>")
+    ) {
+      this.advance();
+    }
+    return this.matchPunctuator(close);
   }
 
   private parseParameterList(): Parameter[] {

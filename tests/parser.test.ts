@@ -317,4 +317,20 @@ fn push_one(xs: mut i32[]) -> void {
     const result = parse(`let x: trait = 1;`);
     expectDiagnostics(result.parseDiagnostics, ["E1051"]);
   });
+
+  test("E1030: malformed nested tuple pattern is rejected", () => {
+    const result = parse(`
+fn main() -> void {
+  match (1, (2, 3)) {
+    (a, (, b)) => {
+      return;
+    },
+    _ => {
+      return;
+    },
+  }
+}
+`);
+    expectDiagnostics(result.parseDiagnostics, ["E1030"]);
+  });
 });
