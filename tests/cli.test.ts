@@ -568,4 +568,33 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs CoW array alias mutation", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let a: i32[] = [1, 2];
+  let b: i32[] = a;
+  a[0] = 9;
+  return b[0] * 10 + a[0];
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 19);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

@@ -732,7 +732,11 @@ function lowerAssignment(
     return;
   }
   if (statement.target.kind === "IndexExpression") {
-    const arrayOperand = lowerExpression(statement.target.object, context);
+    const arrayOperand = detachArrayForIndexedMutation(
+      statement.target.object,
+      context,
+      statement.span,
+    );
     const indexOperand = lowerExpression(statement.target.index, context);
     const valueOperand = lowerExpression(statement.value, context);
     context.currentBlock.instructions.push({
@@ -2042,6 +2046,86 @@ function isDirectHeapType(type: IrType): boolean {
     (type.kind === "primitive" && type.name === "string") ||
     (type.kind === "named" && type.name === "Array")
   );
+}
+
+function isArrayType(type: IrType): boolean {
+  return type.kind === "named" && type.name === "Array";
+}
+
+function detachArrayForIndexedMutation(
+  object: Expression,
+  context: LowerContext,
+  span?: IrLocal["span"],
+): IrOperand {
+  if (object.kind !== "IdentifierExpression") {
+    return lowerExpression(object, context);
+  }
+
+  const localId = context.locals.get(object.name);
+  if (localId) {
+    const type = context.localTypes.get(localId);
+    if (!type || !isArrayType(type)) return lowerExpression(object, context);
+
+    const localOperand: IrOperand = { kind: "local", id: localId, type };
+    if (!context.ownedLocals.has(localId)) {
+      context.currentBlock.instructions.push({
+        kind: "retain",
+        value: localOperand,
+        span,
+      });
+      context.runtime.refCounting = true;
+    }
+
+    const target = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "detach",
+      target,
+      value: localOperand,
+      type,
+      span,
+    });
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: localId,
+      value: { kind: "temp", id: target, type },
+      span,
+    });
+    markLocalOwns(localId, { kind: "temp", id: target, type }, context);
+    context.runtime.copyOnWrite = true;
+    return localOperand;
+  }
+
+  const globalId = context.globals.get(object.name);
+  if (globalId) {
+    const type = context.globalTypes.get(globalId);
+    if (!type || !isArrayType(type)) return lowerExpression(object, context);
+    if (context.lazyGlobals.has(globalId)) {
+      context.currentBlock.instructions.push({
+        kind: "ensure_global_initialized",
+        globalId,
+        span,
+      });
+    }
+    const globalOperand: IrOperand = { kind: "global", id: globalId, type };
+    const target = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "detach",
+      target,
+      value: globalOperand,
+      type,
+      span,
+    });
+    context.currentBlock.instructions.push({
+      kind: "store_global",
+      globalId,
+      value: { kind: "temp", id: target, type },
+      span,
+    });
+    context.runtime.copyOnWrite = true;
+    return globalOperand;
+  }
+
+  return lowerExpression(object, context);
 }
 
 function retainIfBorrowedHeap(

@@ -638,7 +638,9 @@ fn set_first(mut xs: i32[]) -> void {
 `);
 
     const dump = dumpIr(ir);
+    assert.ok(dump.includes("detach local.0"));
     assert.ok(dump.includes("array_set"));
+    assert.equal(ir.runtime.copyOnWrite, true);
   });
 
   test("lowers for loop over array to while-style CFG", () => {

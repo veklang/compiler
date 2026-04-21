@@ -360,6 +360,17 @@ function emitInstruction(
     return `${requireLocal(context, instruction.target)}.${instruction.field} = ${emitOperand(instruction.value, context)};`;
   }
 
+  if (instruction.kind === "detach") {
+    const target = declareTemp(context, instruction.target);
+    if (
+      instruction.type.kind === "named" &&
+      instruction.type.name === "Array"
+    ) {
+      return `${emitDeclaration(instruction.type, target)} = __vek_array_detach(${emitOperand(instruction.value, context)});`;
+    }
+    return `${emitDeclaration(instruction.type, target)} = ${emitOperand(instruction.value, context)};`;
+  }
+
   if (instruction.kind === "array_new") {
     const target = declareTemp(context, instruction.target);
     const elemCType = emitType(instruction.elementType);

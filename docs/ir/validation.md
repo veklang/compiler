@@ -141,7 +141,7 @@ Recommended order after the initial slice:
 8. Runtime strings beyond panic literals. ✅
 9. Arrays and array indexing. ✅
 10. `for` loops (requires array runtime helpers). ✅
-11. Copy-on-write detach for array mutation.
+11. Copy-on-write detach for array mutation. ✅ for direct array element mutation.
 12. Retain/release for strings and arrays. ✅ for direct heap values.
 13. Aggregate retain/release helpers.
 14. Top-level lazy initializers. ✅

@@ -270,6 +270,11 @@ function validateInstruction(
     temps.add(instruction.target);
   }
 
+  if (instruction.kind === "detach") {
+    validate(instruction.value);
+    return;
+  }
+
   if (instruction.kind === "binary") {
     validate(instruction.left);
     validate(instruction.right);

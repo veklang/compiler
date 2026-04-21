@@ -497,6 +497,7 @@ fn set_first(mut xs: i32[]) -> void {
 }
 `);
 
+    assert.ok(c.includes("__vek_array_detach("));
     assert.ok(c.includes("__vek_array_set("));
     assert.ok(c.includes("&(int32_t){"));
   });

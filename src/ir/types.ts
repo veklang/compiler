@@ -234,6 +234,7 @@ export type IrInstruction =
   | IrAssignInstruction
   | IrRetainInstruction
   | IrReleaseInstruction
+  | IrDetachInstruction
   | IrBinaryInstruction
   | IrUnaryInstruction
   | IrCallInstruction
@@ -277,6 +278,14 @@ export interface IrRetainInstruction {
 export interface IrReleaseInstruction {
   kind: "release";
   value: IrOperand;
+  span?: Span;
+}
+
+export interface IrDetachInstruction {
+  kind: "detach";
+  target: IrTempId;
+  value: IrOperand;
+  type: IrType;
   span?: Span;
 }
 

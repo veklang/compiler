@@ -7,6 +7,7 @@ type IrInstruction =
   | IrAssignInstruction
   | IrRetainInstruction
   | IrReleaseInstruction
+  | IrDetachInstruction
   | IrUnary
   | IrBinary
   | IrCast
@@ -404,6 +405,13 @@ interface IrRetainInstruction {
 interface IrReleaseInstruction {
   kind: "release";
   value: IrOperand;
+}
+
+interface IrDetachInstruction {
+  kind: "detach";
+  target: IrTempId;
+  value: IrOperand;
+  type: IrType;
 }
 ```
 
