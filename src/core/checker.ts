@@ -216,6 +216,7 @@ export interface CheckResult {
   diagnostics: Diagnostic[];
   types: WeakMap<Node, Type>;
   instantiations: GenericInstantiation[];
+  callInstantiations: WeakMap<CallExpression, GenericInstantiation>;
 }
 
 const primitiveNames: PrimitiveName[] = [
@@ -243,6 +244,10 @@ export class Checker {
   private diagnostics: Diagnostic[] = [];
   private diagnosticSet = new Set<string>();
   private types = new WeakMap<Node, Type>();
+  private callInstantiations = new WeakMap<
+    CallExpression,
+    GenericInstantiation
+  >();
   private globalScope: Scope;
   private currentFunctionReturnType: Type | null = null;
   private currentFunctionDepth = 0;
@@ -270,6 +275,7 @@ export class Checker {
       diagnostics: this.diagnostics,
       types: this.types,
       instantiations: this.instantiations,
+      callInstantiations: this.callInstantiations,
     };
   }
 
@@ -1701,12 +1707,14 @@ export class Checker {
         isMethod && callable.target.receiver?.type.kind === "Named"
           ? callable.target.receiver.type.name
           : undefined;
-      this.instantiations.push({
+      const instantiation: GenericInstantiation = {
         kind: isMethod ? "Method" : "Function",
         name: callable.target.name,
         ownerName,
         typeArgs: resolvedArgs,
-      });
+      };
+      this.instantiations.push(instantiation);
+      this.callInstantiations.set(node, instantiation);
     }
 
     return {

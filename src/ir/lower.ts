@@ -21,6 +21,7 @@ import type {
   IrTypeDeclId,
 } from "@/ir/types";
 import { irPrimitive } from "@/ir/types";
+import { mangleName } from "@/passes/mono";
 import type {
   ArrayLiteralExpression,
   AssignmentStatement,
@@ -59,6 +60,7 @@ import type {
   TupleLiteralExpression,
   TupleMemberExpression,
   TypeNode,
+  TypeParameter,
   UnaryExpression,
   VariableDeclaration,
   WhileStatement,
@@ -70,6 +72,15 @@ interface LowerOptions {
 
 interface IrTypeSource {
   types: WeakMap<Node, unknown>;
+  instantiations?: GenericInstantiationInfo[];
+  callInstantiations?: WeakMap<CallExpression, GenericInstantiationInfo>;
+}
+
+interface GenericInstantiationInfo {
+  kind: "Function" | "Method" | "Struct";
+  name: string;
+  ownerName?: string;
+  typeArgs: string[];
 }
 
 interface VariantInfo {
@@ -105,6 +116,7 @@ interface LowerContext {
   globalTypes: Map<IrGlobalId, IrType>;
   lazyGlobals: Set<IrGlobalId>;
   returnType: IrType;
+  typeSubstitutions?: Map<string, IrType>;
   selfTypeName?: string;
   session: LowerSession;
 }
@@ -133,6 +145,7 @@ export function lowerProgramToIr(
     generatedFunctions: [],
     nextAnonymousFunction: 0,
   };
+  const functionsByName = new Map<string, FunctionDeclaration>();
   let entry: string | undefined;
 
   for (const statement of program.body) {
@@ -213,6 +226,8 @@ export function lowerProgramToIr(
 
   for (const statement of program.body) {
     if (statement.kind !== "FunctionDeclaration") continue;
+    functionsByName.set(statement.name.name, statement);
+    if ((statement.typeParams?.length ?? 0) > 0) continue;
     const lowered = lowerFunction(
       statement,
       checkResult,
@@ -227,6 +242,38 @@ export function lowerProgramToIr(
     );
     declarations.push(lowered);
     if (statement.name.name === "main") entry = lowered.id;
+  }
+
+  const loweredSpecializations = new Set<string>();
+  for (const instantiation of checkResult.instantiations ?? []) {
+    if (instantiation.kind !== "Function") continue;
+    const declaration = functionsByName.get(instantiation.name);
+    if (!declaration || (declaration.typeParams?.length ?? 0) === 0) continue;
+    const linkName = mangleName(instantiation.name, instantiation.typeArgs);
+    if (loweredSpecializations.has(linkName)) continue;
+    loweredSpecializations.add(linkName);
+    declarations.push(
+      lowerFunction(
+        declaration,
+        checkResult,
+        runtime,
+        structFields,
+        variantInfos,
+        methodLinks,
+        globals,
+        globalTypes,
+        lazyGlobals,
+        session,
+        {
+          linkName,
+          typeSubstitutions: typeSubstitutionsFromParams(
+            declaration.typeParams,
+            instantiation.typeArgs,
+            new Set([...variantInfos.values()].map((v) => v.enumName)),
+          ),
+        },
+      ),
+    );
   }
 
   declarations.push(...session.generatedFunctions);
@@ -556,11 +603,22 @@ function lowerFunction(
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
   session: LowerSession,
+  specialization?: {
+    linkName: string;
+    typeSubstitutions: Map<string, IrType>;
+  },
 ): IrFunction {
   const enumNames = new Set([...variantInfos.values()].map((v) => v.enumName));
   const returnType = node.returnType
-    ? typeFromTypeNode(node.returnType, enumNames)
-    : checkedFunctionReturnType(checkResult, node);
+    ? typeFromTypeNodeWithSubstitutions(
+        node.returnType,
+        enumNames,
+        specialization?.typeSubstitutions,
+      )
+    : substituteTypeParams(
+        checkedFunctionReturnType(checkResult, node),
+        specialization?.typeSubstitutions,
+      );
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
     checkResult,
@@ -582,6 +640,7 @@ function lowerFunction(
     globalTypes,
     lazyGlobals,
     returnType,
+    typeSubstitutions: specialization?.typeSubstitutions,
     cleanupBlocks: new Map(),
     session,
   };
@@ -592,7 +651,7 @@ function lowerFunction(
       const local = declareLocal(
         context,
         param.name.name,
-        typeFromTypeNode(param.type, context.enumNames),
+        typeFromTypeNodeInContext(param.type, context),
         param.isMutable,
         param.span,
       );
@@ -617,9 +676,9 @@ function lowerFunction(
 
   return {
     kind: "function",
-    id: `fn.${node.name.name}`,
+    id: `fn.${specialization?.linkName ?? node.name.name}`,
     sourceName: node.name.name,
-    linkName: node.name.name,
+    linkName: specialization?.linkName ?? node.name.name,
     signature: {
       params: params.map((param) => ({
         type: param.type,
@@ -690,8 +749,8 @@ function lowerVariableDeclaration(
   context: LowerContext,
 ) {
   const type = statement.typeAnnotation
-    ? typeFromTypeNode(statement.typeAnnotation, context.enumNames)
-    : typeFromNode(context.checkResult, statement.initializer);
+    ? typeFromTypeNodeInContext(statement.typeAnnotation, context)
+    : typeFromNodeInContext(context, statement.initializer);
   const local = declareLocal(
     context,
     statement.name.name,
@@ -817,7 +876,7 @@ function lowerAssignment(
     const value = coerceOperand(
       lowerExpression(statement.value, context),
       context.globalTypes.get(globalId) ??
-        typeFromNode(context.checkResult, statement.value),
+        typeFromNodeInContext(context, statement.value),
       context,
       statement.span,
     );
@@ -843,7 +902,7 @@ function lowerAssignment(
   const value = coerceOperand(
     lowerExpression(statement.value, context),
     context.localTypes.get(target) ??
-      typeFromNode(context.checkResult, statement.value),
+      typeFromNodeInContext(context, statement.value),
     context,
     statement.span,
   );
@@ -1238,7 +1297,7 @@ function lowerMatchExpression(
   context: LowerContext,
 ): IrOperand {
   const matchOperand = lowerExpression(expression.expression, context);
-  const resultType = typeFromNode(context.checkResult, expression);
+  const resultType = typeFromNodeInContext(context, expression);
   const resultLocalName = `__match_result_${context.nextLocal}`;
   const resultLocal = declareLocal(
     context,
@@ -1588,7 +1647,7 @@ function lowerFunctionExpression(
   expression: FunctionExpression,
   outerContext: LowerContext,
 ): IrOperand {
-  const functionType = typeFromNode(outerContext.checkResult, expression);
+  const functionType = typeFromNodeInContext(outerContext, expression);
   if (functionType.kind !== "function") {
     throw new Error(
       "IR lowering: function expression did not have function type.",
@@ -1693,9 +1752,9 @@ function lowerIdentifier(
         id: local,
         type:
           context.localTypes.get(local) ??
-          typeFromNode(context.checkResult, expression),
+          typeFromNodeInContext(context, expression),
       },
-      typeFromNode(context.checkResult, expression),
+      typeFromNodeInContext(context, expression),
       context,
       expression.span,
     );
@@ -1715,9 +1774,9 @@ function lowerIdentifier(
         id: globalId,
         type:
           context.globalTypes.get(globalId) ??
-          typeFromNode(context.checkResult, expression),
+          typeFromNodeInContext(context, expression),
       },
-      typeFromNode(context.checkResult, expression),
+      typeFromNodeInContext(context, expression),
       context,
       expression.span,
     );
@@ -1747,7 +1806,7 @@ function lowerIdentifier(
   return {
     kind: "function",
     name: expression.name,
-    type: typeFromNode(context.checkResult, expression),
+    type: typeFromNodeInContext(context, expression),
   };
 }
 
@@ -1765,7 +1824,7 @@ function lowerBinary(
   const nullComparison = lowerNullComparison(expression, context);
   if (nullComparison) return nullComparison;
 
-  const leftType = typeFromNode(context.checkResult, expression.left);
+  const leftType = typeFromNodeInContext(context, expression.left);
   const isString = leftType.kind === "primitive" && leftType.name === "string";
 
   if (isString && expression.operator === "+") {
@@ -1821,7 +1880,7 @@ function lowerBinary(
   }
 
   const target = nextTemp(context);
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   context.currentBlock.instructions.push({
     kind: "binary",
     target,
@@ -1881,7 +1940,7 @@ function lowerUnary(
   context: LowerContext,
 ): IrOperand {
   const target = nextTemp(context);
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   context.currentBlock.instructions.push({
     kind: "unary",
     target,
@@ -1901,8 +1960,15 @@ function lowerCall(
   if (methodCall) return methodCall;
 
   const target = nextTemp(context);
-  const type = typeFromNode(context.checkResult, expression);
-  const callee = lowerExpression(expression.callee, context);
+  const type = typeFromNodeInContext(context, expression);
+  let callee = lowerExpression(expression.callee, context);
+  const instantiation = context.checkResult.callInstantiations?.get(expression);
+  if (callee.kind === "function" && instantiation?.kind === "Function") {
+    callee = {
+      ...callee,
+      name: mangleName(instantiation.name, instantiation.typeArgs),
+    };
+  }
   const returnsVoid = type.kind === "primitive" && type.name === "void";
 
   if (callee.kind === "function") {
@@ -1986,13 +2052,10 @@ function lowerInstanceMethodCall(
     return undefined;
   }
 
-  const calleeType = typeFromNode(context.checkResult, expression.callee);
+  const calleeType = typeFromNodeInContext(context, expression.callee);
   if (calleeType.kind !== "function") return undefined;
 
-  const objectType = typeFromNode(
-    context.checkResult,
-    expression.callee.object,
-  );
+  const objectType = typeFromNodeInContext(context, expression.callee.object);
   if (objectType.kind !== "named") return undefined;
 
   const linkName = context.methodLinks.get(
@@ -2000,7 +2063,7 @@ function lowerInstanceMethodCall(
   );
   if (!linkName) return undefined;
 
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   const returnsVoid = type.kind === "primitive" && type.name === "void";
   const target = nextTemp(context);
   const args = [
@@ -2108,7 +2171,7 @@ function lowerArrayLiteral(
   expression: ArrayLiteralExpression,
   context: LowerContext,
 ): IrOperand {
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   const elementType: IrType =
     type.kind === "named" && type.args.length > 0
       ? type.args[0]
@@ -2137,7 +2200,7 @@ function lowerIndexExpression(
   expression: IndexExpression,
   context: LowerContext,
 ): IrOperand {
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   const target = nextTemp(context);
   const object = lowerExpression(expression.object, context);
   const index = lowerExpression(expression.index, context);
@@ -2175,7 +2238,7 @@ function lowerTupleLiteral(
   expression: TupleLiteralExpression,
   context: LowerContext,
 ): IrOperand {
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   if (type.kind !== "tuple") {
     throw new Error("IR lowering: tuple literal did not have tuple type.");
   }
@@ -2202,7 +2265,7 @@ function lowerTupleMemberExpression(
   context: LowerContext,
 ): IrOperand {
   const target = nextTemp(context);
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   context.currentBlock.instructions.push({
     kind: "get_tuple_field",
     target,
@@ -2223,7 +2286,7 @@ function lowerStructLiteral(
       ? context.selfTypeName
       : expression.name.name;
   const declId: IrTypeDeclId = `struct.${structName}`;
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   const structType: IrType =
     type.kind === "named"
       ? { ...type, name: structName }
@@ -2252,7 +2315,7 @@ function lowerMemberExpression(
   expression: MemberExpression,
   context: LowerContext,
 ): IrOperand {
-  const type = typeFromNode(context.checkResult, expression);
+  const type = typeFromNodeInContext(context, expression);
   if (
     expression.object.kind === "IdentifierExpression" &&
     type.kind === "function"
@@ -2716,6 +2779,26 @@ function checkedFunctionReturnType(
   return type.kind === "function" ? type.returnType : irPrimitive("void");
 }
 
+function typeSubstitutionsFromParams(
+  params: TypeParameter[] | undefined,
+  typeArgs: string[],
+  enumNames: Set<string>,
+): Map<string, IrType> {
+  const substitutions = new Map<string, IrType>();
+  for (let i = 0; i < Math.min(params?.length ?? 0, typeArgs.length); i++) {
+    substitutions.set(
+      params![i].name.name,
+      typeFromDisplay(typeArgs[i], enumNames),
+    );
+  }
+  return substitutions;
+}
+
+function typeFromDisplay(source: string, enumNames: Set<string>): IrType {
+  const parser = new DisplayTypeParser(source, enumNames);
+  return parser.parse();
+}
+
 function typeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
   if (node.kind === "NamedType") {
     const name = node.name.name;
@@ -2754,6 +2837,73 @@ function typeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
     };
   }
   return { kind: "named", name: "Self", args: [] };
+}
+
+function typeFromTypeNodeInContext(
+  node: TypeNode,
+  context: LowerContext,
+): IrType {
+  return typeFromTypeNodeWithSubstitutions(
+    node,
+    context.enumNames,
+    context.typeSubstitutions,
+  );
+}
+
+function typeFromTypeNodeWithSubstitutions(
+  node: TypeNode,
+  enumNames?: Set<string>,
+  substitutions?: Map<string, IrType>,
+): IrType {
+  return substituteTypeParams(typeFromTypeNode(node, enumNames), substitutions);
+}
+
+function typeFromNodeInContext(
+  context: LowerContext,
+  node: Node | undefined,
+): IrType {
+  return substituteTypeParams(
+    typeFromNode(context.checkResult, node as Expression | undefined),
+    context.typeSubstitutions,
+  );
+}
+
+function substituteTypeParams(
+  type: IrType,
+  substitutions?: Map<string, IrType>,
+): IrType {
+  if (!substitutions || substitutions.size === 0) return type;
+  if (type.kind === "named" && type.args.length === 0) {
+    return substitutions.get(type.name) ?? type;
+  }
+  if (type.kind === "nullable") {
+    return { ...type, base: substituteTypeParams(type.base, substitutions) };
+  }
+  if (type.kind === "tuple") {
+    return {
+      ...type,
+      elements: type.elements.map((element) =>
+        substituteTypeParams(element, substitutions),
+      ),
+    };
+  }
+  if (type.kind === "function") {
+    return {
+      ...type,
+      params: type.params.map((param) => ({
+        ...param,
+        type: substituteTypeParams(param.type, substitutions),
+      })),
+      returnType: substituteTypeParams(type.returnType, substitutions),
+    };
+  }
+  if (type.kind === "named" && type.args.length > 0) {
+    return {
+      ...type,
+      args: type.args.map((arg) => substituteTypeParams(arg, substitutions)),
+    };
+  }
+  return type;
 }
 
 function typeFromTypeNodeWithSelf(
@@ -2843,8 +2993,104 @@ function typeFromCheckerType(type: unknown): IrType {
     };
   }
 
+  if (type.kind === "TypeParam" && typeof type.name === "string") {
+    return { kind: "named", name: type.name, args: [] };
+  }
+
   if (type.kind === "Error") return { kind: "error" };
   return { kind: "unknown" };
+}
+
+class DisplayTypeParser {
+  private index = 0;
+
+  constructor(
+    private source: string,
+    private enumNames: Set<string>,
+  ) {}
+
+  parse(): IrType {
+    const type = this.parseType();
+    this.skipWhitespace();
+    return type;
+  }
+
+  private parseType(): IrType {
+    this.skipWhitespace();
+    const type = this.check("(") ? this.parseTuple() : this.parseNamed();
+    this.skipWhitespace();
+    if (this.consume("?")) return { kind: "nullable", base: type };
+    return type;
+  }
+
+  private parseTuple(): IrType {
+    this.expect("(");
+    const elements: IrType[] = [];
+    this.skipWhitespace();
+    if (!this.check(")")) {
+      do {
+        elements.push(this.parseType());
+        this.skipWhitespace();
+      } while (this.consume(",") && !this.check(")"));
+    }
+    this.expect(")");
+    return { kind: "tuple", elements };
+  }
+
+  private parseNamed(): IrType {
+    const name = this.parseIdentifier();
+    if (isPrimitiveName(name)) return irPrimitive(name);
+    const args: IrType[] = [];
+    this.skipWhitespace();
+    if (this.consume("<")) {
+      do {
+        args.push(this.parseType());
+        this.skipWhitespace();
+      } while (this.consume(","));
+      this.expect(">");
+    }
+    if (name === "Array" && args.length === 1) {
+      return { kind: "named", name: "Array", args };
+    }
+    return {
+      kind: "named",
+      name,
+      args,
+      ...(this.enumNames.has(name) ? { decl: "enum" as const } : {}),
+    };
+  }
+
+  private parseIdentifier(): string {
+    this.skipWhitespace();
+    const start = this.index;
+    while (
+      this.index < this.source.length &&
+      /[A-Za-z0-9_]/.test(this.source[this.index])
+    ) {
+      this.index++;
+    }
+    return this.source.slice(start, this.index);
+  }
+
+  private consume(value: string): boolean {
+    this.skipWhitespace();
+    if (!this.check(value)) return false;
+    this.index += value.length;
+    return true;
+  }
+
+  private expect(value: string) {
+    this.skipWhitespace();
+    if (this.check(value)) this.index += value.length;
+  }
+
+  private check(value: string): boolean {
+    return this.source.startsWith(value, this.index);
+  }
+
+  private skipWhitespace() {
+    while (/\s/.test(this.source[this.index] ?? "")) this.index++;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

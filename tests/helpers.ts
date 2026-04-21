@@ -21,10 +21,14 @@ export const parse = (source: string) => {
 
 export const check = (source: string) => {
   const parsed = parse(source);
-  const { diagnostics: checkDiagnostics, types } = new Checker(
-    parsed.program,
-  ).checkProgram();
-  return { ...parsed, checkDiagnostics, types };
+  const checkResult = new Checker(parsed.program).checkProgram();
+  return {
+    ...parsed,
+    checkDiagnostics: checkResult.diagnostics,
+    types: checkResult.types,
+    instantiations: checkResult.instantiations,
+    callInstantiations: checkResult.callInstantiations,
+  };
 };
 
 export const mono = (source: string) => {

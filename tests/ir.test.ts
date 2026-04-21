@@ -63,6 +63,29 @@ fn main() {
     assert.ok(dump.includes("return local.0"));
   });
 
+  test("lowers generic function specialization for struct types", () => {
+    const ir = irOk(`
+struct User {
+  id: i32;
+}
+
+fn id<T>(value: T) -> T {
+  return value;
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let copied: User = id(user);
+  return copied.id;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.id__User id__User(value: User) -> User"));
+    assert.ok(!dump.includes("fn fn.id id(value: T) -> T"));
+    assert.ok(dump.includes("call @id__User"));
+  });
+
   test("records runtime requirements for panic and strings", () => {
     const ir = irOk(`
 fn main() -> void {

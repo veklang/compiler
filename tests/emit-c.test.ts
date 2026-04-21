@@ -67,6 +67,32 @@ fn main() {
     assert.ok(c.includes("  return __vek_fn_main();"));
   });
 
+  test("emits generic function specialization for struct types", () => {
+    const c = emitOk(`
+struct User {
+  id: i32;
+}
+
+fn id<T>(value: T) -> T {
+  return value;
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let copied: User = id(user);
+  return copied.id;
+}
+`);
+
+    assert.ok(
+      c.includes(
+        "static __vek_struct_User __vek_fn_id__User(__vek_struct_User v0);",
+      ),
+    );
+    assert.ok(!c.includes("__vek_struct_T"));
+    assert.ok(c.includes("__vek_fn_id__User(v0);"));
+  });
+
   test("lowers panic to the runtime helper", () => {
     const c = emitOk(`
 fn main() -> void {
