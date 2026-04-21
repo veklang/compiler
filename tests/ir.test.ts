@@ -47,6 +47,22 @@ fn add(a: i32, b: i32) -> i32 {
     assert.ok(dump.includes("return local.2"));
   });
 
+  test("lowers inferred function return types", () => {
+    const ir = irOk(`
+fn main() {
+  let sum = 0;
+  for i in [1, 2, 3] {
+    sum = sum + i;
+  }
+  return sum;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.main main() -> i32"));
+    assert.ok(dump.includes("return local.0"));
+  });
+
   test("records runtime requirements for panic and strings", () => {
     const ir = irOk(`
 fn main() -> void {

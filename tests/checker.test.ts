@@ -108,6 +108,34 @@ fn main() -> void {
 `);
   });
 
+  test("main may infer i32 return type", () => {
+    checkOk(`
+fn main() {
+  return 1;
+}
+`);
+  });
+
+  test("E2302: main must return void or i32 after inference", () => {
+    const result = check(`
+fn main() {
+  return "bad";
+}
+`);
+
+    expectDiagnostics(result.checkDiagnostics, ["E2302"]);
+  });
+
+  test("E2207: main must take no parameters", () => {
+    const result = check(`
+fn main(code: i32) -> i32 {
+  return code;
+}
+`);
+
+    expectDiagnostics(result.checkDiagnostics, ["E2207"]);
+  });
+
   test("generic function inference works", () => {
     checkOk(`
 fn id<T>(value: T) -> T {

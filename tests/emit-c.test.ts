@@ -51,6 +51,22 @@ fn add(a: i32, b: i32) -> i32 {
     assert.ok(c.includes("return v2;"));
   });
 
+  test("emits inferred i32 main return type", () => {
+    const c = emitOk(`
+fn main() {
+  let sum = 0;
+  for i in [1, 2, 3] {
+    sum = sum + i;
+  }
+  return sum;
+}
+`);
+
+    assert.ok(c.includes("static int32_t __vek_fn_main(void);"));
+    assert.ok(c.includes("static int32_t __vek_fn_main(void) {"));
+    assert.ok(c.includes("  return __vek_fn_main();"));
+  });
+
   test("lowers panic to the runtime helper", () => {
     const c = emitOk(`
 fn main() -> void {

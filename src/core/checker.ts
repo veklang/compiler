@@ -265,6 +265,7 @@ export class Checker {
     this.materializeTypes();
     for (const statement of this.program.body)
       this.checkStatement(statement, this.globalScope);
+    this.checkMainFunction();
     return {
       diagnostics: this.diagnostics,
       types: this.types,
@@ -798,6 +799,7 @@ export class Checker {
           : undefined,
       };
     }
+    this.types.set(node, symbol.type);
     this.currentFunctionDepth = previousDepth;
     this.currentFunctionReturnType = previousReturnType;
     this.currentFunctionInferReturn = previousInfer;
@@ -982,11 +984,48 @@ export class Checker {
       resolved.returnType =
         this.currentFunctionInferredReturn ?? this.primitive("void");
     }
+    this.types.set(method, {
+      kind: "Function",
+      typeParams: resolved.typeParams,
+      params: [
+        ...(resolved.receiver
+          ? [
+              {
+                type: resolved.receiver.type,
+                isMutable: resolved.receiver.isMutable,
+              },
+            ]
+          : []),
+        ...resolved.params,
+      ],
+      returnType: resolved.returnType,
+    });
     this.currentFunctionDepth = previousDepth;
     this.currentFunctionReturnType = previousReturnType;
     this.currentFunctionInferReturn = previousInfer;
     this.currentFunctionInferredReturn = previousInferred;
     this.warnUnusedLocals(this.functionLocals.pop()!);
+  }
+
+  private checkMainFunction() {
+    const symbol = this.lookupValue("main", this.globalScope);
+    if (!symbol || symbol.type.kind !== "Function") return;
+
+    if (symbol.type.params.length !== 0) {
+      this.report("main must take no parameters.", symbol.node.span, "E2207");
+    }
+
+    const returnsVoid = this.typeEquals(
+      symbol.type.returnType,
+      this.primitive("void"),
+    );
+    const returnsI32 = this.typeEquals(
+      symbol.type.returnType,
+      this.primitive("i32"),
+    );
+    if (!returnsVoid && !returnsI32) {
+      this.report("main must return void or i32.", symbol.node.span, "E2302");
+    }
   }
 
   private checkBlockStatement(block: BlockStatement, scope: Scope) {

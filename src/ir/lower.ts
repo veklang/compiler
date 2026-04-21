@@ -444,7 +444,7 @@ function lowerMethod(
   };
   const returnType = node.returnType
     ? typeFromTypeNodeWithSelf(node.returnType, ownerName, enumNames)
-    : irPrimitive("void");
+    : checkedFunctionReturnType(checkResult, node);
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
     checkResult,
@@ -560,7 +560,7 @@ function lowerFunction(
   const enumNames = new Set([...variantInfos.values()].map((v) => v.enumName));
   const returnType = node.returnType
     ? typeFromTypeNode(node.returnType, enumNames)
-    : irPrimitive("void");
+    : checkedFunctionReturnType(checkResult, node);
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
     checkResult,
@@ -2706,6 +2706,14 @@ function typeFromNode(
 ): IrType {
   if (!node) return irPrimitive("void");
   return typeFromCheckerType(checkResult.types.get(node) as unknown);
+}
+
+function checkedFunctionReturnType(
+  checkResult: IrTypeSource,
+  node: FunctionDeclaration | MethodDeclaration,
+): IrType {
+  const type = typeFromCheckerType(checkResult.types.get(node) as unknown);
+  return type.kind === "function" ? type.returnType : irPrimitive("void");
 }
 
 function typeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
