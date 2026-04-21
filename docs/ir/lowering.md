@@ -17,6 +17,9 @@ Rules:
 - Methods lower to functions. Instance methods receive `self` as the first
   ordinary parameter.
 - The user-level `main` function lowers to the program entry function.
+- When a function or method omits `-> T`, the lowerer uses the return type
+  inferred and recorded by the checker. `main` must have no parameters and must
+  return either `void` or `i32` after inference.
 
 ## Variables
 
@@ -24,7 +27,7 @@ Local declarations lower to:
 
 - local slot declaration in `IrFunction.locals`
 - initializer expression instructions
-- `store` into the local place
+- `assign` into the local slot
 
 `const` and readonly restrictions are checker-only. IR does not need separate
 readonly places except where runtime ownership depends on parameter passing.
@@ -41,7 +44,7 @@ Examples:
 
 ```text
 x = value
-  -> store local.x, value
+  -> assign local.x, value
 
 user.name = value
   -> set_field user, "name", value
@@ -93,11 +96,9 @@ For array iteration:
 - `break` and `continue` follow the same rules as for while loops. `continue`
   branches to `condition_block`, which re-evaluates the index comparison.
 
-For custom `Iterable<T>`:
-
-- The iterable is evaluated once.
-- Each iteration calls the resolved `next` method and checks for `null`.
-- `break` and `continue` follow the same rules.
+Custom `Iterable<T>` is a checker-level model today. It must not lower to the C
+backend until the IR and runtime have concrete iterator instructions or helper
+calls.
 
 ## Match Statements
 
@@ -114,9 +115,9 @@ General rules:
 
 Enum match:
 
-- `enum_tag` extracts the discriminator.
+- `get_tag` extracts the discriminator.
 - A `switch` terminator dispatches to arm blocks.
-- Payload fields are extracted with `enum_payload` inside arm blocks.
+- Payload fields are extracted with `get_enum_payload` inside arm blocks.
 
 Nullable match:
 
@@ -196,18 +197,19 @@ Invalid casts are checker diagnostics and must not reach emittable IR.
 `panic("literal")` lowers to:
 
 ```text
-call runtime "__vek_panic_cstr"("literal")
+call panic("literal")
 unreachable
 ```
 
 `panic(value)` where `value: string` lowers to:
 
 ```text
-call runtime "__vek_panic"(value)
+call panic(value)
 unreachable
 ```
 
-Both runtime calls are non-returning.
+The C emitter maps these reserved panic calls to the appropriate runtime helper
+and treats them as non-returning.
 
 ## Struct Literals
 

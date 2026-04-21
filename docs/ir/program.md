@@ -14,31 +14,23 @@ interface IrProgram {
 type IrDeclaration =
   | IrFunction
   | IrGlobal
-  | IrTypeDeclaration
-  | IrConstantData;
+  | IrStructDeclaration
+  | IrEnumDeclaration;
 ```
 
 `IrProgram.declarations` contains only IR-level declarations:
 
 - functions
 - globals
-- type declarations needed by C emission
-- constant data
+- struct declarations needed by C emission
+- enum declarations needed by C emission
 
 Declaration order is not semantically significant. The C emitter may reorder
 declarations as needed for prototypes and definitions.
 
-Constant data is static immutable data emitted outside function bodies.
-
-```ts
-interface IrConstantData {
-  kind: "constant_data";
-  id: string;
-  linkName: string;
-  type: IrType;
-  value: IrConst;
-}
-```
+String literals and generated helper declarations are emitted by the C backend
+from instruction and type use; they are not represented as standalone constant
+data declarations in the current IR.
 
 ## Source Files
 
@@ -105,6 +97,7 @@ Every emitted function has both:
 
 ```ts
 interface IrFunction {
+  kind: "function";
   id: IrFunctionId;
   sourceName?: string;
   linkName: string;
@@ -113,7 +106,7 @@ interface IrFunction {
   locals: IrLocal[];
   blocks: IrBlock[];
   body: "defined" | "extern";
-  span?: IrSpan;
+  span?: Span;
 }
 ```
 
@@ -138,7 +131,7 @@ interface IrGlobal {
   mutable: boolean;
   initializer?: IrConst;
   initializerFunction?: IrFunctionId;
-  span?: IrSpan;
+  span?: Span;
 }
 ```
 
@@ -156,11 +149,7 @@ Rules:
 ## Source Spans
 
 ```ts
-interface IrSpan {
-  file: IrSourceFileId;
-  start: { index: number; line: number; column: number };
-  end: { index: number; line: number; column: number };
-}
+type Span = import("@/types/position").Span;
 ```
 
 Spans are optional but should be preserved where practical for:

@@ -1,37 +1,35 @@
-# IR Validation, Debug Dump, and Implementation Order
+# IR Validation, Debug Dump, and Invariants
 
 ## Validation
 
-An IR validation pass must run before C emission.
+The compiler runs IR validation before C emission. Validation failures are
+compiler bugs unless they are raised as explicit unsupported-backend diagnostics.
 
-Validation errors are compiler bugs unless they arise from unsupported backend
-features, in which case the compiler may report an explicit backend diagnostic.
+The current validator covers structural integrity:
 
-Required checks:
-
-- every function has at least one block unless extern
-- every non-extern block has one terminator
+- every defined function has at least one block
+- every non-extern block has a terminator
 - every terminator target block exists in the same function
-- every temp is defined exactly once
-- every temp is defined before use in block order, accounting for predecessor
-  dominance when needed
-- every instruction result type matches the operation
-- every `store` value type matches the place type
-- every `cond_branch` condition is `bool`
-- every `return` matches the function return type
-- every direct call target exists
-- every call argument matches the target signature
-- no generic type parameters appear
-- no parser AST nodes appear
-- runtime calls are listed in `IrRuntimeRequirements`
-- enum payload extraction is dominated by matching tag control flow
-- no invalid assignment forms appear
-- no string mutation appears
-- no tuple mutation appears
+- every function referenced by `entry`, calls, or initializer functions exists
+- every struct declaration id is unique
+- every global declaration id is unique
+- every global reference exists
+- every struct construction references an existing struct declaration
+- every local/temp operand refers to an in-scope local or previously defined
+  temp
+- every temp is defined before use in block order
+- every temp is defined only once within a function
+- all referenced runtime requirements are present on the program
 
-For the first implementation, validation may start with structural checks and
-grow as features are added. Each newly supported instruction must add validation
-coverage.
+Validation should continue to grow with feature support. Checks that are still
+worth adding include:
+
+- instruction result type checks
+- assignment and return type compatibility
+- call argument compatibility
+- dominance-aware temp validation across complex control flow
+- enum payload extraction only on matching-tag paths
+- rejection of `unknown` and `error` types in emittable IR
 
 ## Debug Dump Format
 
@@ -61,7 +59,7 @@ bb.0:
   cond_branch %3, bb.1, bb.2
 
 bb.1:
-  call_runtime __vek_panic_cstr "ok"
+  call panic("ok")
   unreachable
 
 bb.2:
@@ -100,60 +98,30 @@ Dump requirements:
 - explicit terminators including targets
 - branch targets use block ids (`bb.N`)
 
-## Initial Implementation Slice
+## Implemented Feature Coverage
 
-The first IR implementation supports:
+The IR and C backend currently cover:
 
-- `fn main() -> void`
-- `return;`
-- integer constants
-- boolean constants
-- string constants only as panic literals
-- local declarations
-- local loads/stores
-- integer arithmetic and comparisons
-- `if` / `else` (cond_branch)
-- `while` (branch + cond_branch loop)
-- `break` and `continue` (branch to exit/condition block)
-- direct call to `panic("literal")`
+1. Primitive function calls and non-void returns.
+2. Inferred function and method return types from checker-recorded types.
+3. `main` validation after inference: no params, return `void` or `i32`.
+4. `if` / `while` / `break` / `continue`.
+5. Struct declarations, literals, field reads, and local field writes.
+6. Enum declarations, unit variants, payload variants, and match lowering.
+7. Nullable values and null checks.
+8. Runtime strings.
+9. Arrays, indexing, mutation, and array-backed `for` loops.
+10. Copy-on-write detach for direct array element mutation.
+11. Retain/release for direct heap values and owned array elements.
+12. Aggregate retain/release helpers for structs, tuples, nullable values, and
+    enums containing owned values.
+13. Top-level lazy initializers.
+14. Function values for named functions, non-capturing anonymous functions,
+    inherent methods, type-qualified method references, and direct instance
+    method calls.
 
-Required files:
-
-```text
-compiler/src/ir/types.ts
-compiler/src/ir/lower.ts
-compiler/src/ir/validate.ts
-compiler/src/ir/dump.ts
-compiler/src/emit/c.ts
-```
-
-## Feature Expansion Order
-
-Recommended order after the initial slice:
-
-1. Primitive function calls and non-void returns. ✅
-2. `if` / `while` / `break` / `continue` (branch, cond_branch terminators). ✅
-3. Struct declarations, struct literals, field get. ✅
-4. Field set for non-heap-backed structs. ✅
-5. Enum declarations and unit variants. ✅
-6. Enum payload variants and match lowering. ✅
-7. Nullable values and null checks. ✅
-8. Runtime strings beyond panic literals. ✅
-9. Arrays and array indexing. ✅
-10. `for` loops (requires array runtime helpers). ✅
-11. Copy-on-write detach for array mutation. ✅ for direct array element mutation.
-12. Retain/release for strings and arrays. ✅ for direct heap values and owned array elements.
-13. Aggregate retain/release helpers. ✅ for structs, tuples, nullable values, and enums containing owned values.
-14. Top-level lazy initializers. ✅
-15. Function values. ✅ for named functions, non-capturing anonymous functions, inherent methods, type-qualified method references, and direct instance method calls.
-16. Specialized generic functions and methods beyond direct primitive cases.
-
-Each step must include:
-
-- IR lowering tests
-- IR validation coverage
-- C emission tests
-- runtime linkage tests when runtime helpers are involved
+Specialized generic functions and methods beyond direct primitive cases remain
+an active backend area.
 
 ## Non-Negotiable Invariants
 
@@ -161,7 +129,7 @@ Before a program reaches C emission:
 
 - all names are resolved
 - all types are concrete
-- all generics are specialized
+- all generics required by emitted code are specialized
 - all trait calls are statically resolved
 - all high-level control flow is lowered to blocks
 - all source-level mutability rules are already enforced
@@ -170,5 +138,5 @@ Before a program reaches C emission:
 - every block ends in a terminator
 
 If an invariant cannot be satisfied for a construct, that construct is not
-backend-supported yet. The lowerer must throw a clear "not yet supported"
-error rather than silently emitting incorrect IR.
+backend-supported yet. The lowerer must throw a clear unsupported-feature error
+rather than silently emitting incorrect IR.

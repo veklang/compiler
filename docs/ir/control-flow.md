@@ -7,10 +7,8 @@ Functions contain basic blocks.
 ```ts
 interface IrBlock {
   id: IrBlockId;
-  label?: string;
   instructions: IrInstruction[];
-  terminator: IrTerminator;
-  span?: IrSpan;
+  terminator?: IrTerminator;
 }
 ```
 
@@ -42,8 +40,8 @@ type IrTerminator =
 ```ts
 interface IrReturn {
   kind: "return";
-  value?: IrValue;
-  span?: IrSpan;
+  value?: IrOperand;
+  span?: Span;
 }
 ```
 
@@ -59,7 +57,7 @@ Rules:
 interface IrBranch {
   kind: "branch";
   target: IrBlockId;
-  span?: IrSpan;
+  span?: Span;
 }
 ```
 
@@ -71,10 +69,10 @@ must exist in `IrFunction.blocks`.
 ```ts
 interface IrCondBranch {
   kind: "cond_branch";
-  condition: IrValue;
+  condition: IrOperand;
   thenTarget: IrBlockId;
   elseTarget: IrBlockId;
-  span?: IrSpan;
+  span?: Span;
 }
 ```
 
@@ -86,10 +84,10 @@ in `IrFunction.blocks`.
 ```ts
 interface IrSwitch {
   kind: "switch";
-  value: IrValue;
+  value: IrOperand;
   cases: IrSwitchCase[];
   defaultTarget: IrBlockId;
-  span?: IrSpan;
+  span?: Span;
 }
 
 interface IrSwitchCase {
@@ -114,7 +112,7 @@ two or fewer cases. Switch is preferred for three or more cases.
 ```ts
 interface IrUnreachable {
   kind: "unreachable";
-  span?: IrSpan;
+  span?: Span;
 }
 ```
 
@@ -202,10 +200,10 @@ condition_block:
 
 body_block:
   %item = array_get array, %i
-  store %item_local, %item
+  assign %item_local, %item
   ...
   %next = binary add %i, 1
-  store %index_local, %next
+  assign %index_local, %next
   branch condition_block
 
 exit_block:
@@ -220,7 +218,7 @@ Enum match:
 
 ```
 entry_block:
-  %tag = enum_tag %scrutinee
+  %tag = get_tag %scrutinee
   switch %tag, cases: [0 -> arm_A, 1 -> arm_B, ...], default -> wildcard_block
 
 arm_A:

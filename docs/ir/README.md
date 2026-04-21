@@ -10,8 +10,8 @@ language specification. User code must not depend on it.
 
 - [program.md](./program.md) — `IrProgram`, source files, runtime requirements, identifiers, spans
 - [types.md](./types.md) — `IrType` hierarchy
-- [type-decls.md](./type-decls.md) — type declarations (struct, enum, tuple, array)
-- [values.md](./values.md) — `IrValue`, `IrPlace`, `IrLocal`, `IrConst`
+- [type-decls.md](./type-decls.md) — struct and enum declarations
+- [values.md](./values.md) — `IrOperand`, `IrLocal`, `IrParam`, `IrConst`
 - [instructions.md](./instructions.md) — all instruction variants
 - [control-flow.md](./control-flow.md) — `IrBlock`, `IrTerminator`, block structure
 - [lowering.md](./lowering.md) — how AST constructs lower to IR
@@ -83,7 +83,8 @@ It may still contain:
 
 - abstract aggregate operations such as `array_new`
 - abstract runtime operations such as `panic`
-- ownership-neutral value movement
+- ownership-neutral value movement for features that do not yet need explicit
+  retain, release, or detach instructions
 
 It must not contain:
 
@@ -107,6 +108,5 @@ It must satisfy every lowered IR invariant, plus:
 - all temporaries are defined before use
 - no instruction relies on source-level control-flow semantics
 
-Ownership operations may initially be absent for unsupported heap-backed
-features. Once a feature is emitted, its required ownership operations must be
+Once a heap-backed feature is emitted, its required ownership operations must be
 present in emittable IR rather than inferred by the C emitter.

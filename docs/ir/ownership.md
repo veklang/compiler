@@ -20,7 +20,6 @@ Types fall into ownership categories:
 Trivial:
 
 - `void`
-- `never`
 - `bool`
 - integer types
 - float types
@@ -29,7 +28,7 @@ Trivial:
 Heap refs:
 
 - `string`
-- `array<T>`
+- `Array<T>`
 
 Aggregates:
 

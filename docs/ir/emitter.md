@@ -32,7 +32,6 @@ It is not responsible for:
 | IR type | C type |
 | --- | --- |
 | `void` | `void` |
-| `never` | no value (use `__builtin_unreachable()`) |
 | `bool` | `bool` from `stdbool.h` |
 | `i8` | `int8_t` |
 | `i16` | `int16_t` |
@@ -46,13 +45,14 @@ It is not responsible for:
 | `f32` | `float` |
 | `f64` | `double` |
 | `null` | `void *` |
-| `string` | `struct __vek_string *` |
-| `array<T>` | specialized or erased runtime array pointer |
+| `string` | `__vek_string *` |
+| `Array<T>` named type | erased runtime array pointer |
 | `nullable<T>` | representation chosen per emitter (struct with tag, or pointer for pointer-like T) |
 | tuple | generated `struct` |
 | struct | generated `struct` |
 | enum | generated tagged `struct` with discriminator + payload union |
 | function | function pointer |
+| `unknown` / `error` | invalid in emittable IR |
 
 Function pointer declarations use C declarators rather than a plain type string
 so function values can appear consistently in parameters, locals, globals, and
