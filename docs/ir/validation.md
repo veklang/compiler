@@ -138,11 +138,11 @@ Recommended order after the initial slice:
 5. Enum declarations and unit variants. ✅
 6. Enum payload variants and match lowering. ✅
 7. Nullable values and null checks. ✅
-8. Runtime strings beyond panic literals.
-9. Arrays and array indexing.
-10. `for` loops (requires array runtime helpers).
+8. Runtime strings beyond panic literals. ✅
+9. Arrays and array indexing. ✅
+10. `for` loops (requires array runtime helpers). ✅
 11. Copy-on-write detach for array mutation.
-12. Retain/release for strings and arrays.
+12. Retain/release for strings and arrays. ✅ for direct heap values.
 13. Aggregate retain/release helpers.
 14. Top-level lazy initializers. ✅
 15. Function values. ✅ for named functions, non-capturing anonymous functions, inherent methods, type-qualified method references, and direct instance method calls.

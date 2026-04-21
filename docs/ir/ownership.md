@@ -1,9 +1,11 @@
 # IR Ownership Lowering
 
-Ownership lowering is the pass that inserts `retain`, `release`, and `detach`.
+Ownership lowering is the pass that inserts `retain`, `release`, and, once CoW
+mutation is enabled, `detach`.
 
-The pass may be implemented after the first primitive-only C emitter, but once a
-heap-backed feature is emitted, ownership lowering for that feature is required.
+Direct heap retain/release lowering is implemented for `string` and `Array<T>`.
+Recursive ownership for aggregates and copy-on-write detach insertion are still
+separate expansion steps.
 
 ## Ownership Categories
 
@@ -56,6 +58,11 @@ For heap-backed locals:
 - reassignment releases the previous value
 - function exit releases live owned locals
 
+The current implementation tracks direct heap locals and direct heap temps.
+Parameters are treated as borrowed values. A borrowed direct heap value is
+retained before it is stored into an owning local/global or returned as an owned
+result.
+
 ## Branches
 
 Ownership lowering must handle all exits from a block:
@@ -79,7 +86,8 @@ The pass may insert cleanup blocks if needed.
 
 - `retain` increments the runtime reference count for heap-backed values.
 - `release` decrements it and may free.
-- `detach` returns a uniquely owned value suitable for mutation.
+- `detach` returns a uniquely owned value suitable for mutation. This instruction
+  is specified but not yet emitted by the current lowerer.
 - Non-heap-backed values must not receive retain/release/detach.
 - Ownership lowering is responsible for inserting these instructions.
 - The C emitter must not infer missing ownership operations.

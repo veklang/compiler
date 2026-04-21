@@ -12,6 +12,7 @@ It is responsible for:
 - emitting block labels and gotos
 - emitting C-safe names
 - preserving evaluation order represented by IR
+- emitting explicit retain/release instructions as runtime calls
 
 It is not responsible for:
 

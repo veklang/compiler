@@ -4,10 +4,9 @@ Every instruction has a stable operation kind and optional source span.
 
 ```ts
 type IrInstruction =
-  | IrLoad
-  | IrStore
-  | IrMove
-  | IrConstInstruction
+  | IrAssignInstruction
+  | IrRetainInstruction
+  | IrReleaseInstruction
   | IrUnary
   | IrBinary
   | IrCast
@@ -29,47 +28,31 @@ type IrInstruction =
   | IrArrayGet
   | IrArraySet
   | IrStringLen
-  | IrStringGet
+  | IrStringAt
   | IrStringConcat
-  | IrRetain
-  | IrRelease
-  | IrDetach
+  | IrStringEq
+  | IrStoreGlobal
   | IrEnsureGlobalInitialized;
 ```
 
-If an instruction has `result`, the result temp is defined exactly once.
+If an instruction defines a temp `target`, that temp is defined exactly once.
 
 ## Local and Memory Instructions
 
 ```ts
-interface IrLoad {
-  kind: "load";
-  result: IrTempValue;
-  place: IrPlace;
-}
-
-interface IrStore {
-  kind: "store";
-  place: IrPlace;
-  value: IrValue;
-}
-
-interface IrMove {
-  kind: "move";
-  result: IrTempValue;
-  value: IrValue;
+interface IrAssignInstruction {
+  kind: "assign";
+  target: IrLocalId;
+  value: IrOperand;
 }
 ```
 
 Rules:
 
-- `load` reads from a place.
-- `store` writes to a place.
-- `move` creates a typed temp alias/value and is mainly useful after ownership
-  lowering.
-
-The lowerer may omit `load` for immutable temps when a value can be used
-directly.
+- `assign` writes a value to a local slot.
+- Local reads are represented directly as local operands.
+- Reassignment of a direct heap local must release the old owned value before
+  the new value is assigned.
 
 ## Constants
 
@@ -170,11 +153,13 @@ Runtime function names:
 type IrRuntimeFunction =
   | "__vek_panic"
   | "__vek_panic_cstr"
-  | "__vek_string_new"
+  | "__vek_string_from_literal"
   | "__vek_string_retain"
   | "__vek_string_release"
+  | "__vek_string_len"
+  | "__vek_string_at"
+  | "__vek_string_concat"
   | "__vek_string_eq"
-  | "__vek_string_cmp"
   | "__vek_array_new"
   | "__vek_array_retain"
   | "__vek_array_release"
@@ -336,77 +321,89 @@ Rules:
 ```ts
 interface IrArrayNew {
   kind: "array_new";
-  result: IrTempValue;
+  target: IrTempId;
   elementType: IrType;
-  elements: IrValue[];
+  elements: IrOperand[];
+  type: IrType;
 }
 
 interface IrArrayLen {
   kind: "array_len";
-  result: IrTempValue;
-  array: IrValue;
+  target: IrTempId;
+  array: IrOperand;
+  type: IrType;
 }
 
 interface IrArrayGet {
   kind: "array_get";
-  result: IrTempValue;
-  array: IrValue;
-  index: IrValue;
+  target: IrTempId;
+  array: IrOperand;
+  index: IrOperand;
+  elementType: IrType;
+  type: IrType;
 }
 
 interface IrArraySet {
   kind: "array_set";
-  array: IrPlace;
-  index: IrValue;
-  value: IrValue;
+  array: IrOperand;
+  index: IrOperand;
+  value: IrOperand;
+  elementType: IrType;
 }
 
 interface IrStringLen {
   kind: "string_len";
-  result: IrTempValue;
-  string: IrValue;
+  target: IrTempId;
+  string: IrOperand;
+  type: IrType;
 }
 
-interface IrStringGet {
-  kind: "string_get";
-  result: IrTempValue;
-  string: IrValue;
-  index: IrValue;
+interface IrStringAt {
+  kind: "string_at";
+  target: IrTempId;
+  string: IrOperand;
+  index: IrOperand;
+  type: IrType;
 }
 
 interface IrStringConcat {
   kind: "string_concat";
-  result: IrTempValue;
-  left: IrValue;
-  right: IrValue;
+  target: IrTempId;
+  left: IrOperand;
+  right: IrOperand;
+  type: IrType;
+}
+
+interface IrStringEq {
+  kind: "string_eq";
+  target: IrTempId;
+  left: IrOperand;
+  right: IrOperand;
+  type: IrType;
 }
 ```
 
 Rules:
 
-- Bounds checks are required for `array_get`, `array_set`, and `string_get`.
+- Bounds checks are required for `array_get`, `array_set`, and `string_at`.
 - Bounds checks may be emitted as runtime helper calls or explicit IR branches
   to panic.
 - `array_set` must be preceded by detach when the array may be shared.
+- `string_len` and `string_at` operate on Unicode scalar positions, not UTF-8
+  byte offsets.
 - Strings are immutable; there is no `string_set`.
 
 ## Ownership and Runtime Lifetime
 
 ```ts
-interface IrRetain {
+interface IrRetainInstruction {
   kind: "retain";
-  value: IrValue;
+  value: IrOperand;
 }
 
-interface IrRelease {
+interface IrReleaseInstruction {
   kind: "release";
-  value: IrValue;
-}
-
-interface IrDetach {
-  kind: "detach";
-  result: IrTempValue;
-  value: IrValue;
+  value: IrOperand;
 }
 ```
 
@@ -418,6 +415,12 @@ See [ownership.md](./ownership.md) for full rules.
 interface IrEnsureGlobalInitialized {
   kind: "ensure_global_initialized";
   globalId: IrGlobalId;
+}
+
+interface IrStoreGlobal {
+  kind: "store_global";
+  globalId: IrGlobalId;
+  value: IrOperand;
 }
 ```
 
