@@ -92,6 +92,7 @@ interface LowerContext {
   nextTemp: number;
   loopExit?: IrBlockId;
   loopContinue?: IrBlockId;
+  loopCleanup?: LocalSnapshot;
   structFields: Map<string, IrStructField[]>;
   variantInfos: Map<string, VariantInfo>;
   methodLinks: Map<string, string>;
@@ -886,13 +887,16 @@ function lowerWhileStatement(statement: WhileStatement, context: LowerContext) {
   switchBlock(context, bodyBlock);
   const savedExit = context.loopExit;
   const savedContinue = context.loopContinue;
+  const savedLoopCleanup = context.loopCleanup;
   context.loopExit = exitBlock.id;
   context.loopContinue = condBlock.id;
   const savedLocals = saveLocals(context);
+  context.loopCleanup = savedLocals;
   lowerBlock(statement.body, context);
   restoreLocals(context, savedLocals);
   context.loopExit = savedExit;
   context.loopContinue = savedContinue;
+  context.loopCleanup = savedLoopCleanup;
   if (!isTerminated(context)) {
     context.currentBlock.terminator = { kind: "branch", target: condBlock.id };
   }
@@ -904,6 +908,7 @@ function lowerBreak(statement: BreakStatement, context: LowerContext) {
   if (!context.loopExit) {
     throw new Error("IR lowering: break outside of loop.");
   }
+  releaseLoopLocals(context, statement.span);
   context.currentBlock.terminator = {
     kind: "branch",
     target: context.loopExit,
@@ -915,6 +920,7 @@ function lowerContinue(statement: ContinueStatement, context: LowerContext) {
   if (!context.loopContinue) {
     throw new Error("IR lowering: continue outside of loop.");
   }
+  releaseLoopLocals(context, statement.span);
   context.currentBlock.terminator = {
     kind: "branch",
     target: context.loopContinue,
@@ -1014,15 +1020,18 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
 
   const savedExit = context.loopExit;
   const savedContinue = context.loopContinue;
+  const savedLoopCleanup = context.loopCleanup;
   context.loopExit = exitBlock.id;
   context.loopContinue = incBlock.id;
 
   const savedLocals = saveLocals(context);
+  context.loopCleanup = savedLocals;
   lowerBlock(statement.body, context);
   restoreLocals(context, savedLocals);
 
   context.loopExit = savedExit;
   context.loopContinue = savedContinue;
+  context.loopCleanup = savedLoopCleanup;
 
   if (!isTerminated(context)) {
     context.currentBlock.terminator = {
@@ -2019,6 +2028,19 @@ function restoreLocals(context: LowerContext, saved: LocalSnapshot): void {
   }
   context.locals = saved.locals;
   context.ownedLocals = new Set(saved.ownedLocals);
+}
+
+function releaseLoopLocals(
+  context: LowerContext,
+  span?: IrLocal["span"],
+): void {
+  const saved = context.loopCleanup;
+  if (!saved) return;
+  for (const local of Array.from(context.ownedLocals)) {
+    if (saved.ownedLocals.has(local)) continue;
+    releaseLocal(local, context, span);
+    context.ownedLocals.delete(local);
+  }
 }
 
 function declareLocal(

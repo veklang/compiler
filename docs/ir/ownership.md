@@ -74,8 +74,7 @@ Ownership lowering must handle all exits from a block:
 
 For `break` and `continue`, any heap-backed locals introduced since the loop
 body's entry must be released before branching to the exit or condition block.
-The lowerer may insert cleanup blocks between the break/continue point and the
-target block.
+The current lowerer emits these releases directly before the branch.
 
 For `return`, all live heap-backed locals in scope must be released before the
 return instruction is emitted.

@@ -248,6 +248,23 @@ fn find() -> void {
     assert.ok(dump.includes("branch bb."));
   });
 
+  test("releases loop-owned locals before break", () => {
+    const ir = irOk(`
+fn main() -> void {
+  while true {
+    let s: string = "hi";
+    if s == "hi" {
+      break;
+    }
+  }
+  return;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("release local.0\n  branch"));
+  });
+
   test("lowers continue to branch to loop condition", () => {
     const ir = irOk(`
 fn skip() -> void {
@@ -266,6 +283,25 @@ fn skip() -> void {
     assert.ok(fn.kind === "function");
     const dump = dumpIr(ir);
     assert.ok(dump.includes("branch bb."));
+  });
+
+  test("releases loop-owned locals before continue", () => {
+    const ir = irOk(`
+fn main() -> void {
+  let i: i32 = 0;
+  while i < 2 {
+    let s: string = "hi";
+    i = i + 1;
+    if s == "hi" {
+      continue;
+    }
+  }
+  return;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("release local.1\n  branch"));
   });
 
   test("panic creates unreachable terminator and dead block", () => {

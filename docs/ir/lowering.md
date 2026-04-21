@@ -74,6 +74,8 @@ Rules:
 - `continue` lowers to an unconditional `branch` to the loop's `condition_block`.
 - The lowerer tracks the innermost enclosing loop's exit and continue targets.
   Nested loops each have their own targets.
+- Ownership cleanup for locals introduced inside the loop body is emitted before
+  the `break` or `continue` branch.
 - A terminated body path (via return, break, panic/unreachable) does not emit
   the trailing `branch condition_block`.
 
