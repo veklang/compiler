@@ -247,6 +247,27 @@ fn move_right(mut p: Point) -> void {
     assert.ok(c.includes(".x ="));
   });
 
+  test("emits recursive retain and release for struct fields", () => {
+    const c = emitOk(`
+struct User {
+  name: string;
+}
+
+fn main() -> i32 {
+  let a: User = User { name: "hi" };
+  let b: User = a;
+  if b.name == "hi" {
+    return 42;
+  }
+  return 0;
+}
+`);
+
+    assert.ok(c.includes("__vek_string_retain((v0).name);"));
+    assert.ok(c.includes("__vek_string_release((v0).name);"));
+    assert.ok(c.includes("__vek_string_release((v1).name);"));
+  });
+
   test("emits enum typedef with tag and union", () => {
     const c = emitOk(`
 enum Shape {

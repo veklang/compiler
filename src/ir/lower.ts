@@ -1221,12 +1221,14 @@ function lowerMatchArmBindings(
       true,
       pattern.span,
     );
+    retainIfBorrowedHeap(matchOperand, context, pattern.span);
     context.currentBlock.instructions.push({
       kind: "assign",
       target: local.id,
       value: matchOperand,
       span: pattern.span,
     });
+    markLocalOwns(local.id, matchOperand, context);
   } else if (pattern.kind === "EnumPattern") {
     const variantInfo = context.variantInfos.get(pattern.name.name);
     if (variantInfo) {
@@ -1253,12 +1255,19 @@ function lowerMatchArmBindings(
           true,
           arg.span,
         );
+        const value: IrOperand = {
+          kind: "temp",
+          id: tempId,
+          type: payloadType,
+        };
+        retainIfBorrowedHeap(value, context, arg.span);
         context.currentBlock.instructions.push({
           kind: "assign",
           target: local.id,
-          value: { kind: "temp", id: tempId, type: payloadType },
+          value,
           span: arg.span,
         });
+        markLocalOwns(local.id, value, context);
       }
     }
   }
@@ -1458,6 +1467,7 @@ function lowerIdentifier(
       type,
       span: expression.span,
     });
+    markOwnedTemp(target, type, context);
     return { kind: "temp", id: target, type };
   }
   return {
@@ -1634,6 +1644,7 @@ function lowerCall(
       const payload = expression.args.map((arg) =>
         lowerExpression(arg, context),
       );
+      for (const value of payload) retainIfBorrowedHeap(value, context);
       context.currentBlock.instructions.push({
         kind: "construct_enum",
         target,
@@ -1644,6 +1655,9 @@ function lowerCall(
         type: enumType,
         span: expression.span,
       });
+      for (const value of payload)
+        if (value.kind === "temp") context.ownedTemps.delete(value.id);
+      markOwnedTemp(target, enumType, context);
       return { kind: "temp", id: target, type: enumType };
     }
   }
@@ -1795,6 +1809,7 @@ function coerceOperand(
   }
   if (irTypeEquals(operand.type, targetType.base)) {
     const target = nextTemp(context);
+    retainIfBorrowedHeap(operand, context, span);
     context.currentBlock.instructions.push({
       kind: "make_nullable",
       target,
@@ -1802,6 +1817,8 @@ function coerceOperand(
       type: targetType,
       span,
     });
+    if (operand.kind === "temp") context.ownedTemps.delete(operand.id);
+    markOwnedTemp(target, targetType, context);
     return { kind: "temp", id: target, type: targetType };
   }
   return operand;
@@ -1882,15 +1899,20 @@ function lowerTupleLiteral(
     throw new Error("IR lowering: tuple literal did not have tuple type.");
   }
   const target = nextTemp(context);
+  const elements = expression.elements.map((element) =>
+    lowerExpression(element, context),
+  );
+  for (const element of elements) retainIfBorrowedHeap(element, context);
   context.currentBlock.instructions.push({
     kind: "construct_tuple",
     target,
-    elements: expression.elements.map((element) =>
-      lowerExpression(element, context),
-    ),
+    elements,
     type,
     span: expression.span,
   });
+  for (const element of elements)
+    if (element.kind === "temp") context.ownedTemps.delete(element.id);
+  markOwnedTemp(target, type, context);
   return { kind: "temp", id: target, type };
 }
 
@@ -1930,6 +1952,7 @@ function lowerStructLiteral(
     name: f.name.name,
     value: lowerExpression(f.value, context),
   }));
+  for (const field of fields) retainIfBorrowedHeap(field.value, context);
   context.currentBlock.instructions.push({
     kind: "construct_struct",
     target,
@@ -1938,6 +1961,9 @@ function lowerStructLiteral(
     type: structType,
     span: expression.span,
   });
+  for (const field of fields)
+    if (field.value.kind === "temp") context.ownedTemps.delete(field.value.id);
+  markOwnedTemp(target, structType, context);
   return { kind: "temp", id: target, type: structType };
 }
 
@@ -2070,6 +2096,42 @@ function isDirectHeapType(type: IrType): boolean {
   );
 }
 
+function hasOwnedStorage(
+  type: IrType,
+  context: LowerContext,
+  seen = new Set<string>(),
+): boolean {
+  if (isDirectHeapType(type)) return true;
+  if (type.kind === "nullable") {
+    return hasOwnedStorage(type.base, context, seen);
+  }
+  if (type.kind === "tuple") {
+    return type.elements.some((element) =>
+      hasOwnedStorage(element, context, seen),
+    );
+  }
+  if (type.kind !== "named") return false;
+  if (type.name === "Array") return true;
+  const key = `${type.decl ?? "named"}:${type.name}`;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  if (type.decl === "enum") {
+    for (const variant of context.variantInfos.values()) {
+      if (variant.enumName !== type.name) continue;
+      if (
+        variant.payloadTypes.some((payloadType) =>
+          hasOwnedStorage(payloadType, context, seen),
+        )
+      )
+        return true;
+    }
+    return false;
+  }
+  const fields = context.structFields.get(type.name);
+  if (!fields) return false;
+  return fields.some((field) => hasOwnedStorage(field.type, context, seen));
+}
+
 function isArrayType(type: IrType): boolean {
   return type.kind === "named" && type.name === "Array";
 }
@@ -2155,7 +2217,7 @@ function retainIfBorrowedHeap(
   context: LowerContext,
   span?: IrLocal["span"],
 ) {
-  if (!isDirectHeapType(operand.type)) return;
+  if (!hasOwnedStorage(operand.type, context)) return;
   if (operand.kind === "temp" && context.ownedTemps.has(operand.id)) return;
   context.currentBlock.instructions.push({
     kind: "retain",
@@ -2170,7 +2232,7 @@ function markLocalOwns(
   value: IrOperand,
   context: LowerContext,
 ) {
-  if (!isDirectHeapType(value.type)) return;
+  if (!hasOwnedStorage(value.type, context)) return;
   context.ownedLocals.add(local);
   if (value.kind === "temp") context.ownedTemps.delete(value.id);
 }
@@ -2191,7 +2253,7 @@ function releaseLocal(
   span?: IrLocal["span"],
 ) {
   const type = context.localTypes.get(local);
-  if (!type || !isDirectHeapType(type)) return;
+  if (!type || !hasOwnedStorage(type, context)) return;
   context.currentBlock.instructions.push({
     kind: "release",
     value: { kind: "local", id: local, type },
@@ -2206,7 +2268,7 @@ function releaseGlobalIfHeap(
   span?: IrLocal["span"],
 ) {
   const type = context.globalTypes.get(globalId);
-  if (!type || !isDirectHeapType(type)) return;
+  if (!type || !hasOwnedStorage(type, context)) return;
   context.currentBlock.instructions.push({
     kind: "release",
     value: { kind: "global", id: globalId, type },
@@ -2233,7 +2295,7 @@ function releaseIfOwnedTemp(operand: IrOperand, context: LowerContext) {
 }
 
 function markOwnedTemp(target: IrTempId, type: IrType, context: LowerContext) {
-  if (!isDirectHeapType(type)) return;
+  if (!hasOwnedStorage(type, context)) return;
   context.ownedTemps.add(target);
 }
 

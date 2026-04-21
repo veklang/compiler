@@ -25,6 +25,8 @@ interface FunctionEmitContext {
   stringLiteralNames: Map<string, string>;
   paramIds: Set<string>;
   multiBlock: boolean;
+  structs: Map<string, IrStructDeclaration>;
+  enums: Map<string, IrEnumDeclaration>;
 }
 
 const defaultRuntimeHeader = "../runtime/dist/vek_runtime.h";
@@ -125,7 +127,14 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
 
   for (const fn of functions) {
     lines.push(
-      ...emitFunction(fn, globalNames, ensureGlobalNames, stringLiteralNames),
+      ...emitFunction(
+        fn,
+        globalNames,
+        ensureGlobalNames,
+        stringLiteralNames,
+        new Map(structs.map((s) => [s.linkName, s])),
+        new Map(enums.map((e) => [e.linkName, e])),
+      ),
       "",
     );
   }
@@ -189,6 +198,8 @@ function emitFunction(
   globalNames: Map<string, string>,
   ensureGlobalNames: Map<string, string>,
   stringLiteralNames: Map<string, string> = new Map(),
+  structs: Map<string, IrStructDeclaration> = new Map(),
+  enums: Map<string, IrEnumDeclaration> = new Map(),
 ): string[] {
   const multiBlock = fn.blocks.length > 1;
   const context: FunctionEmitContext = {
@@ -201,6 +212,8 @@ function emitFunction(
     stringLiteralNames,
     paramIds: new Set(fn.params.map((param) => param.local)),
     multiBlock,
+    structs,
+    enums,
   };
   const lines = [`${functionPrototype(fn)} {`];
 
@@ -478,13 +491,75 @@ function emitHeapOwnershipCall(
   context: FunctionEmitContext,
 ): string {
   const value = emitOperand(operand, context);
-  if (operand.type.kind === "primitive" && operand.type.name === "string") {
-    return `__vek_string_${action}(${value});`;
+  const statements = emitOwnershipStatements(
+    action,
+    value,
+    operand.type,
+    context,
+  );
+  if (statements.length === 0) return `(void)${value};`;
+  return `do { ${statements.join(" ")} } while (0);`;
+}
+
+function emitOwnershipStatements(
+  action: "retain" | "release",
+  value: string,
+  type: IrType,
+  context: FunctionEmitContext,
+): string[] {
+  if (type.kind === "primitive" && type.name === "string") {
+    return [`__vek_string_${action}(${value});`];
   }
-  if (operand.type.kind === "named" && operand.type.name === "Array") {
-    return `__vek_array_${action}(${value});`;
+  if (type.kind === "named" && type.name === "Array") {
+    return [`__vek_array_${action}(${value});`];
   }
-  return `(void)${value};`;
+  if (type.kind === "tuple") {
+    return type.elements.flatMap((element, index) =>
+      emitOwnershipStatements(action, `(${value})._${index}`, element, context),
+    );
+  }
+  if (type.kind === "nullable") {
+    const statements = emitOwnershipStatements(
+      action,
+      `(${value}).value`,
+      type.base,
+      context,
+    );
+    if (statements.length === 0) return [];
+    return [`if (!(${value}).is_null) { ${statements.join(" ")} }`];
+  }
+  if (type.kind !== "named") return [];
+
+  const enumDecl =
+    type.decl === "enum" ? context.enums.get(type.name) : undefined;
+  if (enumDecl) {
+    const cases: string[] = [];
+    for (const variant of enumDecl.variants) {
+      const statements = variant.payloadTypes.flatMap((payloadType, index) =>
+        emitOwnershipStatements(
+          action,
+          `(${value}).data.${variant.name}._${index}`,
+          payloadType,
+          context,
+        ),
+      );
+      if (statements.length === 0) continue;
+      cases.push(`case ${variant.tag}: ${statements.join(" ")} break;`);
+    }
+    if (cases.length === 0) return [];
+    return [`switch ((${value}).tag) { ${cases.join(" ")} }`];
+  }
+
+  const structDecl = context.structs.get(type.name);
+  if (!structDecl) return [];
+  return structDecl.fields.flatMap((field) =>
+    emitOwnershipStatements(
+      action,
+      `(${value}).${field.name}`,
+      field.type,
+      context,
+    ),
+  );
 }
 
 function emitMainWrapper(entry: IrFunction): string[] {

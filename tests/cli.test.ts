@@ -569,6 +569,46 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs retained aggregate string fields", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct User {
+  name: string;
+}
+
+fn make() -> User {
+  let s: string = "hi" + "!";
+  let u: User = User { name: s };
+  return u;
+}
+
+fn main() -> i32 {
+  let u: User = make();
+  if u.name == "hi!" {
+    return 42;
+  }
+  return 0;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs CoW array alias mutation", () => {
     if (!hasMuslGcc()) return;
 

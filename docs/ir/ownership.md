@@ -4,8 +4,9 @@ Ownership lowering is the pass that inserts `retain`, `release`, and CoW
 `detach`.
 
 Direct heap retain/release lowering is implemented for `string` and `Array<T>`.
-CoW detach lowering is implemented for direct array element mutation. Recursive
-ownership for aggregates is still a separate expansion step.
+Recursive retain/release lowering is implemented for structs, tuples, nullable
+values, and enums whose fields/payloads contain owned values. CoW detach
+lowering is implemented for direct array element mutation.
 
 ## Ownership Categories
 
@@ -58,10 +59,10 @@ For heap-backed locals:
 - reassignment releases the previous value
 - function exit releases live owned locals
 
-The current implementation tracks direct heap locals and direct heap temps.
-Parameters are treated as borrowed values. A borrowed direct heap value is
-retained before it is stored into an owning local/global or returned as an owned
-result.
+The current implementation tracks owned locals and temps for direct heap values
+and aggregate values containing owned fields/payloads. Parameters are treated as
+borrowed values. A borrowed owned value is retained before it is stored into an
+owning local/global or returned as an owned result.
 
 ## Branches
 
@@ -91,8 +92,13 @@ The pass may insert cleanup blocks if needed.
 - Ownership lowering is responsible for inserting these instructions.
 - The C emitter must not infer missing ownership operations.
 
-## Aggregate Helpers
+## Aggregate Ownership
 
-Composite types containing heap-backed fields may require recursive retain and
-release helpers. The lowerer may emit calls to generated helper functions rather
-than inline every retain/release operation.
+Composite types containing heap-backed fields are retained and released
+recursively. The current C emitter inlines recursive operations at each
+retain/release instruction. A future emitter may generate helper functions if
+the inline output becomes too repetitive.
+
+`Array<T>` remains a direct heap object at the IR boundary. Element destructors
+for arrays whose element type owns storage, such as `Array<string>`, require
+runtime support and are not modeled by recursive aggregate ownership.
