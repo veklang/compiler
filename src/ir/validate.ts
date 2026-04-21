@@ -210,6 +210,11 @@ function validateInstruction(
     return;
   }
 
+  if (instruction.kind === "retain" || instruction.kind === "release") {
+    validate(instruction.value);
+    return;
+  }
+
   if (instruction.kind === "store_global") {
     if (!globalIds.has(instruction.globalId)) {
       diagnostics.push({

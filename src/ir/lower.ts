@@ -84,6 +84,8 @@ interface LowerContext {
   locals: Map<string, IrLocalId>;
   localTypes: Map<IrLocalId, IrType>;
   localDecls: IrLocal[];
+  ownedLocals: Set<IrLocalId>;
+  ownedTemps: Set<IrTempId>;
   blocks: IrBlock[];
   currentBlock: IrBlock;
   nextLocal: number;
@@ -104,6 +106,11 @@ interface LowerContext {
 interface LowerSession {
   generatedFunctions: IrFunction[];
   nextAnonymousFunction: number;
+}
+
+interface LocalSnapshot {
+  locals: Map<string, IrLocalId>;
+  ownedLocals: Set<IrLocalId>;
 }
 
 export function lowerProgramToIr(
@@ -352,6 +359,8 @@ function lowerGlobalInitializerFunction(
     locals: new Map(),
     localTypes: new Map(),
     localDecls: [],
+    ownedLocals: new Set(),
+    ownedTemps: new Set(),
     blocks: [entryBlock],
     currentBlock: entryBlock,
     nextLocal: 0,
@@ -366,17 +375,21 @@ function lowerGlobalInitializerFunction(
     session,
   };
 
+  const value = coerceOperand(
+    lowerExpression(node.initializer, context),
+    globalTypes.get(globalId) ?? typeFromNode(checkResult, node.initializer),
+    context,
+    node.span,
+  );
+  retainIfBorrowedHeap(value, context, node.span);
   context.currentBlock.instructions.push({
     kind: "store_global",
     globalId,
-    value: coerceOperand(
-      lowerExpression(node.initializer, context),
-      globalTypes.get(globalId) ?? typeFromNode(checkResult, node.initializer),
-      context,
-      node.span,
-    ),
+    value,
     span: node.span,
   });
+  if (value.kind === "temp") context.ownedTemps.delete(value.id);
+  releaseOwnedLocals(context, node.span);
   context.currentBlock.terminator = {
     kind: "return",
     value: voidOperand(),
@@ -421,6 +434,8 @@ function lowerMethod(
     locals: new Map(),
     localTypes: new Map(),
     localDecls: [],
+    ownedLocals: new Set(),
+    ownedTemps: new Set(),
     blocks: [entryBlock],
     currentBlock: entryBlock,
     nextLocal: 0,
@@ -442,6 +457,7 @@ function lowerMethod(
 
   lowerBlock(node.body, context);
   if (!isTerminated(context)) {
+    releaseOwnedLocals(context, node.body.span);
     context.currentBlock.terminator = {
       kind: "return",
       value: voidOperand(),
@@ -531,6 +547,8 @@ function lowerFunction(
     locals: new Map(),
     localTypes: new Map(),
     localDecls: [],
+    ownedLocals: new Set(),
+    ownedTemps: new Set(),
     blocks: [entryBlock],
     currentBlock: entryBlock,
     nextLocal: 0,
@@ -566,6 +584,7 @@ function lowerFunction(
 
   if (node.body) lowerBlock(node.body, context);
   if (!isTerminated(context)) {
+    releaseOwnedLocals(context, node.body?.span);
     context.currentBlock.terminator = {
       kind: "return",
       value: voidOperand(),
@@ -609,7 +628,10 @@ function lowerStatement(statement: Statement, context: LowerContext) {
       lowerReturn(statement, context);
       return;
     case "ExpressionStatement":
-      lowerExpression(statement.expression, context);
+      releaseIfOwnedTemp(
+        lowerExpression(statement.expression, context),
+        context,
+      );
       return;
     case "AssignmentStatement":
       lowerAssignment(statement, context);
@@ -656,31 +678,38 @@ function lowerVariableDeclaration(
   );
 
   if (statement.initializer) {
+    const value = coerceOperand(
+      lowerExpression(statement.initializer, context),
+      local.type,
+      context,
+      statement.span,
+    );
+    retainIfBorrowedHeap(value, context, statement.span);
     context.currentBlock.instructions.push({
       kind: "assign",
       target: local.id,
-      value: coerceOperand(
-        lowerExpression(statement.initializer, context),
-        local.type,
-        context,
-        statement.span,
-      ),
+      value,
       span: statement.span,
     });
+    markLocalOwns(local.id, value, context);
   }
 }
 
 function lowerReturn(statement: ReturnStatement, context: LowerContext) {
+  const value = statement.value
+    ? coerceOperand(
+        lowerExpression(statement.value, context),
+        context.returnType,
+        context,
+        statement.span,
+      )
+    : voidOperand();
+  retainIfBorrowedHeap(value, context, statement.span);
+  releaseOwnedLocals(context, statement.span);
+  if (value.kind === "temp") context.ownedTemps.delete(value.id);
   context.currentBlock.terminator = {
     kind: "return",
-    value: statement.value
-      ? coerceOperand(
-          lowerExpression(statement.value, context),
-          context.returnType,
-          context,
-          statement.span,
-        )
-      : voidOperand(),
+    value,
     span: statement.span,
   };
 }
@@ -691,13 +720,15 @@ function lowerAssignment(
 ) {
   if (statement.target.kind === "MemberExpression") {
     const localId = resolveLocalFromMember(statement.target, context);
+    const value = lowerExpression(statement.value, context);
     context.currentBlock.instructions.push({
       kind: "set_field",
       target: localId,
       field: statement.target.property.name,
-      value: lowerExpression(statement.value, context),
+      value,
       span: statement.span,
     });
+    releaseIfOwnedTemp(value, context);
     return;
   }
   if (statement.target.kind === "IndexExpression") {
@@ -712,6 +743,8 @@ function lowerAssignment(
       elementType: valueOperand.type,
       span: statement.span,
     });
+    releaseIfOwnedTemp(arrayOperand, context);
+    releaseIfOwnedTemp(valueOperand, context);
     return;
   }
   if (statement.target.kind !== "IdentifierExpression") {
@@ -719,18 +752,24 @@ function lowerAssignment(
   }
   const globalId = context.globals.get(statement.target.name);
   if (globalId) {
+    const value = coerceOperand(
+      lowerExpression(statement.value, context),
+      context.globalTypes.get(globalId) ??
+        typeFromNode(context.checkResult, statement.value),
+      context,
+      statement.span,
+    );
+    if (!(value.kind === "global" && value.id === globalId)) {
+      releaseGlobalIfHeap(globalId, context, statement.span);
+      retainIfBorrowedHeap(value, context, statement.span);
+    }
     context.currentBlock.instructions.push({
       kind: "store_global",
       globalId,
-      value: coerceOperand(
-        lowerExpression(statement.value, context),
-        context.globalTypes.get(globalId) ??
-          typeFromNode(context.checkResult, statement.value),
-        context,
-        statement.span,
-      ),
+      value,
       span: statement.span,
     });
+    if (value.kind === "temp") context.ownedTemps.delete(value.id);
     return;
   }
   const target = context.locals.get(statement.target.name);
@@ -739,18 +778,24 @@ function lowerAssignment(
       `Unknown local '${statement.target.name}' during IR lowering.`,
     );
   }
+  const value = coerceOperand(
+    lowerExpression(statement.value, context),
+    context.localTypes.get(target) ??
+      typeFromNode(context.checkResult, statement.value),
+    context,
+    statement.span,
+  );
+  if (!(value.kind === "local" && value.id === target)) {
+    releaseLocalIfOwned(target, context, statement.span);
+    retainIfBorrowedHeap(value, context, statement.span);
+  }
   context.currentBlock.instructions.push({
     kind: "assign",
     target,
-    value: coerceOperand(
-      lowerExpression(statement.value, context),
-      context.localTypes.get(target) ??
-        typeFromNode(context.checkResult, statement.value),
-      context,
-      statement.span,
-    ),
+    value,
     span: statement.span,
   });
+  markLocalOwns(target, value, context);
 }
 
 function resolveLocalFromMember(
@@ -1265,6 +1310,8 @@ function lowerFunctionExpression(
     locals: new Map(),
     localTypes: new Map(),
     localDecls: [],
+    ownedLocals: new Set(),
+    ownedTemps: new Set(),
     blocks: [entryBlock],
     currentBlock: entryBlock,
     nextLocal: 0,
@@ -1303,6 +1350,7 @@ function lowerFunctionExpression(
 
   lowerBlock(expression.body, context);
   if (!isTerminated(context)) {
+    releaseOwnedLocals(context, expression.body.span);
     context.currentBlock.terminator = {
       kind: "return",
       value: voidOperand(),
@@ -1425,14 +1473,19 @@ function lowerBinary(
 
   if (isString && expression.operator === "+") {
     const target = nextTemp(context);
+    const left = lowerExpression(expression.left, context);
+    const right = lowerExpression(expression.right, context);
     context.currentBlock.instructions.push({
       kind: "string_concat",
       target,
-      left: lowerExpression(expression.left, context),
-      right: lowerExpression(expression.right, context),
+      left,
+      right,
       type: irPrimitive("string"),
       span: expression.span,
     });
+    releaseIfOwnedTemp(left, context);
+    releaseIfOwnedTemp(right, context);
+    markOwnedTemp(target, irPrimitive("string"), context);
     context.runtime.strings = true;
     return { kind: "temp", id: target, type: irPrimitive("string") };
   }
@@ -1442,14 +1495,18 @@ function lowerBinary(
     (expression.operator === "==" || expression.operator === "!=")
   ) {
     const eqTarget = nextTemp(context);
+    const left = lowerExpression(expression.left, context);
+    const right = lowerExpression(expression.right, context);
     context.currentBlock.instructions.push({
       kind: "string_eq",
       target: eqTarget,
-      left: lowerExpression(expression.left, context),
-      right: lowerExpression(expression.right, context),
+      left,
+      right,
       type: irPrimitive("bool"),
       span: expression.span,
     });
+    releaseIfOwnedTemp(left, context);
+    releaseIfOwnedTemp(right, context);
     context.runtime.strings = true;
     if (expression.operator === "==") {
       return { kind: "temp", id: eqTarget, type: irPrimitive("bool") };
@@ -1598,16 +1655,19 @@ function lowerCall(
     return voidOperand();
   }
 
+  const args = expression.args.map((arg) => lowerExpression(arg, context));
   context.currentBlock.instructions.push({
     kind: "call",
     target: returnsVoid ? undefined : target,
     callee,
-    args: expression.args.map((arg) => lowerExpression(arg, context)),
+    args,
     type,
     span: expression.span,
   });
+  for (const arg of args) releaseIfOwnedTemp(arg, context);
 
   if (returnsVoid) return voidOperand();
+  markOwnedTemp(target, type, context);
   return { kind: "temp", id: target, type };
 }
 
@@ -1642,19 +1702,22 @@ function lowerInstanceMethodCall(
   const type = typeFromNode(context.checkResult, expression);
   const returnsVoid = type.kind === "primitive" && type.name === "void";
   const target = nextTemp(context);
+  const args = [
+    lowerExpression(expression.callee.object, context),
+    ...expression.args.map((arg) => lowerExpression(arg, context)),
+  ];
   context.currentBlock.instructions.push({
     kind: "call",
     target: returnsVoid ? undefined : target,
     callee: { kind: "function", name: linkName, type: calleeType },
-    args: [
-      lowerExpression(expression.callee.object, context),
-      ...expression.args.map((arg) => lowerExpression(arg, context)),
-    ],
+    args,
     type,
     span: expression.span,
   });
+  for (const arg of args) releaseIfOwnedTemp(arg, context);
 
   if (returnsVoid) return voidOperand();
+  markOwnedTemp(target, type, context);
   return { kind: "temp", id: target, type };
 }
 
@@ -1758,6 +1821,7 @@ function lowerArrayLiteral(
   if (!context.runtime.arrays.some((t) => irTypeEquals(t, elementType))) {
     context.runtime.arrays.push(elementType);
   }
+  markOwnedTemp(target, type, context);
   return { kind: "temp", id: target, type };
 }
 
@@ -1778,6 +1842,8 @@ function lowerIndexExpression(
       type,
       span: expression.span,
     });
+    releaseIfOwnedTemp(object, context);
+    markOwnedTemp(target, type, context);
     context.runtime.strings = true;
     return { kind: "temp", id: target, type };
   }
@@ -1790,6 +1856,7 @@ function lowerIndexExpression(
     type,
     span: expression.span,
   });
+  releaseIfOwnedTemp(object, context);
   return { kind: "temp", id: target, type };
 }
 
@@ -1888,6 +1955,7 @@ function lowerMemberExpression(
         type: irPrimitive("i32"),
         span: expression.span,
       });
+      releaseIfOwnedTemp(object, context);
       return { kind: "temp", id: target, type: irPrimitive("i32") };
     }
     if (object.type.kind === "primitive" && object.type.name === "string") {
@@ -1898,6 +1966,7 @@ function lowerMemberExpression(
         type: irPrimitive("i32"),
         span: expression.span,
       });
+      releaseIfOwnedTemp(object, context);
       context.runtime.strings = true;
       return { kind: "temp", id: target, type: irPrimitive("i32") };
     }
@@ -1931,15 +2000,21 @@ function isTerminated(context: LowerContext): boolean {
   return context.currentBlock.terminator !== undefined;
 }
 
-function saveLocals(context: LowerContext): Map<string, IrLocalId> {
-  return new Map(context.locals);
+function saveLocals(context: LowerContext): LocalSnapshot {
+  return {
+    locals: new Map(context.locals),
+    ownedLocals: new Set(context.ownedLocals),
+  };
 }
 
-function restoreLocals(
-  context: LowerContext,
-  saved: Map<string, IrLocalId>,
-): void {
-  context.locals = saved;
+function restoreLocals(context: LowerContext, saved: LocalSnapshot): void {
+  if (!isTerminated(context)) {
+    for (const local of context.ownedLocals) {
+      if (!saved.ownedLocals.has(local)) releaseLocal(local, context);
+    }
+  }
+  context.locals = saved.locals;
+  context.ownedLocals = new Set(saved.ownedLocals);
 }
 
 function declareLocal(
@@ -1960,6 +2035,100 @@ function declareLocal(
   context.localTypes.set(local.id, type);
   context.localDecls.push(local);
   return local;
+}
+
+function isDirectHeapType(type: IrType): boolean {
+  return (
+    (type.kind === "primitive" && type.name === "string") ||
+    (type.kind === "named" && type.name === "Array")
+  );
+}
+
+function retainIfBorrowedHeap(
+  operand: IrOperand,
+  context: LowerContext,
+  span?: IrLocal["span"],
+) {
+  if (!isDirectHeapType(operand.type)) return;
+  if (operand.kind === "temp" && context.ownedTemps.has(operand.id)) return;
+  context.currentBlock.instructions.push({
+    kind: "retain",
+    value: operand,
+    span,
+  });
+  context.runtime.refCounting = true;
+}
+
+function markLocalOwns(
+  local: IrLocalId,
+  value: IrOperand,
+  context: LowerContext,
+) {
+  if (!isDirectHeapType(value.type)) return;
+  context.ownedLocals.add(local);
+  if (value.kind === "temp") context.ownedTemps.delete(value.id);
+}
+
+function releaseLocalIfOwned(
+  local: IrLocalId,
+  context: LowerContext,
+  span?: IrLocal["span"],
+) {
+  if (!context.ownedLocals.has(local)) return;
+  releaseLocal(local, context, span);
+  context.ownedLocals.delete(local);
+}
+
+function releaseLocal(
+  local: IrLocalId,
+  context: LowerContext,
+  span?: IrLocal["span"],
+) {
+  const type = context.localTypes.get(local);
+  if (!type || !isDirectHeapType(type)) return;
+  context.currentBlock.instructions.push({
+    kind: "release",
+    value: { kind: "local", id: local, type },
+    span,
+  });
+  context.runtime.refCounting = true;
+}
+
+function releaseGlobalIfHeap(
+  globalId: IrGlobalId,
+  context: LowerContext,
+  span?: IrLocal["span"],
+) {
+  const type = context.globalTypes.get(globalId);
+  if (!type || !isDirectHeapType(type)) return;
+  context.currentBlock.instructions.push({
+    kind: "release",
+    value: { kind: "global", id: globalId, type },
+    span,
+  });
+  context.runtime.refCounting = true;
+}
+
+function releaseOwnedLocals(context: LowerContext, span?: IrLocal["span"]) {
+  for (const local of Array.from(context.ownedLocals)) {
+    releaseLocal(local, context, span);
+  }
+  context.ownedLocals.clear();
+}
+
+function releaseIfOwnedTemp(operand: IrOperand, context: LowerContext) {
+  if (operand.kind !== "temp" || !context.ownedTemps.has(operand.id)) return;
+  context.currentBlock.instructions.push({
+    kind: "release",
+    value: operand,
+  });
+  context.ownedTemps.delete(operand.id);
+  context.runtime.refCounting = true;
+}
+
+function markOwnedTemp(target: IrTempId, type: IrType, context: LowerContext) {
+  if (!isDirectHeapType(type)) return;
+  context.ownedTemps.add(target);
 }
 
 function irTypeEquals(left: IrType, right: IrType): boolean {

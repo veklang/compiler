@@ -550,6 +550,20 @@ fn first(s: string) -> string {
     assert.ok(c.includes("__vek_string_at("));
   });
 
+  test("emits retain and release for heap aliases", () => {
+    const c = emitOk(`
+fn main() -> i32 {
+  let a: string = "hi";
+  let b: string = a;
+  return b.len;
+}
+`);
+
+    assert.ok(c.includes("__vek_string_retain(v0);"));
+    assert.ok(c.includes("__vek_string_release(v0);"));
+    assert.ok(c.includes("__vek_string_release(v1);"));
+  });
+
   test("emits string + as __vek_string_concat", () => {
     const c = emitOk(`
 fn join(a: string, b: string) -> string {

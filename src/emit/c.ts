@@ -238,6 +238,14 @@ function emitInstruction(
     )};`;
   }
 
+  if (instruction.kind === "retain") {
+    return emitHeapOwnershipCall("retain", instruction.value, context);
+  }
+
+  if (instruction.kind === "release") {
+    return emitHeapOwnershipCall("release", instruction.value, context);
+  }
+
   if (instruction.kind === "binary") {
     const target = declareTemp(context, instruction.target);
     return `${emitDeclaration(instruction.type, target)} = ${emitOperand(
@@ -451,6 +459,21 @@ function emitTerminator(
   }
 
   return ["/* unknown terminator */"];
+}
+
+function emitHeapOwnershipCall(
+  action: "retain" | "release",
+  operand: IrOperand,
+  context: FunctionEmitContext,
+): string {
+  const value = emitOperand(operand, context);
+  if (operand.type.kind === "primitive" && operand.type.name === "string") {
+    return `__vek_string_${action}(${value});`;
+  }
+  if (operand.type.kind === "named" && operand.type.name === "Array") {
+    return `__vek_array_${action}(${value});`;
+  }
+  return `(void)${value};`;
 }
 
 function emitMainWrapper(entry: IrFunction): string[] {
@@ -774,6 +797,8 @@ function collectInstructionTypes(
     collectType(instruction.right.type, tuples);
   } else if (instruction.kind === "unary") {
     collectType(instruction.argument.type, tuples);
+  } else if (instruction.kind === "retain" || instruction.kind === "release") {
+    collectType(instruction.value.type, tuples);
   } else if (instruction.kind === "call") {
     collectType(instruction.callee.type, tuples);
     for (const arg of instruction.args) collectType(arg.type, tuples);
@@ -872,6 +897,8 @@ function walkInstructionTypes(
     walkType(instruction.right.type, visit);
   } else if (instruction.kind === "unary") {
     walkType(instruction.argument.type, visit);
+  } else if (instruction.kind === "retain" || instruction.kind === "release") {
+    walkType(instruction.value.type, visit);
   } else if (instruction.kind === "call") {
     walkType(instruction.callee.type, visit);
     for (const arg of instruction.args) walkType(arg.type, visit);

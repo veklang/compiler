@@ -537,4 +537,35 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs retained string aliases", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let a: string = "hello";
+  let b: string = a;
+  if b == "hello" {
+    return 42;
+  }
+  return 0;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

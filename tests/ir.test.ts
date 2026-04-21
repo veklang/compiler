@@ -611,6 +611,25 @@ fn first(s: string) -> string {
     assert.equal(ir.runtime.strings, true);
   });
 
+  test("lowers heap aliases with retain and release", () => {
+    const ir = irOk(`
+fn main() -> i32 {
+  let a: string = "hi";
+  let b: string = a;
+  if b == "hi" {
+    return 42;
+  }
+  return 0;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("retain local.0"));
+    assert.ok(dump.includes("release local.0"));
+    assert.ok(dump.includes("release local.1"));
+    assert.equal(ir.runtime.refCounting, true);
+  });
+
   test("lowers indexed assignment to array_set", () => {
     const ir = irOk(`
 fn set_first(mut xs: i32[]) -> void {

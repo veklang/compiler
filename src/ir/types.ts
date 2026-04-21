@@ -232,6 +232,8 @@ export type IrConst =
 
 export type IrInstruction =
   | IrAssignInstruction
+  | IrRetainInstruction
+  | IrReleaseInstruction
   | IrBinaryInstruction
   | IrUnaryInstruction
   | IrCallInstruction
@@ -262,6 +264,18 @@ export type IrInstruction =
 export interface IrAssignInstruction {
   kind: "assign";
   target: IrLocalId;
+  value: IrOperand;
+  span?: Span;
+}
+
+export interface IrRetainInstruction {
+  kind: "retain";
+  value: IrOperand;
+  span?: Span;
+}
+
+export interface IrReleaseInstruction {
+  kind: "release";
   value: IrOperand;
   span?: Span;
 }

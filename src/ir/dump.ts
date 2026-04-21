@@ -97,6 +97,12 @@ function dumpInstruction(instruction: IrInstruction): string {
   if (instruction.kind === "assign") {
     return `${instruction.target} = ${dumpOperand(instruction.value)}`;
   }
+  if (instruction.kind === "retain") {
+    return `retain ${dumpOperand(instruction.value)}`;
+  }
+  if (instruction.kind === "release") {
+    return `release ${dumpOperand(instruction.value)}`;
+  }
   if (instruction.kind === "binary") {
     return `${instruction.target}: ${dumpType(instruction.type)} = ${dumpOperand(
       instruction.left,
