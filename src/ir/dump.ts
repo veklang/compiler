@@ -171,6 +171,15 @@ function dumpInstruction(instruction: IrInstruction): string {
   if (instruction.kind === "array_set") {
     return `array_set ${dumpOperand(instruction.array)}[${dumpOperand(instruction.index)}] = ${dumpOperand(instruction.value)}`;
   }
+  if (instruction.kind === "string_len") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = string_len ${dumpOperand(instruction.string)}`;
+  }
+  if (instruction.kind === "string_concat") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = string_concat ${dumpOperand(instruction.left)} + ${dumpOperand(instruction.right)}`;
+  }
+  if (instruction.kind === "string_eq") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = string_eq ${dumpOperand(instruction.left)} == ${dumpOperand(instruction.right)}`;
+  }
   if (instruction.kind === "ensure_global_initialized") {
     return `ensure_global_initialized ${instruction.globalId}`;
   }

@@ -253,7 +253,10 @@ export type IrInstruction =
   | IrArrayGetInstruction
   | IrArraySetInstruction
   | IrEnsureGlobalInitializedInstruction
-  | IrStoreGlobalInstruction;
+  | IrStoreGlobalInstruction
+  | IrStringLenInstruction
+  | IrStringConcatInstruction
+  | IrStringEqInstruction;
 
 export interface IrAssignInstruction {
   kind: "assign";
@@ -447,6 +450,32 @@ export interface IrStoreGlobalInstruction {
 export interface IrEnsureGlobalInitializedInstruction {
   kind: "ensure_global_initialized";
   globalId: IrGlobalId;
+  span?: Span;
+}
+
+export interface IrStringLenInstruction {
+  kind: "string_len";
+  target: IrTempId;
+  string: IrOperand;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrStringConcatInstruction {
+  kind: "string_concat";
+  target: IrTempId;
+  left: IrOperand;
+  right: IrOperand;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrStringEqInstruction {
+  kind: "string_eq";
+  target: IrTempId;
+  left: IrOperand;
+  right: IrOperand;
+  type: IrType;
   span?: Span;
 }
 

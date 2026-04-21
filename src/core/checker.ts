@@ -1778,6 +1778,18 @@ export class Checker {
       return this.checkTypeParamMember(node, objectType, scope);
     }
 
+    if (
+      node.property.name === "len" &&
+      objectType.kind === "Named" &&
+      objectType.name === "Array"
+    ) {
+      return this.primitive("i32");
+    }
+
+    if (node.property.name === "len" && this.isStringType(objectType)) {
+      return this.primitive("i32");
+    }
+
     if (objectType.kind !== "Named" || !objectType.symbol) {
       const traitMethod = this.lookupTraitMethodOnType(
         objectType,

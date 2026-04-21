@@ -22,6 +22,7 @@ interface FunctionEmitContext {
   tempNames: Map<string, string>;
   globalNames: Map<string, string>;
   ensureGlobalNames: Map<string, string>;
+  stringLiteralNames: Map<string, string>;
   paramIds: Set<string>;
   multiBlock: boolean;
 }
@@ -71,6 +72,21 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   }
   if (nullables.length > 0) lines.push("");
 
+  const stringLiterals = collectStringLiterals(program);
+  const stringLiteralNames = new Map<string, string>();
+  if (stringLiterals.length > 0) {
+    for (let i = 0; i < stringLiterals.length; i++) {
+      const val = stringLiterals[i];
+      const name = `__vek_str_${i}`;
+      stringLiteralNames.set(val, name);
+      const escaped = JSON.stringify(val);
+      lines.push(
+        `static __vek_string ${name} = { .ref_count = -1, .length = ${Buffer.byteLength(val, "utf8")}, .data = ${escaped} };`,
+      );
+    }
+    lines.push("");
+  }
+
   const globals = program.declarations.filter(
     (declaration): declaration is IrGlobal => declaration.kind === "global",
   );
@@ -86,7 +102,7 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   );
 
   for (const global of globals) {
-    lines.push(emitGlobalDeclaration(global, globalNames));
+    lines.push(emitGlobalDeclaration(global, globalNames, stringLiteralNames));
   }
   for (const global of lazyGlobals) {
     lines.push(emitGlobalStateDeclaration(global));
@@ -108,7 +124,10 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   }
 
   for (const fn of functions) {
-    lines.push(...emitFunction(fn, globalNames, ensureGlobalNames), "");
+    lines.push(
+      ...emitFunction(fn, globalNames, ensureGlobalNames, stringLiteralNames),
+      "",
+    );
   }
 
   const entry = program.entry
@@ -132,20 +151,14 @@ function functionPrototype(fn: IrFunction): string {
 function emitGlobalDeclaration(
   global: IrGlobal,
   globalNames: Map<string, string>,
+  stringLiteralNames: Map<string, string> = new Map(),
 ): string {
   const name = requireGlobal(globalNames, global.id);
-  const init = global.initializer ? ` = ${emitGlobalInitializer(global)}` : "";
+  const init = global.initializer
+    ? ` = ${emitGlobalInitializer(global, stringLiteralNames)}`
+    : "";
   const qualifier =
     global.mutable || global.initializerFunction ? "" : "const ";
-
-  if (
-    !global.mutable &&
-    !global.initializerFunction &&
-    global.type.kind === "primitive" &&
-    global.type.name === "string"
-  ) {
-    return `static const char * const ${name}${init};`;
-  }
   return `static ${qualifier}${emitDeclaration(global.type, name)}${init};`;
 }
 
@@ -175,6 +188,7 @@ function emitFunction(
   fn: IrFunction,
   globalNames: Map<string, string>,
   ensureGlobalNames: Map<string, string>,
+  stringLiteralNames: Map<string, string> = new Map(),
 ): string[] {
   const multiBlock = fn.blocks.length > 1;
   const context: FunctionEmitContext = {
@@ -184,6 +198,7 @@ function emitFunction(
     tempNames: new Map(),
     globalNames,
     ensureGlobalNames,
+    stringLiteralNames,
     paramIds: new Set(fn.params.map((param) => param.local)),
     multiBlock,
   };
@@ -239,9 +254,18 @@ function emitInstruction(
   }
 
   if (instruction.kind === "call") {
-    const call = `${emitOperand(instruction.callee, context)}(${instruction.args
-      .map((arg) => emitOperand(arg, context))
-      .join(", ")})`;
+    const isPanic =
+      instruction.callee.kind === "function" &&
+      instruction.callee.name === "panic";
+    const args = instruction.args.map((arg) => {
+      const s = emitOperand(arg, context);
+      return isPanic &&
+        arg.type.kind === "primitive" &&
+        arg.type.name === "string"
+        ? `(${s})->data`
+        : s;
+    });
+    const call = `${emitOperand(instruction.callee, context)}(${args.join(", ")})`;
     if (!instruction.target) return `${call};`;
     const target = declareTemp(context, instruction.target);
     return `${emitDeclaration(instruction.type, target)} = ${call};`;
@@ -364,6 +388,21 @@ function emitInstruction(
     return `${requireGlobal(context.globalNames, instruction.globalId)} = ${emitOperand(instruction.value, context)};`;
   }
 
+  if (instruction.kind === "string_len") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitDeclaration(instruction.type, target)} = __vek_string_len(${emitOperand(instruction.string, context)});`;
+  }
+
+  if (instruction.kind === "string_concat") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitDeclaration(instruction.type, target)} = __vek_string_concat(${emitOperand(instruction.left, context)}, ${emitOperand(instruction.right, context)});`;
+  }
+
+  if (instruction.kind === "string_eq") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitDeclaration(instruction.type, target)} = __vek_string_eq(${emitOperand(instruction.left, context)}, ${emitOperand(instruction.right, context)});`;
+  }
+
   const target = declareTemp(context, instruction.target);
   return `${emitDeclaration(instruction.type, target)} = (${emitType(
     instruction.type,
@@ -421,7 +460,8 @@ function emitMainWrapper(entry: IrFunction): string[] {
 }
 
 function emitOperand(operand: IrOperand, context: FunctionEmitContext): string {
-  if (operand.kind === "const") return emitConst(operand.value);
+  if (operand.kind === "const")
+    return emitConst(operand.value, context.stringLiteralNames);
   if (operand.kind === "local") return requireLocal(context, operand.id);
   if (operand.kind === "temp") return requireTemp(context, operand.id);
   if (operand.kind === "global")
@@ -430,21 +470,30 @@ function emitOperand(operand: IrOperand, context: FunctionEmitContext): string {
   return cFunctionName(operand.name);
 }
 
-function emitConst(value: IrConst): string {
+function emitConst(
+  value: IrConst,
+  stringLiteralNames: Map<string, string> = new Map(),
+): string {
   if (value.kind === "int" || value.kind === "float") return value.value;
-  if (value.kind === "string") return JSON.stringify(value.value);
+  if (value.kind === "string") {
+    const name = stringLiteralNames.get(value.value);
+    return name ? `&${name}` : JSON.stringify(value.value);
+  }
   if (value.kind === "bool") return value.value ? "true" : "false";
   if (value.kind === "null") return "0";
   return "";
 }
 
-function emitGlobalInitializer(global: IrGlobal): string {
+function emitGlobalInitializer(
+  global: IrGlobal,
+  stringLiteralNames: Map<string, string> = new Map(),
+): string {
   if (!global.initializer) return "";
   if (global.type.kind === "nullable") {
     if (global.initializer.kind === "null") return "{ .is_null = true }";
-    return `{ .is_null = false, .value = ${emitConst(global.initializer)} }`;
+    return `{ .is_null = false, .value = ${emitConst(global.initializer, stringLiteralNames)} }`;
   }
-  return emitConst(global.initializer);
+  return emitConst(global.initializer, stringLiteralNames);
 }
 
 function emitStructTypedef(s: IrStructDeclaration): string[] {
@@ -547,7 +596,7 @@ function emitType(type: IrType): string {
     case "void":
       return "void";
     case "string":
-      return "const char *";
+      return "__vek_string *";
     case "null":
       return "void *";
   }
@@ -761,6 +810,14 @@ function collectInstructionTypes(
   } else if (instruction.kind === "array_set") {
     collectType(instruction.array.type, tuples);
     collectType(instruction.value.type, tuples);
+  } else if (instruction.kind === "string_len") {
+    collectType(instruction.string.type, tuples);
+  } else if (
+    instruction.kind === "string_concat" ||
+    instruction.kind === "string_eq"
+  ) {
+    collectType(instruction.left.type, tuples);
+    collectType(instruction.right.type, tuples);
   }
 }
 
@@ -844,6 +901,14 @@ function walkInstructionTypes(
   } else if (instruction.kind === "array_set") {
     walkType(instruction.array.type, visit);
     walkType(instruction.value.type, visit);
+  } else if (instruction.kind === "string_len") {
+    walkType(instruction.string.type, visit);
+  } else if (
+    instruction.kind === "string_concat" ||
+    instruction.kind === "string_eq"
+  ) {
+    walkType(instruction.left.type, visit);
+    walkType(instruction.right.type, visit);
   }
 }
 
@@ -893,6 +958,88 @@ function requireGlobal(globalNames: Map<string, string>, id: string): string {
   const name = globalNames.get(id);
   if (!name) throw new Error(`Unknown global '${id}' during C emission.`);
   return name;
+}
+
+function collectStringLiterals(program: IrProgram): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  function visitConst(c: IrConst) {
+    if (c.kind === "string" && !seen.has(c.value)) {
+      seen.add(c.value);
+      result.push(c.value);
+    }
+  }
+  function visitOperand(op: IrOperand) {
+    if (op.kind === "const") visitConst(op.value);
+  }
+  for (const decl of program.declarations) {
+    if (decl.kind === "global" && decl.initializer)
+      visitConst(decl.initializer);
+    if (decl.kind === "function" && decl.body === "defined") {
+      for (const block of decl.blocks) {
+        for (const instr of block.instructions) {
+          if (
+            "value" in instr &&
+            instr.value &&
+            typeof instr.value === "object" &&
+            "kind" in instr.value
+          ) {
+            visitOperand(instr.value as IrOperand);
+          }
+          if ("left" in instr) visitOperand(instr.left);
+          if ("right" in instr) visitOperand(instr.right);
+          if ("args" in instr) for (const a of instr.args) visitOperand(a);
+          if ("elements" in instr && Array.isArray(instr.elements)) {
+            for (const e of instr.elements as IrOperand[]) visitOperand(e);
+          }
+          if ("payload" in instr && Array.isArray(instr.payload)) {
+            for (const p of instr.payload as IrOperand[]) visitOperand(p);
+          }
+          if ("fields" in instr && Array.isArray(instr.fields)) {
+            for (const f of instr.fields as { value: IrOperand }[])
+              visitOperand(f.value);
+          }
+          if (
+            "string" in instr &&
+            instr.string &&
+            typeof instr.string === "object"
+          ) {
+            visitOperand(instr.string as IrOperand);
+          }
+          if (
+            "array" in instr &&
+            instr.array &&
+            typeof instr.array === "object"
+          ) {
+            visitOperand(instr.array as IrOperand);
+          }
+          if (
+            "index" in instr &&
+            instr.index &&
+            typeof instr.index === "object"
+          ) {
+            visitOperand(instr.index as IrOperand);
+          }
+          if (
+            "object" in instr &&
+            instr.object &&
+            typeof instr.object === "object"
+          ) {
+            visitOperand(instr.object as IrOperand);
+          }
+          if ("callee" in instr) visitOperand(instr.callee);
+        }
+        if (
+          block.terminator &&
+          "value" in block.terminator &&
+          block.terminator.value
+        ) {
+          visitOperand(block.terminator.value as IrOperand);
+        }
+      }
+    }
+  }
+  return result;
 }
 
 function isVoidOperand(operand: IrOperand): boolean {

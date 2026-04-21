@@ -1420,6 +1420,52 @@ function lowerBinary(
   const nullComparison = lowerNullComparison(expression, context);
   if (nullComparison) return nullComparison;
 
+  const leftType = typeFromNode(context.checkResult, expression.left);
+  const isString = leftType.kind === "primitive" && leftType.name === "string";
+
+  if (isString && expression.operator === "+") {
+    const target = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "string_concat",
+      target,
+      left: lowerExpression(expression.left, context),
+      right: lowerExpression(expression.right, context),
+      type: irPrimitive("string"),
+      span: expression.span,
+    });
+    context.runtime.strings = true;
+    return { kind: "temp", id: target, type: irPrimitive("string") };
+  }
+
+  if (
+    isString &&
+    (expression.operator === "==" || expression.operator === "!=")
+  ) {
+    const eqTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "string_eq",
+      target: eqTarget,
+      left: lowerExpression(expression.left, context),
+      right: lowerExpression(expression.right, context),
+      type: irPrimitive("bool"),
+      span: expression.span,
+    });
+    context.runtime.strings = true;
+    if (expression.operator === "==") {
+      return { kind: "temp", id: eqTarget, type: irPrimitive("bool") };
+    }
+    const notTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "unary",
+      target: notTarget,
+      operator: "!",
+      argument: { kind: "temp", id: eqTarget, type: irPrimitive("bool") },
+      type: irPrimitive("bool"),
+      span: expression.span,
+    });
+    return { kind: "temp", id: notTarget, type: irPrimitive("bool") };
+  }
+
   const target = nextTemp(context);
   const type = typeFromNode(context.checkResult, expression);
   context.currentBlock.instructions.push({
@@ -1818,6 +1864,31 @@ function lowerMemberExpression(
 
   const target = nextTemp(context);
   const object = lowerExpression(expression.object, context);
+
+  if (expression.property.name === "len") {
+    if (object.type.kind === "named" && object.type.name === "Array") {
+      context.currentBlock.instructions.push({
+        kind: "array_len",
+        target,
+        array: object,
+        type: irPrimitive("i32"),
+        span: expression.span,
+      });
+      return { kind: "temp", id: target, type: irPrimitive("i32") };
+    }
+    if (object.type.kind === "primitive" && object.type.name === "string") {
+      context.currentBlock.instructions.push({
+        kind: "string_len",
+        target,
+        string: object,
+        type: irPrimitive("i32"),
+        span: expression.span,
+      });
+      context.runtime.strings = true;
+      return { kind: "temp", id: target, type: irPrimitive("i32") };
+    }
+  }
+
   context.currentBlock.instructions.push({
     kind: "get_field",
     target,

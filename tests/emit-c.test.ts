@@ -58,7 +58,7 @@ fn main() -> void {
 }
 `);
 
-    assert.ok(c.includes('__vek_panic_cstr("boom");'));
+    assert.ok(c.includes("__vek_panic_cstr(") && c.includes("->data"));
   });
 
   test("emits top-level globals and global loads", () => {
@@ -72,9 +72,8 @@ fn get_counter() -> i32 {
 `);
 
     assert.ok(c.includes("static int32_t __vek_global_counter = 41;"));
-    assert.ok(
-      c.includes('static const char * const __vek_global_label = "count";'),
-    );
+    assert.ok(c.includes("static const __vek_string * __vek_global_label ="));
+    assert.ok(c.includes("&__vek_str_"));
     assert.ok(c.includes("return __vek_global_counter;"));
   });
 
@@ -515,5 +514,70 @@ fn sum(xs: i32[]) -> i32 {
 
     assert.ok(c.includes("__vek_array_len("));
     assert.ok(c.includes("*(int32_t *)__vek_array_get("));
+  });
+
+  test("emits string literals as static __vek_string globals", () => {
+    const c = emitOk(`
+fn greet() -> string {
+  return "hello";
+}
+`);
+
+    assert.ok(c.includes("static __vek_string __vek_str_0 ="));
+    assert.ok(c.includes(".ref_count = -1"));
+    assert.ok(c.includes(".length = 5"));
+    assert.ok(c.includes('"hello"'));
+    assert.ok(c.includes("return &__vek_str_0;"));
+  });
+
+  test("emits string_len as __vek_string_len", () => {
+    const c = emitOk(`
+fn length(s: string) -> i32 {
+  return s.len;
+}
+`);
+
+    assert.ok(c.includes("__vek_string_len("));
+  });
+
+  test("emits string + as __vek_string_concat", () => {
+    const c = emitOk(`
+fn join(a: string, b: string) -> string {
+  return a + b;
+}
+`);
+
+    assert.ok(c.includes("__vek_string_concat("));
+  });
+
+  test("emits string == as __vek_string_eq", () => {
+    const c = emitOk(`
+fn same(a: string, b: string) -> bool {
+  return a == b;
+}
+`);
+
+    assert.ok(c.includes("__vek_string_eq("));
+  });
+
+  test("emits string != as negated __vek_string_eq", () => {
+    const c = emitOk(`
+fn different(a: string, b: string) -> bool {
+  return a != b;
+}
+`);
+
+    assert.ok(c.includes("__vek_string_eq("));
+    assert.ok(c.includes("!t"));
+  });
+
+  test("emits array .len as __vek_array_len", () => {
+    const c = emitOk(`
+fn length(xs: i32[]) -> i32 {
+  return xs.len;
+}
+`);
+
+    assert.ok(c.includes("__vek_array_len("));
   });
 });

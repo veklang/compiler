@@ -229,6 +229,26 @@ function validateInstruction(
     return;
   }
 
+  if (instruction.kind === "string_len") {
+    validate(instruction.string);
+    temps.add(instruction.target);
+    return;
+  }
+
+  if (instruction.kind === "string_concat") {
+    validate(instruction.left);
+    validate(instruction.right);
+    temps.add(instruction.target);
+    return;
+  }
+
+  if (instruction.kind === "string_eq") {
+    validate(instruction.left);
+    validate(instruction.right);
+    temps.add(instruction.target);
+    return;
+  }
+
   if ("target" in instruction && instruction.target) {
     if (temps.has(instruction.target)) {
       diagnostics.push({
