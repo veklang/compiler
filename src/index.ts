@@ -13,7 +13,7 @@ import { analyzeInitializers } from "@/passes/initializers";
 import type { Diagnostic } from "@/types/diagnostic";
 
 export const defaultToolchainPrefix =
-  "musl-gcc -Wall -Wextra -O3 -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections -D_FORTIFY_SOURCE=2 -fstack-protector-strong -static";
+  "musl-gcc -std=c99 -Wall -Wextra -O3 -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections -D_FORTIFY_SOURCE=2 -fstack-protector-strong -static";
 
 export const defaultRuntimeHeaderPath = path.resolve(
   __dirname,
