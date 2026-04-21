@@ -393,6 +393,11 @@ function emitInstruction(
     return `${emitDeclaration(instruction.type, target)} = __vek_string_len(${emitOperand(instruction.string, context)});`;
   }
 
+  if (instruction.kind === "string_at") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitDeclaration(instruction.type, target)} = __vek_string_at(${emitOperand(instruction.string, context)}, ${emitOperand(instruction.index, context)});`;
+  }
+
   if (instruction.kind === "string_concat") {
     const target = declareTemp(context, instruction.target);
     return `${emitDeclaration(instruction.type, target)} = __vek_string_concat(${emitOperand(instruction.left, context)}, ${emitOperand(instruction.right, context)});`;
@@ -812,6 +817,9 @@ function collectInstructionTypes(
     collectType(instruction.value.type, tuples);
   } else if (instruction.kind === "string_len") {
     collectType(instruction.string.type, tuples);
+  } else if (instruction.kind === "string_at") {
+    collectType(instruction.string.type, tuples);
+    collectType(instruction.index.type, tuples);
   } else if (
     instruction.kind === "string_concat" ||
     instruction.kind === "string_eq"
@@ -901,8 +909,13 @@ function walkInstructionTypes(
   } else if (instruction.kind === "array_set") {
     walkType(instruction.array.type, visit);
     walkType(instruction.value.type, visit);
-  } else if (instruction.kind === "string_len") {
+  } else if (
+    instruction.kind === "string_len" ||
+    instruction.kind === "string_at"
+  ) {
     walkType(instruction.string.type, visit);
+    if (instruction.kind === "string_at")
+      walkType(instruction.index.type, visit);
   } else if (
     instruction.kind === "string_concat" ||
     instruction.kind === "string_eq"

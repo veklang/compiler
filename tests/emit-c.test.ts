@@ -540,6 +540,16 @@ fn length(s: string) -> i32 {
     assert.ok(c.includes("__vek_string_len("));
   });
 
+  test("emits string index expression as __vek_string_at", () => {
+    const c = emitOk(`
+fn first(s: string) -> string {
+  return s[0];
+}
+`);
+
+    assert.ok(c.includes("__vek_string_at("));
+  });
+
   test("emits string + as __vek_string_concat", () => {
     const c = emitOk(`
 fn join(a: string, b: string) -> string {

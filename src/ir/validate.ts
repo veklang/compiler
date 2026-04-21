@@ -235,6 +235,13 @@ function validateInstruction(
     return;
   }
 
+  if (instruction.kind === "string_at") {
+    validate(instruction.string);
+    validate(instruction.index);
+    temps.add(instruction.target);
+    return;
+  }
+
   if (instruction.kind === "string_concat") {
     validate(instruction.left);
     validate(instruction.right);

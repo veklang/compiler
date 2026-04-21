@@ -1767,11 +1767,25 @@ function lowerIndexExpression(
 ): IrOperand {
   const type = typeFromNode(context.checkResult, expression);
   const target = nextTemp(context);
+  const object = lowerExpression(expression.object, context);
+  const index = lowerExpression(expression.index, context);
+  if (object.type.kind === "primitive" && object.type.name === "string") {
+    context.currentBlock.instructions.push({
+      kind: "string_at",
+      target,
+      string: object,
+      index,
+      type,
+      span: expression.span,
+    });
+    context.runtime.strings = true;
+    return { kind: "temp", id: target, type };
+  }
   context.currentBlock.instructions.push({
     kind: "array_get",
     target,
-    array: lowerExpression(expression.object, context),
-    index: lowerExpression(expression.index, context),
+    array: object,
+    index,
     elementType: type,
     type,
     span: expression.span,

@@ -174,6 +174,9 @@ function dumpInstruction(instruction: IrInstruction): string {
   if (instruction.kind === "string_len") {
     return `${instruction.target}: ${dumpType(instruction.type)} = string_len ${dumpOperand(instruction.string)}`;
   }
+  if (instruction.kind === "string_at") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = string_at ${dumpOperand(instruction.string)}[${dumpOperand(instruction.index)}]`;
+  }
   if (instruction.kind === "string_concat") {
     return `${instruction.target}: ${dumpType(instruction.type)} = string_concat ${dumpOperand(instruction.left)} + ${dumpOperand(instruction.right)}`;
   }

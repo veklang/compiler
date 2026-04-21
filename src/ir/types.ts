@@ -255,6 +255,7 @@ export type IrInstruction =
   | IrEnsureGlobalInitializedInstruction
   | IrStoreGlobalInstruction
   | IrStringLenInstruction
+  | IrStringAtInstruction
   | IrStringConcatInstruction
   | IrStringEqInstruction;
 
@@ -457,6 +458,15 @@ export interface IrStringLenInstruction {
   kind: "string_len";
   target: IrTempId;
   string: IrOperand;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrStringAtInstruction {
+  kind: "string_at";
+  target: IrTempId;
+  string: IrOperand;
+  index: IrOperand;
   type: IrType;
   span?: Span;
 }

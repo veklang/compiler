@@ -599,6 +599,18 @@ fn first(xs: i32[]) -> i32 {
     assert.ok(dump.includes("array_get"));
   });
 
+  test("lowers string index expression to string_at", () => {
+    const ir = irOk(`
+fn first(s: string) -> string {
+  return s[0];
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("string_at"));
+    assert.equal(ir.runtime.strings, true);
+  });
+
   test("lowers indexed assignment to array_set", () => {
     const ir = irOk(`
 fn set_first(mut xs: i32[]) -> void {
