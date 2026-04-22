@@ -931,6 +931,80 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs aggregate and custom equality", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct UserId {
+  value: i32;
+
+  satisfies Equal<UserId> {
+    fn equals(self, other: UserId) -> bool {
+      return self.value == other.value;
+    }
+  }
+}
+
+fn same<T>(left: T, right: T) -> bool
+where T: Equal<T>
+{
+  return left == right;
+}
+
+fn main() -> i32 {
+  let one: i32? = 7;
+  let two: i32? = 7;
+  let none: i32? = null;
+  if !(one == two) {
+    return 1;
+  }
+  if one == none {
+    return 2;
+  }
+  if !(none == null) {
+    return 3;
+  }
+
+  let left: (i32, string) = (1, "x");
+  let right: (i32, string) = (1, "x");
+  let other: (i32, string) = (2, "x");
+  if !(left == right) {
+    return 4;
+  }
+  if left == other {
+    return 5;
+  }
+
+  let user_a: UserId = UserId { value: 5 };
+  let user_b: UserId = UserId { value: 5 };
+  let user_c: UserId = UserId { value: 6 };
+  if !same(user_a, user_b) {
+    return 6;
+  }
+  if same(user_a, user_c) {
+    return 7;
+  }
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs UTF-8 scalar string len and indexing", () => {
     if (!hasMuslGcc()) return;
 

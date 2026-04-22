@@ -480,6 +480,49 @@ fn main() -> i32 {
     assert.ok(dump.includes("unwrap_nullable"));
   });
 
+  test("lowers aggregate and custom equality", () => {
+    const ir = irOk(`
+struct UserId {
+  value: i32;
+
+  satisfies Equal<UserId> {
+    fn equals(self, other: UserId) -> bool {
+      return self.value == other.value;
+    }
+  }
+}
+
+fn tuple_same(left: (i32, string), right: (i32, string)) -> bool {
+  return left == right;
+}
+
+fn nullable_same(left: i32?, right: i32?) -> bool {
+  return left == right;
+}
+
+fn same<T>(left: T, right: T) -> bool
+where T: Equal<T>
+{
+  return left == right;
+}
+
+fn main() -> void {
+  let left: UserId = UserId { value: 1 };
+  let right: UserId = UserId { value: 1 };
+  let _ok: bool = same(left, right);
+  return;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("get_tuple_field"));
+    assert.ok(dump.includes("string_eq"));
+    assert.ok(dump.includes("is_null"));
+    assert.ok(dump.includes("unwrap_nullable"));
+    assert.ok(dump.includes("cond_branch"));
+    assert.ok(dump.includes("call @UserId_equals"));
+  });
+
   test("lowers if with no else to cond_branch + join", () => {
     const ir = irOk(`
 fn main() -> void {

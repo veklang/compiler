@@ -898,6 +898,47 @@ fn different(a: string, b: string) -> bool {
     assert.ok(c.includes("!t"));
   });
 
+  test("emits aggregate and custom equality", () => {
+    const c = emitOk(`
+struct UserId {
+  value: i32;
+
+  satisfies Equal<UserId> {
+    fn equals(self, other: UserId) -> bool {
+      return self.value == other.value;
+    }
+  }
+}
+
+fn tuple_same(left: (i32, string), right: (i32, string)) -> bool {
+  return left == right;
+}
+
+fn nullable_same(left: i32?, right: i32?) -> bool {
+  return left == right;
+}
+
+fn same<T>(left: T, right: T) -> bool
+where T: Equal<T>
+{
+  return left == right;
+}
+
+fn main() -> void {
+  let left: UserId = UserId { value: 1 };
+  let right: UserId = UserId { value: 1 };
+  let _ok: bool = same(left, right);
+  return;
+}
+`);
+
+    assert.ok(c.includes("._0"));
+    assert.ok(c.includes("__vek_string_eq("));
+    assert.ok(c.includes(".is_null"));
+    assert.ok(c.includes(".value"));
+    assert.ok(c.includes("__vek_fn_UserId_equals("));
+  });
+
   test("emits array .len as __vek_array_len", () => {
     const c = emitOk(`
 fn length(xs: i32[]) -> i32 {

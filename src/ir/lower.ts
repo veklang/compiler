@@ -2632,11 +2632,12 @@ function lowerBinary(
   expression: BinaryExpression,
   context: LowerContext,
 ): IrOperand {
-  const nullComparison = lowerNullComparison(expression, context);
-  if (nullComparison) return nullComparison;
-
   if (expression.operator === "&&" || expression.operator === "||") {
     return lowerShortCircuitBinary(expression, context);
+  }
+
+  if (expression.operator === "==" || expression.operator === "!=") {
+    return lowerEquality(expression, context);
   }
 
   const leftType = typeFromNodeInContext(context, expression.left);
@@ -2661,47 +2662,16 @@ function lowerBinary(
     return { kind: "temp", id: target, type: irPrimitive("string") };
   }
 
-  if (
-    isString &&
-    (expression.operator === "==" || expression.operator === "!=")
-  ) {
-    const eqTarget = nextTemp(context);
-    const left = lowerExpression(expression.left, context);
-    const right = lowerExpression(expression.right, context);
-    context.currentBlock.instructions.push({
-      kind: "string_eq",
-      target: eqTarget,
-      left,
-      right,
-      type: irPrimitive("bool"),
-      span: expression.span,
-    });
-    releaseIfOwnedTemp(left, context);
-    releaseIfOwnedTemp(right, context);
-    context.runtime.strings = true;
-    if (expression.operator === "==") {
-      return { kind: "temp", id: eqTarget, type: irPrimitive("bool") };
-    }
-    const notTarget = nextTemp(context);
-    context.currentBlock.instructions.push({
-      kind: "unary",
-      target: notTarget,
-      operator: "!",
-      argument: { kind: "temp", id: eqTarget, type: irPrimitive("bool") },
-      type: irPrimitive("bool"),
-      span: expression.span,
-    });
-    return { kind: "temp", id: notTarget, type: irPrimitive("bool") };
-  }
-
   const target = nextTemp(context);
   const type = typeFromNodeInContext(context, expression);
+  const left = lowerExpression(expression.left, context);
+  const right = lowerExpression(expression.right, context);
   context.currentBlock.instructions.push({
     kind: "binary",
     target,
     operator: expression.operator,
-    left: lowerExpression(expression.left, context),
-    right: lowerExpression(expression.right, context),
+    left,
+    right,
     type,
     span: expression.span,
   });
@@ -2765,46 +2735,520 @@ function lowerShortCircuitBinary(
   return { kind: "local", id: resultLocal.id, type: resultType };
 }
 
-function lowerNullComparison(
+function lowerEquality(
   expression: BinaryExpression,
   context: LowerContext,
-): IrOperand | undefined {
-  if (expression.operator !== "==" && expression.operator !== "!=")
-    return undefined;
-
+): IrOperand {
   const leftIsNull = isNullLiteral(expression.left);
   const rightIsNull = isNullLiteral(expression.right);
-  if (!leftIsNull && !rightIsNull) return undefined;
+  const equal =
+    leftIsNull || rightIsNull
+      ? lowerNullEquality(expression, context)
+      : lowerOperandEquality(
+          lowerExpression(expression.left, context),
+          lowerExpression(expression.right, context),
+          expression.span,
+          context,
+        );
 
+  if (expression.operator === "==") return equal;
+
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "unary",
+    target,
+    operator: "!",
+    argument: equal,
+    type: irPrimitive("bool"),
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type: irPrimitive("bool") };
+}
+
+function lowerNullEquality(
+  expression: BinaryExpression,
+  context: LowerContext,
+): IrOperand {
+  const leftIsNull = isNullLiteral(expression.left);
   const nullable = lowerExpression(
     leftIsNull ? expression.right : expression.left,
     context,
   );
-  if (nullable.type.kind !== "nullable") return undefined;
+  if (nullable.type.kind !== "nullable") {
+    throw new Error("IR lowering: null equality requires nullable operand.");
+  }
 
-  const isNullTarget = nextTemp(context);
+  const target = nextTemp(context);
   context.currentBlock.instructions.push({
     kind: "is_null",
-    target: isNullTarget,
+    target,
     value: nullable,
     type: irPrimitive("bool"),
     span: expression.span,
   });
+  releaseIfOwnedTemp(nullable, context);
+  return { kind: "temp", id: target, type: irPrimitive("bool") };
+}
 
-  if (expression.operator === "==") {
-    return { kind: "temp", id: isNullTarget, type: irPrimitive("bool") };
+function lowerOperandEquality(
+  left: IrOperand,
+  right: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const result = lowerOperandEqualityNoCleanup(left, right, span, context);
+  releaseIfOwnedTemp(left, context);
+  releaseIfOwnedTemp(right, context);
+  return result;
+}
+
+function lowerOperandEqualityNoCleanup(
+  left: IrOperand,
+  right: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  if (isStringType(left.type) && isStringType(right.type)) {
+    return lowerStringEquality(left, right, span, context);
   }
 
-  const notTarget = nextTemp(context);
+  if (left.type.kind === "nullable" && right.type.kind === "nullable") {
+    return lowerNullableEquality(left, right, span, context);
+  }
+
+  if (left.type.kind === "tuple" && right.type.kind === "tuple") {
+    return lowerTupleEquality(left, right, span, context);
+  }
+
+  if (left.type.kind === "named" && right.type.kind === "named") {
+    const equals = context.methodLinks.get(methodKey(left.type.name, "equals"));
+    if (equals) return lowerCustomEquality(equals, left, right, span, context);
+    if (left.type.decl === "enum" && right.type.decl === "enum") {
+      return lowerEnumEquality(left, right, span, context);
+    }
+  }
+
+  if (canUsePrimitiveEquality(left.type, right.type)) {
+    return lowerBinaryEquality(left, right, span, context);
+  }
+
+  throw new Error(
+    `IR lowering: unsupported equality for '${displayIrType(left.type)}'.`,
+  );
+}
+
+function lowerBinaryEquality(
+  left: IrOperand,
+  right: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
   context.currentBlock.instructions.push({
-    kind: "unary",
-    target: notTarget,
-    operator: "!",
-    argument: { kind: "temp", id: isNullTarget, type: irPrimitive("bool") },
+    kind: "binary",
+    target,
+    operator: "==",
+    left,
+    right,
     type: irPrimitive("bool"),
-    span: expression.span,
+    span,
   });
-  return { kind: "temp", id: notTarget, type: irPrimitive("bool") };
+  return { kind: "temp", id: target, type: irPrimitive("bool") };
+}
+
+function lowerStringEquality(
+  left: IrOperand,
+  right: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "string_eq",
+    target,
+    left,
+    right,
+    type: irPrimitive("bool"),
+    span,
+  });
+  context.runtime.strings = true;
+  return { kind: "temp", id: target, type: irPrimitive("bool") };
+}
+
+function lowerCustomEquality(
+  linkName: string,
+  left: IrOperand,
+  right: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  const calleeType: IrType = {
+    kind: "function",
+    params: [
+      { type: left.type, mutable: false },
+      { type: right.type, mutable: false },
+    ],
+    returnType: irPrimitive("bool"),
+  };
+  context.currentBlock.instructions.push({
+    kind: "call",
+    target,
+    callee: { kind: "function", name: linkName, type: calleeType },
+    args: [left, right],
+    type: irPrimitive("bool"),
+    span,
+  });
+  return { kind: "temp", id: target, type: irPrimitive("bool") };
+}
+
+function lowerNullableEquality(
+  left: IrOperand,
+  right: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  if (left.type.kind !== "nullable" || right.type.kind !== "nullable") {
+    throw new Error(
+      "IR lowering: nullable equality requires nullable operands.",
+    );
+  }
+
+  const result = declareEqualityResultLocal(context, span);
+  const joinBlock = newBlock(context);
+  const leftNullBlock = newBlock(context);
+  const leftValueBlock = newBlock(context);
+
+  const leftNull = lowerIsNull(left, span, context);
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: leftNull,
+    thenTarget: leftNullBlock.id,
+    elseTarget: leftValueBlock.id,
+    span,
+  };
+
+  switchBlock(context, leftNullBlock);
+  const bothNullBlock = newBlock(context);
+  const rightNotNullFromLeftNullBlock = newBlock(context);
+  const rightNullWhenLeftNull = lowerIsNull(right, span, context);
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: rightNullWhenLeftNull,
+    thenTarget: bothNullBlock.id,
+    elseTarget: rightNotNullFromLeftNullBlock.id,
+    span,
+  };
+
+  switchBlock(context, bothNullBlock);
+  assignBoolResult(result.id, true, span, context);
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: joinBlock.id,
+    span,
+  };
+
+  switchBlock(context, rightNotNullFromLeftNullBlock);
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: joinBlock.id,
+    span,
+  };
+
+  switchBlock(context, leftValueBlock);
+  const bothValueBlock = newBlock(context);
+  const rightNullWhenLeftValue = lowerIsNull(right, span, context);
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: rightNullWhenLeftValue,
+    thenTarget: joinBlock.id,
+    elseTarget: bothValueBlock.id,
+    span,
+  };
+
+  switchBlock(context, bothValueBlock);
+  const leftValue = unwrapNullableOperand(left, context, span);
+  const rightValue = unwrapNullableOperand(right, context, span);
+  const valueEqual = lowerOperandEqualityNoCleanup(
+    leftValue,
+    rightValue,
+    span,
+    context,
+  );
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: result.id,
+    value: valueEqual,
+    span,
+  });
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: joinBlock.id,
+    span,
+  };
+
+  switchBlock(context, joinBlock);
+  return { kind: "local", id: result.id, type: irPrimitive("bool") };
+}
+
+function lowerTupleEquality(
+  left: IrOperand,
+  right: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  if (left.type.kind !== "tuple" || right.type.kind !== "tuple") {
+    throw new Error("IR lowering: tuple equality requires tuple operands.");
+  }
+  if (left.type.elements.length !== right.type.elements.length) {
+    throw new Error("IR lowering: tuple equality arity mismatch.");
+  }
+  const leftType = left.type;
+  const rightType = right.type;
+
+  return lowerSequentialEquality(leftType.elements.length, span, context, (i) =>
+    lowerOperandEqualityNoCleanup(
+      extractTupleFieldOperand(left, i, leftType.elements[i], span, context),
+      extractTupleFieldOperand(right, i, rightType.elements[i], span, context),
+      span,
+      context,
+    ),
+  );
+}
+
+function lowerEnumEquality(
+  left: IrOperand,
+  right: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const variants = enumVariantsForType(left.type, context);
+  if (variants.length === 0) {
+    throw new Error(`IR lowering: unknown enum '${displayIrType(left.type)}'.`);
+  }
+
+  const leftTag = getEnumTagOperand(left, span, context);
+  const rightTag = getEnumTagOperand(right, span, context);
+  const tagsEqual = lowerBinaryEquality(leftTag, rightTag, span, context);
+  if (variants.every((variant) => variant.payloadTypes.length === 0)) {
+    return tagsEqual;
+  }
+
+  const result = declareEqualityResultLocal(context, span);
+  const joinBlock = newBlock(context);
+  const sameTagBlock = newBlock(context);
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: tagsEqual,
+    thenTarget: sameTagBlock.id,
+    elseTarget: joinBlock.id,
+    span,
+  };
+
+  switchBlock(context, sameTagBlock);
+  for (const variant of variants) {
+    const matchedBlock = newBlock(context);
+    const nextVariantBlock = newBlock(context);
+    const tagMatches = lowerBinaryEquality(
+      leftTag,
+      {
+        kind: "const",
+        value: { kind: "int", value: String(variant.tag) },
+        type: irPrimitive("i32"),
+      },
+      span,
+      context,
+    );
+    context.currentBlock.terminator = {
+      kind: "cond_branch",
+      condition: tagMatches,
+      thenTarget: matchedBlock.id,
+      elseTarget: nextVariantBlock.id,
+      span,
+    };
+
+    switchBlock(context, matchedBlock);
+    if (variant.payloadTypes.length === 0) {
+      assignBoolResult(result.id, true, span, context);
+    } else {
+      const payloadEqual = lowerSequentialEquality(
+        variant.payloadTypes.length,
+        span,
+        context,
+        (i) =>
+          lowerOperandEqualityNoCleanup(
+            extractEnumPayloadOperand(left, variant, i, span, context),
+            extractEnumPayloadOperand(right, variant, i, span, context),
+            span,
+            context,
+          ),
+      );
+      context.currentBlock.instructions.push({
+        kind: "assign",
+        target: result.id,
+        value: payloadEqual,
+        span,
+      });
+    }
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: joinBlock.id,
+      span,
+    };
+
+    switchBlock(context, nextVariantBlock);
+  }
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: joinBlock.id,
+    span,
+  };
+
+  switchBlock(context, joinBlock);
+  return { kind: "local", id: result.id, type: irPrimitive("bool") };
+}
+
+function lowerSequentialEquality(
+  count: number,
+  span: Node["span"],
+  context: LowerContext,
+  lowerAt: (index: number) => IrOperand,
+): IrOperand {
+  const result = declareEqualityResultLocal(context, span);
+  const joinBlock = newBlock(context);
+
+  if (count === 0) {
+    assignBoolResult(result.id, true, span, context);
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: joinBlock.id,
+      span,
+    };
+    switchBlock(context, joinBlock);
+    return { kind: "local", id: result.id, type: irPrimitive("bool") };
+  }
+
+  for (let i = 0; i < count; i++) {
+    const equal = lowerAt(i);
+    if (i === count - 1) {
+      context.currentBlock.instructions.push({
+        kind: "assign",
+        target: result.id,
+        value: equal,
+        span,
+      });
+      context.currentBlock.terminator = {
+        kind: "branch",
+        target: joinBlock.id,
+        span,
+      };
+    } else {
+      const nextBlock = newBlock(context);
+      context.currentBlock.terminator = {
+        kind: "cond_branch",
+        condition: equal,
+        thenTarget: nextBlock.id,
+        elseTarget: joinBlock.id,
+        span,
+      };
+      switchBlock(context, nextBlock);
+    }
+  }
+
+  switchBlock(context, joinBlock);
+  return { kind: "local", id: result.id, type: irPrimitive("bool") };
+}
+
+function declareEqualityResultLocal(
+  context: LowerContext,
+  span: Node["span"],
+): IrLocal {
+  const local = declareLocal(
+    context,
+    `__vek_eq_${context.nextLocal}`,
+    irPrimitive("bool"),
+    true,
+    span,
+  );
+  assignBoolResult(local.id, false, span, context);
+  return local;
+}
+
+function assignBoolResult(
+  target: IrLocalId,
+  value: boolean,
+  span: Node["span"],
+  context: LowerContext,
+) {
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target,
+    value: boolOperand(value),
+    span,
+  });
+}
+
+function lowerIsNull(
+  value: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "is_null",
+    target,
+    value,
+    type: irPrimitive("bool"),
+    span,
+  });
+  return { kind: "temp", id: target, type: irPrimitive("bool") };
+}
+
+function getEnumTagOperand(
+  value: IrOperand,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "get_tag",
+    target,
+    object: value,
+    type: irPrimitive("i32"),
+    span,
+  });
+  return { kind: "temp", id: target, type: irPrimitive("i32") };
+}
+
+function enumVariantsForType(
+  type: IrType,
+  context: LowerContext,
+): VariantInfo[] {
+  if (type.kind !== "named" || type.decl !== "enum") return [];
+  const variants = [...context.variantInfos.values()].filter(
+    (variant) => variant.enumName === type.name,
+  );
+  return [
+    ...new Map(variants.map((variant) => [variant.tag, variant])).values(),
+  ].sort((left, right) => left.tag - right.tag);
+}
+
+function boolOperand(value: boolean): IrOperand {
+  return {
+    kind: "const",
+    value: { kind: "bool", value },
+    type: irPrimitive("bool"),
+  };
+}
+
+function canUsePrimitiveEquality(left: IrType, right: IrType): boolean {
+  if (!irTypeEquals(left, right)) return false;
+  return (
+    left.kind === "primitive" &&
+    left.name !== "string" &&
+    left.name !== "void" &&
+    left.name !== "null"
+  );
 }
 
 function lowerUnary(
@@ -2813,11 +3257,12 @@ function lowerUnary(
 ): IrOperand {
   const target = nextTemp(context);
   const type = typeFromNodeInContext(context, expression);
+  const argument = lowerExpression(expression.argument, context);
   context.currentBlock.instructions.push({
     kind: "unary",
     target,
     operator: expression.operator,
-    argument: lowerExpression(expression.argument, context),
+    argument,
     type,
     span: expression.span,
   });
@@ -3989,6 +4434,10 @@ function typeMangleDisplay(type: IrType): string {
   }
   if (type.kind === "function") return "fn";
   return type.kind;
+}
+
+function displayIrType(type: IrType): string {
+  return typeMangleDisplay(type);
 }
 
 class DisplayTypeParser {
