@@ -80,6 +80,7 @@ interface GenericInstantiationInfo {
   kind: "Function" | "Method" | "Struct";
   name: string;
   ownerName?: string;
+  ownerTypeArgs?: string[];
   typeArgs: string[];
 }
 
@@ -378,16 +379,29 @@ export function lowerProgramToIr(
     );
     if (!methodInfo || (methodInfo.node.typeParams?.length ?? 0) === 0)
       continue;
-    const linkName = mangleName(
-      `${instantiation.ownerName}__${instantiation.name}`,
-      instantiation.typeArgs,
-    );
+    const ownerLinkName = instantiation.ownerTypeArgs?.length
+      ? mangleName(instantiation.ownerName, instantiation.ownerTypeArgs)
+      : methodInfo.ownerName;
+    const linkName = methodInstantiationLinkName(instantiation);
     if (loweredSpecializations.has(linkName)) continue;
     loweredSpecializations.add(linkName);
+    const ownerTypeSubstitutions =
+      instantiation.ownerTypeArgs?.length && methodInfo.ownerDecl === "struct"
+        ? ownerTypeSubstitutionsForMethod(
+            structsByName.get(instantiation.ownerName),
+            instantiation.ownerTypeArgs,
+            enumNames,
+          )
+        : new Map<string, IrType>();
+    const methodTypeSubstitutions = typeSubstitutionsFromParams(
+      methodInfo.node.typeParams,
+      instantiation.typeArgs,
+      enumNames,
+    );
     declarations.push(
       lowerMethod(
         methodInfo.node,
-        methodInfo.ownerName,
+        ownerLinkName,
         methodInfo.ownerDecl,
         checkResult,
         runtime,
@@ -400,10 +414,9 @@ export function lowerProgramToIr(
         session,
         {
           linkName,
-          typeSubstitutions: typeSubstitutionsFromParams(
-            methodInfo.node.typeParams,
-            instantiation.typeArgs,
-            new Set([...variantInfos.values()].map((v) => v.enumName)),
+          typeSubstitutions: mergeTypeSubstitutions(
+            ownerTypeSubstitutions,
+            methodTypeSubstitutions,
           ),
         },
       ),
@@ -2229,10 +2242,7 @@ function lowerInstanceMethodCall(
   const instantiation = context.checkResult.callInstantiations?.get(expression);
   const calleeName =
     instantiation?.kind === "Method" && instantiation.ownerName
-      ? mangleName(
-          `${instantiation.ownerName}__${instantiation.name}`,
-          instantiation.typeArgs,
-        )
+      ? methodInstantiationLinkName(instantiation)
       : linkName;
 
   const type = typeFromNodeInContext(context, expression);
@@ -2242,10 +2252,15 @@ function lowerInstanceMethodCall(
     lowerExpression(expression.callee.object, context),
     ...expression.args.map((arg) => lowerExpression(arg, context)),
   ];
+  const concreteCalleeType: IrType = {
+    kind: "function",
+    params: args.map((arg) => ({ type: arg.type, mutable: false })),
+    returnType: type,
+  };
   context.currentBlock.instructions.push({
     kind: "call",
     target: returnsVoid ? undefined : target,
-    callee: { kind: "function", name: calleeName, type: calleeType },
+    callee: { kind: "function", name: calleeName, type: concreteCalleeType },
     args,
     type,
     span: expression.span,
@@ -2970,6 +2985,21 @@ function typeSubstitutionsFromParams(
   return substitutions;
 }
 
+function ownerTypeSubstitutionsForMethod(
+  owner: StructDeclaration | undefined,
+  typeArgs: string[],
+  enumNames: Set<string>,
+): Map<string, IrType> {
+  return typeSubstitutionsFromParams(owner?.typeParams, typeArgs, enumNames);
+}
+
+function mergeTypeSubstitutions(
+  left: Map<string, IrType>,
+  right: Map<string, IrType>,
+): Map<string, IrType> {
+  return new Map([...left, ...right]);
+}
+
 function typeFromDisplay(source: string, enumNames: Set<string>): IrType {
   const parser = new DisplayTypeParser(source, enumNames);
   return normalizeSpecializedNamedTypes(parser.parse());
@@ -3372,4 +3402,18 @@ function methodKey(ownerName: string, methodName: string): string {
 
 function methodLinkName(ownerName: string, methodName: string): string {
   return `${ownerName}_${methodName}`;
+}
+
+function methodInstantiationLinkName(
+  instantiation: GenericInstantiationInfo,
+): string {
+  if (!instantiation.ownerName)
+    return mangleName(instantiation.name, instantiation.typeArgs);
+  const ownerName = instantiation.ownerTypeArgs?.length
+    ? mangleName(instantiation.ownerName, instantiation.ownerTypeArgs)
+    : instantiation.ownerName;
+  const base = instantiation.ownerTypeArgs?.length
+    ? methodLinkName(ownerName, instantiation.name)
+    : `${ownerName}__${instantiation.name}`;
+  return mangleName(base, instantiation.typeArgs);
 }

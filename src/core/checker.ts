@@ -209,6 +209,7 @@ export interface GenericInstantiation {
   kind: "Function" | "Method" | "Struct";
   name: string;
   ownerName?: string;
+  ownerTypeArgs?: string[];
   typeArgs: string[];
 }
 
@@ -1707,10 +1708,17 @@ export class Checker {
         isMethod && callable.target.receiver?.type.kind === "Named"
           ? callable.target.receiver.type.name
           : undefined;
+      const ownerTypeArgs =
+        isMethod && callable.target.receiver?.type.kind === "Named"
+          ? callable.target.receiver.type.typeArgs?.map((arg) =>
+              this.displayType(arg),
+            )
+          : undefined;
       const instantiation: GenericInstantiation = {
         kind: isMethod ? "Method" : "Function",
         name: callable.target.name,
         ownerName,
+        ownerTypeArgs,
         typeArgs: resolvedArgs,
       };
       this.instantiations.push(instantiation);

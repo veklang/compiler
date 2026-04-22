@@ -267,6 +267,8 @@ Rules:
   needed.
 - Non-generic methods on used generic struct owners lower once per concrete
   owner layout.
+- Generic methods on used generic struct owners combine the owner type
+  substitutions and method type substitutions in a single concrete function.
 - Mangled names must be deterministic.
 
 ## Traits

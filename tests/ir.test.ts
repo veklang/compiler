@@ -155,6 +155,42 @@ fn main() -> i32 {
     assert.ok(dump.includes("call @Box__User_get"));
   });
 
+  test("lowers generic method specialization on generic struct owner", () => {
+    const ir = irOk(`
+struct User {
+  id: i32;
+}
+
+struct Box<T> {
+  value: T;
+
+  fn pair<U>(self, other: U) -> (T, U) {
+    return (self.value, other);
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let box: Box<User> = Box { value: user };
+  let pair: (User, i32) = box.pair(7);
+  return pair.0.id;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(
+      dump.includes("struct struct.Box__User Box__User { value: User }"),
+    );
+    assert.ok(
+      dump.includes(
+        "fn fn.Box__User_pair__i32 Box__User_pair__i32(self: Box__User, other: i32) -> (User, i32)",
+      ),
+    );
+    assert.ok(!dump.includes("fn fn.Box_pair"));
+    assert.ok(!dump.includes("-> (T, U)"));
+    assert.ok(dump.includes("call @Box__User_pair__i32"));
+  });
+
   test("records runtime requirements for panic and strings", () => {
     const ir = irOk(`
 fn main() -> void {

@@ -160,6 +160,39 @@ fn main() -> i32 {
     assert.ok(!c.includes("__vek_fn_Box_get"));
   });
 
+  test("emits generic method specialization on generic struct owner", () => {
+    const c = emitOk(`
+struct User {
+  id: i32;
+}
+
+struct Box<T> {
+  value: T;
+
+  fn pair<U>(self, other: U) -> (T, U) {
+    return (self.value, other);
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let box: Box<User> = Box { value: user };
+  let pair: (User, i32) = box.pair(7);
+  return pair.0.id;
+}
+`);
+
+    assert.ok(c.includes("} __vek_struct_Box__User;"));
+    assert.ok(
+      c.includes(
+        "static __vek_tuple_User__i32 __vek_fn_Box__User_pair__i32(__vek_struct_Box__User v0, int32_t v1);",
+      ),
+    );
+    assert.ok(c.includes("__vek_fn_Box__User_pair__i32(v1, 7);"));
+    assert.ok(!c.includes("__vek_struct_T"));
+    assert.ok(!c.includes("__vek_fn_Box_pair"));
+  });
+
   test("lowers panic to the runtime helper", () => {
     const c = emitOk(`
 fn main() -> void {

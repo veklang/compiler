@@ -586,6 +586,47 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs generic method specialization on generic struct owner", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct User {
+  id: i32;
+}
+
+struct Box<T> {
+  value: T;
+
+  fn pair<U>(self, other: U) -> (T, U) {
+    return (self.value, other);
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let box: Box<User> = Box { value: user };
+  let pair: (User, i32) = box.pair(7);
+  return pair.0.id;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs string len, concat, and eq", () => {
     if (!hasMuslGcc()) return;
 

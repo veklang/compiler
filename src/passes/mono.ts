@@ -4,6 +4,7 @@ export interface MonoSpecialization {
   kind: "Function" | "Method" | "Struct";
   originalName: string;
   ownerName?: string;
+  ownerTypeArgs?: string[];
   mangledName: string;
   typeArgs: string[];
 }
@@ -21,12 +22,21 @@ export function monomorphize(checkResult: CheckResult): MonoResult {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const base = inst.ownerName ? `${inst.ownerName}__${inst.name}` : inst.name;
+    const ownerName =
+      inst.ownerName && inst.ownerTypeArgs?.length
+        ? mangleName(inst.ownerName, inst.ownerTypeArgs)
+        : inst.ownerName;
+    const base = ownerName
+      ? inst.ownerTypeArgs?.length
+        ? `${ownerName}_${inst.name}`
+        : `${ownerName}__${inst.name}`
+      : inst.name;
 
     specializations.push({
       kind: inst.kind,
       originalName: inst.name,
       ownerName: inst.ownerName,
+      ownerTypeArgs: inst.ownerTypeArgs,
       mangledName: mangleName(base, inst.typeArgs),
       typeArgs: inst.typeArgs,
     });
@@ -51,5 +61,5 @@ export function mangleType(typeStr: string): string {
 }
 
 function instKey(inst: GenericInstantiation): string {
-  return `${inst.kind}|${inst.name}|${inst.ownerName ?? ""}|${inst.typeArgs.join(",")}`;
+  return `${inst.kind}|${inst.name}|${inst.ownerName ?? ""}|${inst.ownerTypeArgs?.join(",") ?? ""}|${inst.typeArgs.join(",")}`;
 }

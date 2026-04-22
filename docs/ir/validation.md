@@ -121,10 +121,11 @@ The IR and C backend currently cover:
     method calls.
 15. Generic free function specializations, generic method specializations on
     concrete owner types, used generic struct layout specializations, and
-    non-generic methods on used generic struct owner specializations.
+    both non-generic and method-generic methods on used generic struct owner
+    specializations.
 
-Broader generic bodies, including method-generic functions on generic owner
-types, remain an active backend area.
+Associated types, higher-kinded generics, and generic enum layout
+specialization remain outside the current backend slice.
 
 ## Non-Negotiable Invariants
 

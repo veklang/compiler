@@ -189,6 +189,34 @@ fn main() -> void {
     assert.equal(spec!.mangledName, "Container__map__i32");
   });
 
+  test("generic method on generic owner records owner and method type args", () => {
+    const { specializations, checkDiagnostics } = mono(`
+struct Box<T> {
+  value: T;
+
+  fn pair<U>(self, other: U) -> (T, U) {
+    return (self.value, other);
+  }
+}
+fn main() -> void {
+  let b: Box<i32> = Box { value: 4 };
+  let _p: (i32, bool) = b.pair(true);
+}
+`);
+    assert.equal(
+      checkDiagnostics.filter((d) => d.severity === "error").length,
+      0,
+    );
+    const spec = specializations.find(
+      (s) => s.kind === "Method" && s.originalName === "pair",
+    );
+    assert.ok(spec, "expected Box<i32>.pair<bool> method specialization");
+    assert.equal(spec!.ownerName, "Box");
+    assert.deepEqual(spec!.ownerTypeArgs, ["i32"]);
+    assert.deepEqual(spec!.typeArgs, ["bool"]);
+    assert.equal(spec!.mangledName, "Box__i32_pair__bool");
+  });
+
   // --- non-generic code is not recorded ---
 
   test("non-generic calls produce no specializations", () => {
