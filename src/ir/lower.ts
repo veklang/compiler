@@ -51,6 +51,7 @@ import type {
   NamedParameter,
   Node,
   Parameter,
+  Pattern,
   Program,
   ReturnStatement,
   Statement,
@@ -1736,83 +1737,19 @@ function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
 
   const armBlocks = statement.arms.map(() => newBlock(context));
   const defaultBlock = newBlock(context);
+  const failureBlocks = statement.arms
+    .slice(0, -1)
+    .map(() => newBlock(context));
 
-  const matchType = matchOperand.type;
-  const matchedEnumName =
-    matchType.kind === "named" ? matchType.name : undefined;
-  const isEnum =
-    matchType.kind === "named" &&
-    (matchType.decl === "enum" ||
-      [...context.variantInfos.values()].some(
-        (v) => v.enumName === (matchType as { name: string }).name,
-      ));
-
-  if (isEnum) {
-    const tagTarget = nextTemp(context);
-    context.currentBlock.instructions.push({
-      kind: "get_tag",
-      target: tagTarget,
-      object: matchOperand,
-      type: irPrimitive("i32"),
-    });
-    const tagOperand: IrOperand = {
-      kind: "temp",
-      id: tagTarget,
-      type: irPrimitive("i32"),
-    };
-
-    const switchCases: { value: IrConst; target: IrBlockId }[] = [];
-    let defaultTarget = defaultBlock.id;
-
-    for (let i = 0; i < statement.arms.length; i++) {
-      const arm = statement.arms[i];
-      const armBlock = armBlocks[i];
-      const pattern = arm.pattern;
-
-      if (pattern.kind === "WildcardPattern") {
-        defaultTarget = armBlock.id;
-      } else if (pattern.kind === "IdentifierPattern") {
-        const variantInfo = findVariantInfo(
-          context.variantInfos,
-          pattern.name.name,
-          matchedEnumName,
-        );
-        if (variantInfo) {
-          switchCases.push({
-            value: { kind: "int", value: String(variantInfo.tag) },
-            target: armBlock.id,
-          });
-        } else {
-          defaultTarget = armBlock.id;
-        }
-      } else if (pattern.kind === "EnumPattern") {
-        const variantInfo = findVariantInfo(
-          context.variantInfos,
-          pattern.name.name,
-          matchedEnumName,
-        );
-        if (variantInfo) {
-          switchCases.push({
-            value: { kind: "int", value: String(variantInfo.tag) },
-            target: armBlock.id,
-          });
-        }
-      }
-    }
-
-    context.currentBlock.terminator = {
-      kind: "switch",
-      value: tagOperand,
-      cases: switchCases,
-      defaultTarget,
-      span: statement.span,
-    };
-  } else {
-    lowerNonEnumMatch(
-      statement,
+  for (let i = 0; i < statement.arms.length; i++) {
+    if (i > 0) switchBlock(context, failureBlocks[i - 1]);
+    const failureTarget =
+      i + 1 < statement.arms.length ? failureBlocks[i].id : defaultBlock.id;
+    lowerPatternBranch(
+      statement.arms[i].pattern,
       matchOperand,
-      armBlocks,
-      defaultBlock,
+      armBlocks[i].id,
+      failureTarget,
       context,
     );
   }
@@ -1837,18 +1774,15 @@ function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
 
   switchBlock(context, defaultBlock);
   if (!isTerminated(context)) {
-    if (isEnum) {
-      context.currentBlock.terminator = {
-        kind: "unreachable",
-        span: statement.span,
-      };
-    } else {
-      context.currentBlock.terminator = {
-        kind: "branch",
-        target: joinBlock.id,
-      };
-      branchesToJoin = true;
-    }
+    context.currentBlock.terminator = branchesToJoin
+      ? {
+          kind: "branch",
+          target: joinBlock.id,
+        }
+      : {
+          kind: "unreachable",
+          span: statement.span,
+        };
   }
 
   if (!branchesToJoin) {
@@ -1881,99 +1815,20 @@ function lowerMatchExpression(
   const armBlocks = expression.arms.map(() => newBlock(context));
   const defaultBlock = newBlock(context);
 
-  const matchType = matchOperand.type;
-  const matchedEnumName =
-    matchType.kind === "named" ? matchType.name : undefined;
-  const isEnum =
-    matchType.kind === "named" &&
-    (matchType.decl === "enum" ||
-      [...context.variantInfos.values()].some(
-        (v) => v.enumName === (matchType as { name: string }).name,
-      ));
-
-  if (isEnum) {
-    const tagTarget = nextTemp(context);
-    context.currentBlock.instructions.push({
-      kind: "get_tag",
-      target: tagTarget,
-      object: matchOperand,
-      type: irPrimitive("i32"),
-    });
-    const tagOperand: IrOperand = {
-      kind: "temp",
-      id: tagTarget,
-      type: irPrimitive("i32"),
-    };
-    const switchCases: { value: IrConst; target: IrBlockId }[] = [];
-    let defaultTarget = defaultBlock.id;
-
-    for (let i = 0; i < expression.arms.length; i++) {
-      const arm = expression.arms[i];
-      const armBlock = armBlocks[i];
-      const pattern = arm.pattern;
-      if (pattern.kind === "WildcardPattern") {
-        defaultTarget = armBlock.id;
-      } else if (pattern.kind === "IdentifierPattern") {
-        const variantInfo = findVariantInfo(
-          context.variantInfos,
-          pattern.name.name,
-          matchedEnumName,
-        );
-        if (variantInfo) {
-          switchCases.push({
-            value: { kind: "int", value: String(variantInfo.tag) },
-            target: armBlock.id,
-          });
-        } else {
-          defaultTarget = armBlock.id;
-        }
-      } else if (pattern.kind === "EnumPattern") {
-        const variantInfo = findVariantInfo(
-          context.variantInfos,
-          pattern.name.name,
-          matchedEnumName,
-        );
-        if (variantInfo) {
-          switchCases.push({
-            value: { kind: "int", value: String(variantInfo.tag) },
-            target: armBlock.id,
-          });
-        }
-      }
-    }
-    context.currentBlock.terminator = {
-      kind: "switch",
-      value: tagOperand,
-      cases: switchCases,
-      defaultTarget,
-      span: expression.span,
-    };
-  } else {
-    let defaultTarget = defaultBlock.id;
-    const switchCases: { value: IrConst; target: IrBlockId }[] = [];
-    for (let i = 0; i < expression.arms.length; i++) {
-      const arm = expression.arms[i];
-      const armBlock = armBlocks[i];
-      const pattern = arm.pattern;
-      if (
-        pattern.kind === "WildcardPattern" ||
-        pattern.kind === "IdentifierPattern"
-      ) {
-        defaultTarget = armBlock.id;
-      } else if (pattern.kind === "LiteralPattern") {
-        switchCases.push({
-          value: constFromLiteral(pattern.literal),
-          target: armBlock.id,
-        });
-      }
-    }
-    context.currentBlock.terminator = {
-      kind: "switch",
-      value: matchOperand,
-      cases: switchCases,
-      defaultTarget,
-      span: expression.span,
-    };
+  const failureBlocks = expression.arms
+    .slice(0, -1)
+    .map(() => newBlock(context));
+  for (let i = 0; i < expression.arms.length; i++) {
+    if (i > 0) switchBlock(context, failureBlocks[i - 1]);
+    const failureTarget =
+      i + 1 < expression.arms.length ? failureBlocks[i].id : defaultBlock.id;
+    lowerPatternBranch(
+      expression.arms[i].pattern,
+      matchOperand,
+      armBlocks[i].id,
+      failureTarget,
+      context,
+    );
   }
 
   for (let i = 0; i < expression.arms.length; i++) {
@@ -1996,9 +1851,10 @@ function lowerMatchExpression(
 
   switchBlock(context, defaultBlock);
   if (!isTerminated(context)) {
-    context.currentBlock.terminator = isEnum
-      ? { kind: "unreachable", span: expression.span }
-      : { kind: "branch", target: joinBlock.id };
+    context.currentBlock.terminator = {
+      kind: "unreachable",
+      span: expression.span,
+    };
   }
 
   switchBlock(context, joinBlock);
@@ -2010,108 +1866,7 @@ function lowerMatchExpressionArmBindings(
   matchOperand: IrOperand,
   context: LowerContext,
 ) {
-  const pattern = arm.pattern;
-  const matchedEnumName =
-    matchOperand.type.kind === "named" ? matchOperand.type.name : undefined;
-  if (
-    pattern.kind === "IdentifierPattern" &&
-    !findVariantInfo(context.variantInfos, pattern.name.name, matchedEnumName)
-  ) {
-    const local = declareLocal(
-      context,
-      pattern.name.name,
-      matchOperand.type,
-      true,
-      pattern.span,
-    );
-    retainIfBorrowedHeap(matchOperand, context, pattern.span);
-    context.currentBlock.instructions.push({
-      kind: "assign",
-      target: local.id,
-      value: matchOperand,
-      span: pattern.span,
-    });
-    markLocalOwns(local.id, matchOperand, context);
-  } else if (pattern.kind === "EnumPattern") {
-    const variantInfo = findVariantInfo(
-      context.variantInfos,
-      pattern.name.name,
-      matchedEnumName,
-    );
-    if (variantInfo) {
-      for (let i = 0; i < pattern.args.length; i++) {
-        const arg = pattern.args[i];
-        if (arg.kind !== "IdentifierPattern") continue;
-        const payloadType = variantInfo.payloadTypes[i] ?? {
-          kind: "unknown" as const,
-        };
-        const tempId = nextTemp(context);
-        context.currentBlock.instructions.push({
-          kind: "get_enum_payload",
-          target: tempId,
-          object: matchOperand,
-          variant: variantInfo.variantName,
-          index: i,
-          type: payloadType,
-          span: arg.span,
-        });
-        const local = declareLocal(
-          context,
-          arg.name.name,
-          payloadType,
-          true,
-          arg.span,
-        );
-        const value: IrOperand = {
-          kind: "temp",
-          id: tempId,
-          type: payloadType,
-        };
-        retainIfBorrowedHeap(value, context, arg.span);
-        context.currentBlock.instructions.push({
-          kind: "assign",
-          target: local.id,
-          value,
-          span: arg.span,
-        });
-        markLocalOwns(local.id, value, context);
-      }
-    }
-  }
-}
-
-function lowerNonEnumMatch(
-  statement: MatchStatement,
-  matchOperand: IrOperand,
-  armBlocks: IrBlock[],
-  defaultBlock: IrBlock,
-  context: LowerContext,
-) {
-  let defaultTarget = defaultBlock.id;
-  const switchCases: { value: IrConst; target: IrBlockId }[] = [];
-
-  for (let i = 0; i < statement.arms.length; i++) {
-    const arm = statement.arms[i];
-    const armBlock = armBlocks[i];
-    const pattern = arm.pattern;
-
-    if (pattern.kind === "WildcardPattern") {
-      defaultTarget = armBlock.id;
-    } else if (pattern.kind === "IdentifierPattern") {
-      defaultTarget = armBlock.id;
-    } else if (pattern.kind === "LiteralPattern") {
-      const c = constFromLiteral(pattern.literal);
-      switchCases.push({ value: c, target: armBlock.id });
-    }
-  }
-
-  context.currentBlock.terminator = {
-    kind: "switch",
-    value: matchOperand,
-    cases: switchCases,
-    defaultTarget,
-    span: statement.span,
-  };
+  lowerPatternBindings(arm.pattern, matchOperand, context);
 }
 
 function lowerMatchArmBindings(
@@ -2119,75 +1874,517 @@ function lowerMatchArmBindings(
   matchOperand: IrOperand,
   context: LowerContext,
 ) {
-  const pattern = arm.pattern;
-  const matchedEnumName =
-    matchOperand.type.kind === "named" ? matchOperand.type.name : undefined;
+  lowerPatternBindings(arm.pattern, matchOperand, context);
+}
 
-  if (
-    pattern.kind === "IdentifierPattern" &&
-    !findVariantInfo(context.variantInfos, pattern.name.name, matchedEnumName)
-  ) {
-    const local = declareLocal(
-      context,
-      pattern.name.name,
-      matchOperand.type,
-      true,
-      pattern.span,
-    );
-    retainIfBorrowedHeap(matchOperand, context, pattern.span);
-    context.currentBlock.instructions.push({
-      kind: "assign",
-      target: local.id,
-      value: matchOperand,
-      span: pattern.span,
-    });
-    markLocalOwns(local.id, matchOperand, context);
-  } else if (pattern.kind === "EnumPattern") {
-    const variantInfo = findVariantInfo(
-      context.variantInfos,
-      pattern.name.name,
-      matchedEnumName,
-    );
-    if (variantInfo) {
-      for (let i = 0; i < pattern.args.length; i++) {
-        const arg = pattern.args[i];
-        if (arg.kind !== "IdentifierPattern") continue;
-        const payloadType = variantInfo.payloadTypes[i] ?? {
-          kind: "unknown" as const,
-        };
-        const tempId = nextTemp(context);
-        context.currentBlock.instructions.push({
-          kind: "get_enum_payload",
-          target: tempId,
-          object: matchOperand,
-          variant: variantInfo.variantName,
-          index: i,
-          type: payloadType,
-          span: arg.span,
-        });
-        const local = declareLocal(
+function lowerPatternBranch(
+  pattern: Pattern,
+  matchOperand: IrOperand,
+  successTarget: IrBlockId,
+  failureTarget: IrBlockId,
+  context: LowerContext,
+) {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+      context.currentBlock.terminator = {
+        kind: "branch",
+        target: successTarget,
+      };
+      return;
+    case "IdentifierPattern": {
+      if (
+        findUnitVariantInfo(
+          context.variantInfos,
+          pattern.name.name,
+          matchedEnumNameForOperand(matchOperand),
+        )
+      ) {
+        lowerEnumPatternBranch(
+          pattern.name.name,
+          [],
+          matchOperand,
+          successTarget,
+          failureTarget,
           context,
-          arg.name.name,
-          payloadType,
-          true,
-          arg.span,
+          pattern.span,
         );
-        const value: IrOperand = {
-          kind: "temp",
-          id: tempId,
-          type: payloadType,
-        };
-        retainIfBorrowedHeap(value, context, arg.span);
-        context.currentBlock.instructions.push({
-          kind: "assign",
-          target: local.id,
-          value,
-          span: arg.span,
-        });
-        markLocalOwns(local.id, value, context);
+        return;
       }
+      context.currentBlock.terminator = {
+        kind: "branch",
+        target: successTarget,
+      };
+      return;
+    }
+    case "LiteralPattern":
+      lowerLiteralPatternBranch(
+        pattern.literal,
+        matchOperand,
+        successTarget,
+        failureTarget,
+        context,
+      );
+      return;
+    case "TuplePattern":
+      lowerTuplePatternBranch(
+        pattern.elements,
+        matchOperand,
+        successTarget,
+        failureTarget,
+        context,
+      );
+      return;
+    case "EnumPattern":
+      lowerEnumPatternBranch(
+        pattern.name.name,
+        pattern.args,
+        matchOperand,
+        successTarget,
+        failureTarget,
+        context,
+        pattern.span,
+      );
+      return;
+  }
+}
+
+function lowerLiteralPatternBranch(
+  literal: LiteralExpression,
+  matchOperand: IrOperand,
+  successTarget: IrBlockId,
+  failureTarget: IrBlockId,
+  context: LowerContext,
+) {
+  if (literal.literalType === "Null") {
+    if (matchOperand.type.kind === "nullable") {
+      const isNullTarget = nextTemp(context);
+      context.currentBlock.instructions.push({
+        kind: "is_null",
+        target: isNullTarget,
+        value: matchOperand,
+        type: irPrimitive("bool"),
+        span: literal.span,
+      });
+      context.currentBlock.terminator = {
+        kind: "cond_branch",
+        condition: {
+          kind: "temp",
+          id: isNullTarget,
+          type: irPrimitive("bool"),
+        },
+        thenTarget: successTarget,
+        elseTarget: failureTarget,
+        span: literal.span,
+      };
+      return;
     }
   }
+
+  const comparedOperand =
+    matchOperand.type.kind === "nullable" && literal.literalType !== "Null"
+      ? unwrapNullableOperand(matchOperand, context, literal.span)
+      : matchOperand;
+
+  if (literal.literalType === "String" || isStringType(comparedOperand.type)) {
+    const eqTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "string_eq",
+      target: eqTarget,
+      left: comparedOperand,
+      right: lowerLiteral(literal),
+      type: irPrimitive("bool"),
+      span: literal.span,
+    });
+    context.currentBlock.terminator = {
+      kind: "cond_branch",
+      condition: {
+        kind: "temp",
+        id: eqTarget,
+        type: irPrimitive("bool"),
+      },
+      thenTarget: successTarget,
+      elseTarget: failureTarget,
+      span: literal.span,
+    };
+    context.runtime.strings = true;
+    return;
+  }
+
+  const cmpTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "binary",
+    target: cmpTarget,
+    operator: "==",
+    left: comparedOperand,
+    right: lowerLiteral(literal),
+    type: irPrimitive("bool"),
+    span: literal.span,
+  });
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: {
+      kind: "temp",
+      id: cmpTarget,
+      type: irPrimitive("bool"),
+    },
+    thenTarget: successTarget,
+    elseTarget: failureTarget,
+    span: literal.span,
+  };
+}
+
+function lowerTuplePatternBranch(
+  elements: Pattern[],
+  matchOperand: IrOperand,
+  successTarget: IrBlockId,
+  failureTarget: IrBlockId,
+  context: LowerContext,
+) {
+  if (matchOperand.type.kind !== "tuple") {
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: failureTarget,
+    };
+    return;
+  }
+
+  const tupleType = matchOperand.type;
+  const fieldOperands = elements.map((element, index) =>
+    extractTupleFieldOperand(
+      matchOperand,
+      index,
+      tupleType.elements[index] ?? { kind: "unknown" },
+      element.span,
+      context,
+    ),
+  );
+
+  lowerPatternSequence(
+    elements,
+    fieldOperands,
+    successTarget,
+    failureTarget,
+    context,
+  );
+}
+
+function lowerEnumPatternBranch(
+  variantName: string,
+  args: Pattern[],
+  matchOperand: IrOperand,
+  successTarget: IrBlockId,
+  failureTarget: IrBlockId,
+  context: LowerContext,
+  span: Node["span"],
+) {
+  const emit = (enumOperand: IrOperand) => {
+    const matchedEnumName = matchedEnumNameForOperand(enumOperand);
+    const variantInfo = findVariantInfo(
+      context.variantInfos,
+      variantName,
+      matchedEnumName,
+    );
+    if (!variantInfo) {
+      context.currentBlock.terminator = {
+        kind: "branch",
+        target: failureTarget,
+      };
+      return;
+    }
+
+    const tagTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "get_tag",
+      target: tagTarget,
+      object: enumOperand,
+      type: irPrimitive("i32"),
+    });
+    const cmpTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "binary",
+      target: cmpTarget,
+      operator: "==",
+      left: {
+        kind: "temp",
+        id: tagTarget,
+        type: irPrimitive("i32"),
+      },
+      right: {
+        kind: "const",
+        value: { kind: "int", value: String(variantInfo.tag) },
+        type: irPrimitive("i32"),
+      },
+      type: irPrimitive("bool"),
+      span,
+    });
+
+    const payloadBlock = args.length > 0 ? newBlock(context) : null;
+    context.currentBlock.terminator = {
+      kind: "cond_branch",
+      condition: { kind: "temp", id: cmpTarget, type: irPrimitive("bool") },
+      thenTarget: payloadBlock?.id ?? successTarget,
+      elseTarget: failureTarget,
+      span,
+    };
+
+    if (!payloadBlock) return;
+
+    switchBlock(context, payloadBlock);
+    const payloadOperands = args.map((arg, index) =>
+      extractEnumPayloadOperand(
+        enumOperand,
+        variantInfo,
+        index,
+        arg.span,
+        context,
+      ),
+    );
+    lowerPatternSequence(
+      args,
+      payloadOperands,
+      successTarget,
+      failureTarget,
+      context,
+    );
+  };
+
+  if (matchOperand.type.kind === "nullable") {
+    const nonNullBlock = newBlock(context);
+    const isNullTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "is_null",
+      target: isNullTarget,
+      value: matchOperand,
+      type: irPrimitive("bool"),
+      span,
+    });
+    context.currentBlock.terminator = {
+      kind: "cond_branch",
+      condition: {
+        kind: "temp",
+        id: isNullTarget,
+        type: irPrimitive("bool"),
+      },
+      thenTarget: failureTarget,
+      elseTarget: nonNullBlock.id,
+      span,
+    };
+    switchBlock(context, nonNullBlock);
+    emit(unwrapNullableOperand(matchOperand, context, span));
+    return;
+  }
+
+  emit(matchOperand);
+}
+
+function lowerPatternSequence(
+  patterns: Pattern[],
+  values: IrOperand[],
+  successTarget: IrBlockId,
+  failureTarget: IrBlockId,
+  context: LowerContext,
+) {
+  if (patterns.length === 0) {
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: successTarget,
+    };
+    return;
+  }
+
+  if (patterns.length === 1) {
+    lowerPatternBranch(
+      patterns[0],
+      values[0] ?? {
+        kind: "const",
+        value: { kind: "void" },
+        type: irPrimitive("void"),
+      },
+      successTarget,
+      failureTarget,
+      context,
+    );
+    return;
+  }
+
+  const nextBlock = newBlock(context);
+  lowerPatternBranch(
+    patterns[0],
+    values[0] ?? {
+      kind: "const",
+      value: { kind: "void" },
+      type: irPrimitive("void"),
+    },
+    nextBlock.id,
+    failureTarget,
+    context,
+  );
+  switchBlock(context, nextBlock);
+  lowerPatternSequence(
+    patterns.slice(1),
+    values.slice(1),
+    successTarget,
+    failureTarget,
+    context,
+  );
+}
+
+function lowerPatternBindings(
+  pattern: Pattern,
+  matchOperand: IrOperand,
+  context: LowerContext,
+) {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+    case "LiteralPattern":
+      return;
+    case "IdentifierPattern": {
+      const variantInfo = findUnitVariantInfo(
+        context.variantInfos,
+        pattern.name.name,
+        matchedEnumNameForOperand(matchOperand),
+      );
+      if (variantInfo) return;
+      const local = declareLocal(
+        context,
+        pattern.name.name,
+        matchOperand.type,
+        true,
+        pattern.span,
+      );
+      retainIfBorrowedHeap(matchOperand, context, pattern.span);
+      context.currentBlock.instructions.push({
+        kind: "assign",
+        target: local.id,
+        value: matchOperand,
+        span: pattern.span,
+      });
+      markLocalOwns(local.id, matchOperand, context);
+      return;
+    }
+    case "TuplePattern":
+      if (matchOperand.type.kind !== "tuple") return;
+      {
+        const tupleType = matchOperand.type;
+        for (let i = 0; i < pattern.elements.length; i++) {
+          lowerPatternBindings(
+            pattern.elements[i],
+            extractTupleFieldOperand(
+              matchOperand,
+              i,
+              tupleType.elements[i] ?? { kind: "unknown" },
+              pattern.elements[i].span,
+              context,
+            ),
+            context,
+          );
+        }
+      }
+      return;
+    case "EnumPattern": {
+      const enumOperand =
+        matchOperand.type.kind === "nullable"
+          ? unwrapNullableOperand(matchOperand, context, pattern.span)
+          : matchOperand;
+      const variantInfo = findVariantInfo(
+        context.variantInfos,
+        pattern.name.name,
+        matchedEnumNameForOperand(enumOperand),
+      );
+      if (!variantInfo) return;
+      for (let i = 0; i < pattern.args.length; i++) {
+        lowerPatternBindings(
+          pattern.args[i],
+          extractEnumPayloadOperand(
+            enumOperand,
+            variantInfo,
+            i,
+            pattern.args[i].span,
+            context,
+          ),
+          context,
+        );
+      }
+      return;
+    }
+  }
+}
+
+function unwrapNullableOperand(
+  operand: IrOperand,
+  context: LowerContext,
+  span: Node["span"],
+): IrOperand {
+  if (operand.type.kind !== "nullable") return operand;
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "unwrap_nullable",
+    target,
+    value: operand,
+    type: operand.type.base,
+    span,
+  });
+  return { kind: "temp", id: target, type: operand.type.base };
+}
+
+function extractTupleFieldOperand(
+  operand: IrOperand,
+  index: number,
+  fieldType: IrType,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "get_tuple_field",
+    target,
+    object: operand,
+    index,
+    type: fieldType,
+    span,
+  });
+  return { kind: "temp", id: target, type: fieldType };
+}
+
+function extractEnumPayloadOperand(
+  operand: IrOperand,
+  variantInfo: VariantInfo,
+  index: number,
+  span: Node["span"],
+  context: LowerContext,
+): IrOperand {
+  const payloadType = variantInfo.payloadTypes[index] ?? { kind: "unknown" };
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "get_enum_payload",
+    target,
+    object: operand,
+    variant: variantInfo.variantName,
+    index,
+    type: payloadType,
+    span,
+  });
+  return { kind: "temp", id: target, type: payloadType };
+}
+
+function matchedEnumNameForOperand(operand: IrOperand): string | undefined {
+  const type =
+    operand.type.kind === "nullable" ? operand.type.base : operand.type;
+  return type.kind === "named" && type.decl === "enum" ? type.name : undefined;
+}
+
+function isStringType(type: IrType): boolean {
+  return type.kind === "primitive" && type.name === "string";
+}
+
+function findUnitVariantInfo(
+  variantInfos: Map<string, VariantInfo>,
+  variantName: string,
+  enumName?: string,
+): VariantInfo | undefined {
+  const variantInfo = findVariantInfo(variantInfos, variantName, enumName);
+  if (!variantInfo || variantInfo.payloadTypes.length > 0) return undefined;
+  return variantInfo;
 }
 
 function lowerExpression(

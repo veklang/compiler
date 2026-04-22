@@ -807,6 +807,49 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs string, nullable, and tuple match patterns", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let text: string = "hello";
+  let pair: (i32, string) = (1, text);
+  let maybe: i32? = null;
+
+  match text {
+    "hello" => {}
+    _ => { return 1; }
+  }
+
+  match maybe {
+    null => {}
+    _ => { return 2; }
+  }
+
+  match pair {
+    (1, value) => { return value.len; }
+    _ => { return 3; }
+  }
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 5);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs string len, concat, and eq", () => {
     if (!hasMuslGcc()) return;
 

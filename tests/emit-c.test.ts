@@ -545,7 +545,7 @@ fn make(r: i32) -> Shape {
     assert.ok(c.includes(".data.Circle._0 ="));
   });
 
-  test("emits match on enum as switch with get_tag", () => {
+  test("emits match on enum as branch chain with get_tag", () => {
     const c = emitOk(`
 enum Color {
   Red;
@@ -562,9 +562,8 @@ fn describe(c: Color) -> void {
 `);
 
     assert.ok(c.includes(".tag;"));
-    assert.ok(c.includes("switch ("));
-    assert.ok(c.includes("case 0:"));
-    assert.ok(c.includes("case 1:"));
+    assert.ok(c.includes("if ("));
+    assert.ok(!c.includes("switch ("));
   });
 
   test("emits payload binding via get_enum_payload", () => {

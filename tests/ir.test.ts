@@ -745,7 +745,7 @@ fn make(r: i32) -> Shape {
     assert.ok(dump.includes("construct_enum enum.Shape::Circle[0]"));
   });
 
-  test("lowers match on enum to switch + arm blocks", () => {
+  test("lowers match on enum to branch chain + arm blocks", () => {
     const ir = irOk(`
 enum Color {
   Red;
@@ -765,7 +765,8 @@ fn describe(c: Color) -> void {
     assert.ok(fn?.kind === "function");
     const dump = dumpIr(ir);
     assert.ok(dump.includes("get_tag"));
-    assert.ok(dump.includes("switch"));
+    assert.ok(dump.includes("cond_branch"));
+    assert.ok(!dump.includes("switch"));
   });
 
   test("lowers match arm payload binding to get_enum_payload", () => {
@@ -786,6 +787,37 @@ fn area(s: Shape) -> i32 {
     const dump = dumpIr(ir);
     assert.ok(dump.includes("get_enum_payload"));
     assert.ok(dump.includes("Circle"));
+  });
+
+  test("lowers string, nullable, and tuple match patterns", () => {
+    const ir = irOk(`
+fn main() -> i32 {
+  let text: string = "hello";
+  let pair: (i32, string) = (1, text);
+  let maybe: i32? = null;
+
+  match text {
+    "hello" => { let _a: i32 = 0; }
+    _ => { let _b: i32 = 1; }
+  }
+
+  match maybe {
+    null => { let _c: i32 = 2; }
+    _ => { let _d: i32 = 3; }
+  }
+
+  match pair {
+    (1, value) => { return value.len; }
+    _ => { return 4; }
+  }
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("string_eq"));
+    assert.ok(dump.includes("is_null"));
+    assert.ok(dump.includes("get_tuple_field"));
+    assert.ok(dump.includes("cond_branch"));
   });
 
   test("lowers named function values and indirect calls", () => {
