@@ -193,6 +193,51 @@ fn main() -> i32 {
     assert.ok(!c.includes("__vek_fn_Box_pair"));
   });
 
+  test("emits generic enum specialization and generic enum methods", () => {
+    const c = emitOk(`
+struct User {
+  id: i32;
+}
+
+enum Option<T> {
+  Some(T);
+  None;
+
+  fn value_or(self, fallback: T) -> T {
+    match self {
+      Some(value) => { return value; }
+      None => { return fallback; }
+    }
+  }
+
+  fn pair<U>(self, other: U) -> (Self, U) {
+    return (self, other);
+  }
+}
+
+fn main() -> i32 {
+  let a: Option<i32> = Some(39);
+  let b: Option<i32> = None;
+  let user: User = User { id: 2 };
+  let maybe_user: Option<User> = Some(user);
+  let pair: (Option<i32>, bool) = a.pair(true);
+  if pair.1 {
+    let got: User = maybe_user.value_or(User { id: 0 });
+    return a.value_or(0) + b.value_or(1) + got.id;
+  }
+  return 0;
+}
+`);
+
+    assert.ok(c.includes("} __vek_enum_Option__i32;"));
+    assert.ok(c.includes("} __vek_enum_Option__User;"));
+    assert.ok(!c.includes("__vek_enum_Option "));
+    assert.ok(c.includes("__vek_fn_Option__i32_value_or"));
+    assert.ok(c.includes("__vek_fn_Option__User_value_or"));
+    assert.ok(c.includes("__vek_fn_Option__i32_pair__bool"));
+    assert.ok(c.includes("__vek_fn_Option__i32_pair__bool(v0, true);"));
+  });
+
   test("lowers panic to the runtime helper", () => {
     const c = emitOk(`
 fn main() -> void {

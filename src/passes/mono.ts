@@ -1,7 +1,7 @@
 import type { CheckResult, GenericInstantiation } from "@/core/checker";
 
 export interface MonoSpecialization {
-  kind: "Function" | "Method" | "Struct";
+  kind: "Function" | "Method" | "Struct" | "Enum";
   originalName: string;
   ownerName?: string;
   ownerTypeArgs?: string[];

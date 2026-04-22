@@ -207,7 +207,7 @@ interface TypeSymbol extends BaseSymbol {
 }
 
 export interface GenericInstantiation {
-  kind: "Function" | "Method" | "Struct";
+  kind: "Function" | "Method" | "Struct" | "Enum";
   name: string;
   ownerName?: string;
   ownerTypeArgs?: string[];
@@ -1341,7 +1341,7 @@ export class Checker {
         type = this.checkLiteral(node, expected);
         break;
       case "IdentifierExpression":
-        type = this.checkIdentifier(node, scope);
+        type = this.checkIdentifier(node, scope, expected);
         break;
       case "BinaryExpression":
         type = this.checkBinary(node, scope, expected);
@@ -1439,7 +1439,11 @@ export class Checker {
     return BigInt(Number(name.slice(1)));
   }
 
-  private checkIdentifier(node: IdentifierExpression, scope: Scope): Type {
+  private checkIdentifier(
+    node: IdentifierExpression,
+    scope: Scope,
+    expected?: Type,
+  ): Type {
     const override = this.lookupOverride(node.name, scope);
     if (override) return override;
 
@@ -1462,6 +1466,17 @@ export class Checker {
         node.span,
         "E2813",
       );
+    }
+
+    if (
+      symbol.kind === "Variant" &&
+      symbol.node.kind === "EnumVariant" &&
+      ((symbol.node as EnumVariant).payload?.length ?? 0) === 0 &&
+      symbol.type.kind === "Named" &&
+      expected?.kind === "Named" &&
+      expected.symbol === symbol.type.symbol
+    ) {
+      return expected;
     }
 
     return symbol.type;
@@ -1790,6 +1805,7 @@ export class Checker {
         bindings.has(tp.name) ? this.displayType(bindings.get(tp.name)!) : "?",
       );
       const isMethod = callable.target.kind === "method";
+      const isVariant = callable.target.kind === "variant";
       const ownerName =
         isMethod && callable.target.receiver?.type.kind === "Named"
           ? callable.target.receiver.type.name
@@ -1801,8 +1817,11 @@ export class Checker {
             )
           : undefined;
       const instantiation: GenericInstantiation = {
-        kind: isMethod ? "Method" : "Function",
-        name: callable.target.name,
+        kind: isMethod ? "Method" : isVariant ? "Enum" : "Function",
+        name:
+          isVariant && callable.returnType.kind === "Named"
+            ? callable.returnType.name
+            : callable.target.name,
         ownerName,
         ownerTypeArgs,
         typeArgs: resolvedArgs,
@@ -2800,6 +2819,16 @@ export class Checker {
     }
 
     const named = this.namedType(node.name.name, symbol, typeArgs);
+    if (
+      typeArgs?.length &&
+      (symbol.kind === "Struct" || symbol.kind === "Enum")
+    ) {
+      this.instantiations.push({
+        kind: symbol.kind,
+        name: symbol.name,
+        typeArgs: typeArgs.map((type) => this.displayType(type)),
+      });
+    }
     if (typeArgs) {
       const ownerScope = this.createTypeScope(symbol, scope);
       const bounds = this.resolveTypeParams(

@@ -160,6 +160,33 @@ fn main() -> void {
     assert.ok(boolSpec, "expected Box<bool>");
   });
 
+  test("generic enum variants produce enum specializations", () => {
+    const { specializations, checkDiagnostics } = mono(`
+enum Option<T> {
+  Some(T);
+  None;
+}
+fn main() -> void {
+  let _a: Option<i32> = Some(1);
+  let _b: Option<bool> = Some(true);
+}
+`);
+    assert.equal(
+      checkDiagnostics.filter((d) => d.severity === "error").length,
+      0,
+    );
+    const i32 = specializations.find(
+      (s) => s.kind === "Enum" && s.typeArgs[0] === "i32",
+    );
+    const boolSpec = specializations.find(
+      (s) => s.kind === "Enum" && s.typeArgs[0] === "bool",
+    );
+    assert.ok(i32, "expected Option<i32>");
+    assert.ok(boolSpec, "expected Option<bool>");
+    assert.equal(i32!.mangledName, "Option__i32");
+    assert.equal(boolSpec!.mangledName, "Option__bool");
+  });
+
   // --- method instantiations ---
 
   test("generic method call produces a Method specialization", () => {
@@ -215,6 +242,35 @@ fn main() -> void {
     assert.deepEqual(spec!.ownerTypeArgs, ["i32"]);
     assert.deepEqual(spec!.typeArgs, ["bool"]);
     assert.equal(spec!.mangledName, "Box__i32_pair__bool");
+  });
+
+  test("generic method on generic enum owner records owner and method type args", () => {
+    const { specializations, checkDiagnostics } = mono(`
+enum Option<T> {
+  Some(T);
+  None;
+
+  fn pair<U>(self, other: U) -> (Self, U) {
+    return (self, other);
+  }
+}
+fn main() -> void {
+  let value: Option<i32> = Some(4);
+  let _p: (Option<i32>, bool) = value.pair(true);
+}
+`);
+    assert.equal(
+      checkDiagnostics.filter((d) => d.severity === "error").length,
+      0,
+    );
+    const spec = specializations.find(
+      (s) => s.kind === "Method" && s.originalName === "pair",
+    );
+    assert.ok(spec, "expected Option<i32>.pair<bool> method specialization");
+    assert.equal(spec!.ownerName, "Option");
+    assert.deepEqual(spec!.ownerTypeArgs, ["i32"]);
+    assert.deepEqual(spec!.typeArgs, ["bool"]);
+    assert.equal(spec!.mangledName, "Option__i32_pair__bool");
   });
 
   // --- non-generic code is not recorded ---

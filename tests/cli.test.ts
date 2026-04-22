@@ -711,6 +711,61 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs generic enum specializations and methods", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct User {
+  id: i32;
+}
+
+enum Option<T> {
+  Some(T);
+  None;
+
+  fn value_or(self, fallback: T) -> T {
+    match self {
+      Some(value) => { return value; }
+      None => { return fallback; }
+    }
+  }
+
+  fn pair<U>(self, other: U) -> (Self, U) {
+    return (self, other);
+  }
+}
+
+fn main() -> i32 {
+  let a: Option<i32> = Some(39);
+  let b: Option<i32> = None;
+  let user: User = User { id: 2 };
+  let maybe_user: Option<User> = Some(user);
+  let pair: (Option<i32>, bool) = a.pair(true);
+  if pair.1 {
+    let got: User = maybe_user.value_or(User { id: 0 });
+    return a.value_or(0) + b.value_or(1) + got.id;
+  }
+  return 0;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs string len, concat, and eq", () => {
     if (!hasMuslGcc()) return;
 

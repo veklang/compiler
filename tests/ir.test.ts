@@ -191,6 +191,67 @@ fn main() -> i32 {
     assert.ok(dump.includes("call @Box__User_pair__i32"));
   });
 
+  test("lowers generic enum specialization and generic enum methods", () => {
+    const ir = irOk(`
+struct User {
+  id: i32;
+}
+
+enum Option<T> {
+  Some(T);
+  None;
+
+  fn value_or(self, fallback: T) -> T {
+    match self {
+      Some(value) => { return value; }
+      None => { return fallback; }
+    }
+  }
+
+  fn pair<U>(self, other: U) -> (Self, U) {
+    return (self, other);
+  }
+}
+
+fn main() -> i32 {
+  let a: Option<i32> = Some(39);
+  let b: Option<i32> = None;
+  let user: User = User { id: 2 };
+  let maybe_user: Option<User> = Some(user);
+  let pair: (Option<i32>, bool) = a.pair(true);
+  if pair.1 {
+    let got: User = maybe_user.value_or(User { id: 0 });
+    return a.value_or(0) + b.value_or(1) + got.id;
+  }
+  return 0;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("enum enum.Option__i32 Option__i32"));
+    assert.ok(dump.includes("enum enum.Option__User Option__User"));
+    assert.ok(!dump.includes("enum enum.Option Option"));
+    assert.ok(
+      dump.includes(
+        "fn fn.Option__i32_value_or Option__i32_value_or(self: Option__i32, fallback: i32) -> i32",
+      ),
+    );
+    assert.ok(
+      dump.includes(
+        "fn fn.Option__User_value_or Option__User_value_or(self: Option__User, fallback: User) -> User",
+      ),
+    );
+    assert.ok(
+      dump.includes(
+        "fn fn.Option__i32_pair__bool Option__i32_pair__bool(self: Option__i32, other: bool) -> (Option__i32, bool)",
+      ),
+    );
+    assert.ok(dump.includes("construct_enum enum.Option__i32::Some"));
+    assert.ok(dump.includes("construct_enum enum.Option__User::Some"));
+    assert.ok(dump.includes("construct_enum enum.Option__i32::None"));
+    assert.ok(dump.includes("call @Option__i32_pair__bool"));
+  });
+
   test("records runtime requirements for panic and strings", () => {
     const ir = irOk(`
 fn main() -> void {

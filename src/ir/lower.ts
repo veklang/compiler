@@ -78,7 +78,7 @@ interface IrTypeSource {
 }
 
 interface GenericInstantiationInfo {
-  kind: "Function" | "Method" | "Struct";
+  kind: "Function" | "Method" | "Struct" | "Enum";
   name: string;
   ownerName?: string;
   ownerTypeArgs?: string[];
@@ -184,8 +184,14 @@ export function lowerProgramToIr(
   };
   const functionsByName = new Map<string, FunctionDeclaration>();
   const structsByName = new Map<string, StructDeclaration>();
+  const enumsByName = new Map<string, EnumDeclaration>();
   const genericStructSpecializations: Array<{
     declaration: StructDeclaration;
+    linkName: string;
+    typeSubstitutions: Map<string, IrType>;
+  }> = [];
+  const genericEnumSpecializations: Array<{
+    declaration: EnumDeclaration;
     linkName: string;
     typeSubstitutions: Map<string, IrType>;
   }> = [];
@@ -208,6 +214,16 @@ export function lowerProgramToIr(
         lowerStructDeclaration(statement, structFields, methodLinks, enumNames),
       );
     } else if (statement.kind === "EnumDeclaration") {
+      enumsByName.set(statement.name.name, statement);
+      if ((statement.typeParams?.length ?? 0) > 0) {
+        recordEnumDeclarationInfo(
+          statement,
+          variantInfos,
+          methodLinks,
+          enumNames,
+        );
+        continue;
+      }
       declarations.push(
         lowerEnumDeclaration(statement, variantInfos, methodLinks, enumNames),
       );
@@ -246,13 +262,43 @@ export function lowerProgramToIr(
     );
   }
 
+  for (const instantiation of checkResult.instantiations ?? []) {
+    if (instantiation.kind !== "Enum") continue;
+    const declaration = enumsByName.get(instantiation.name);
+    if (!declaration || (declaration.typeParams?.length ?? 0) === 0) continue;
+    const linkName = mangleName(instantiation.name, instantiation.typeArgs);
+    if (loweredSpecializations.has(linkName)) continue;
+    loweredSpecializations.add(linkName);
+    const typeSubstitutions = typeSubstitutionsFromParams(
+      declaration.typeParams,
+      instantiation.typeArgs,
+      enumNames,
+    );
+    genericEnumSpecializations.push({
+      declaration,
+      linkName,
+      typeSubstitutions,
+    });
+    declarations.push(
+      lowerEnumDeclaration(declaration, variantInfos, methodLinks, enumNames, {
+        linkName,
+        typeSubstitutions,
+      }),
+    );
+  }
+
   const globals = new Map<string, IrGlobalId>();
   const globalTypes = new Map<IrGlobalId, IrType>();
   const lazyGlobals = new Set<IrGlobalId>();
   const globalStatements: VariableDeclaration[] = [];
   for (const statement of program.body) {
     if (statement.kind === "VariableDeclaration") {
-      const global = lowerGlobalDeclaration(statement, checkResult, runtime);
+      const global = lowerGlobalDeclaration(
+        statement,
+        checkResult,
+        runtime,
+        enumNames,
+      );
       declarations.push(global);
       globals.set(statement.name.name, global.id);
       globalTypes.set(global.id, global.type);
@@ -275,7 +321,8 @@ export function lowerProgramToIr(
         ownerDecl: statement.kind === "EnumDeclaration" ? "enum" : "struct",
       });
       if (
-        statement.kind === "StructDeclaration" &&
+        (statement.kind === "StructDeclaration" ||
+          statement.kind === "EnumDeclaration") &&
         (statement.typeParams?.length ?? 0) > 0
       )
         continue;
@@ -311,6 +358,36 @@ export function lowerProgramToIr(
           member,
           specialization.linkName,
           "struct",
+          checkResult,
+          runtime,
+          structFields,
+          variantInfos,
+          methodLinks,
+          globals,
+          globalTypes,
+          lazyGlobals,
+          session,
+          {
+            linkName: methodLinkName(specialization.linkName, member.name.name),
+            typeSubstitutions: specialization.typeSubstitutions,
+          },
+        ),
+      );
+    }
+  }
+
+  for (const specialization of genericEnumSpecializations) {
+    for (const member of specialization.declaration.members) {
+      if (
+        member.kind !== "MethodDeclaration" ||
+        (member.typeParams?.length ?? 0) > 0
+      )
+        continue;
+      declarations.push(
+        lowerMethod(
+          member,
+          specialization.linkName,
+          "enum",
           checkResult,
           runtime,
           structFields,
@@ -415,14 +492,15 @@ export function lowerProgramToIr(
     const linkName = methodInstantiationLinkName(instantiation);
     if (loweredSpecializations.has(linkName)) continue;
     loweredSpecializations.add(linkName);
-    const ownerTypeSubstitutions =
-      instantiation.ownerTypeArgs?.length && methodInfo.ownerDecl === "struct"
-        ? ownerTypeSubstitutionsForMethod(
-            structsByName.get(instantiation.ownerName),
-            instantiation.ownerTypeArgs,
-            enumNames,
-          )
-        : new Map<string, IrType>();
+    const ownerTypeSubstitutions = instantiation.ownerTypeArgs?.length
+      ? ownerTypeSubstitutionsForMethod(
+          methodInfo.ownerDecl === "struct"
+            ? structsByName.get(instantiation.ownerName)
+            : enumsByName.get(instantiation.ownerName),
+          instantiation.ownerTypeArgs,
+          enumNames,
+        )
+      : new Map<string, IrType>();
     const methodTypeSubstitutions = typeSubstitutionsFromParams(
       methodInfo.node.typeParams,
       instantiation.typeArgs,
@@ -504,34 +582,69 @@ function lowerEnumDeclaration(
   variantInfos: Map<string, VariantInfo>,
   methodLinks: Map<string, string>,
   enumNames?: Set<string>,
+  specialization?: {
+    linkName: string;
+    typeSubstitutions: Map<string, IrType>;
+  },
 ): IrEnumDeclaration {
-  const id: IrTypeDeclId = `enum.${node.name.name}`;
+  const linkName = specialization?.linkName ?? node.name.name;
+  const id: IrTypeDeclId = `enum.${linkName}`;
   const declId = id;
-  recordMethodLinks(node.name.name, node.members, methodLinks);
+  recordMethodLinks(linkName, node.members, methodLinks);
   const variants: IrEnumVariant[] = node.members
     .filter((m): m is EnumVariant => m.kind === "EnumVariant")
     .map((variant, tag) => {
       const payloadTypes = (variant.payload ?? []).map((n) =>
-        typeFromTypeNode(n, enumNames),
+        typeFromTypeNodeWithSubstitutions(
+          n,
+          enumNames,
+          specialization?.typeSubstitutions,
+        ),
       );
       const info: VariantInfo = {
-        enumName: node.name.name,
+        enumName: linkName,
         declId,
         variantName: variant.name.name,
         tag,
         payloadTypes,
       };
-      variantInfos.set(variant.name.name, info);
+      variantInfos.set(variantInfoKey(linkName, variant.name.name), info);
+      if (!specialization) variantInfos.set(variant.name.name, info);
       return { name: variant.name.name, tag, payloadTypes };
     });
   return {
     kind: "enum_decl",
     id,
     sourceName: node.name.name,
-    linkName: node.name.name,
+    linkName,
     variants,
     span: node.span,
   };
+}
+
+function recordEnumDeclarationInfo(
+  node: EnumDeclaration,
+  variantInfos: Map<string, VariantInfo>,
+  methodLinks: Map<string, string>,
+  enumNames?: Set<string>,
+) {
+  recordMethodLinks(node.name.name, node.members, methodLinks);
+  for (const [tag, variant] of node.members
+    .filter((m): m is EnumVariant => m.kind === "EnumVariant")
+    .entries()) {
+    const payloadTypes = (variant.payload ?? []).map((n) =>
+      typeFromTypeNode(n, enumNames),
+    );
+    const info: VariantInfo = {
+      enumName: node.name.name,
+      declId: `enum.${node.name.name}`,
+      variantName: variant.name.name,
+      tag,
+      payloadTypes,
+    };
+    variantInfos.set(variantInfoKey(node.name.name, variant.name.name), info);
+    variantInfos.set(variant.name.name, info);
+  }
 }
 
 function recordMethodLinks(
@@ -552,10 +665,13 @@ function lowerGlobalDeclaration(
   node: VariableDeclaration,
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
+  enumNames: Set<string>,
 ): IrGlobal {
   const type = node.typeAnnotation
-    ? typeFromTypeNode(node.typeAnnotation)
-    : typeFromNode(checkResult, node.initializer);
+    ? typeFromTypeNode(node.typeAnnotation, enumNames)
+    : normalizeSpecializedNamedTypes(
+        typeFromNode(checkResult, node.initializer),
+      );
   const initializer =
     node.initializer?.kind === "LiteralExpression"
       ? constFromLiteral(node.initializer)
@@ -623,7 +739,10 @@ function lowerGlobalInitializerFunction(
 
   const value = coerceOperand(
     lowerExpression(node.initializer, context),
-    globalTypes.get(globalId) ?? typeFromNode(checkResult, node.initializer),
+    globalTypes.get(globalId) ??
+      normalizeSpecializedNamedTypes(
+        typeFromNode(checkResult, node.initializer),
+      ),
     context,
     node.span,
   );
@@ -1619,11 +1738,14 @@ function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
   const defaultBlock = newBlock(context);
 
   const matchType = matchOperand.type;
+  const matchedEnumName =
+    matchType.kind === "named" ? matchType.name : undefined;
   const isEnum =
     matchType.kind === "named" &&
-    [...context.variantInfos.values()].some(
-      (v) => v.enumName === (matchType as { name: string }).name,
-    );
+    (matchType.decl === "enum" ||
+      [...context.variantInfos.values()].some(
+        (v) => v.enumName === (matchType as { name: string }).name,
+      ));
 
   if (isEnum) {
     const tagTarget = nextTemp(context);
@@ -1650,7 +1772,11 @@ function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
       if (pattern.kind === "WildcardPattern") {
         defaultTarget = armBlock.id;
       } else if (pattern.kind === "IdentifierPattern") {
-        const variantInfo = context.variantInfos.get(pattern.name.name);
+        const variantInfo = findVariantInfo(
+          context.variantInfos,
+          pattern.name.name,
+          matchedEnumName,
+        );
         if (variantInfo) {
           switchCases.push({
             value: { kind: "int", value: String(variantInfo.tag) },
@@ -1660,7 +1786,11 @@ function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
           defaultTarget = armBlock.id;
         }
       } else if (pattern.kind === "EnumPattern") {
-        const variantInfo = context.variantInfos.get(pattern.name.name);
+        const variantInfo = findVariantInfo(
+          context.variantInfos,
+          pattern.name.name,
+          matchedEnumName,
+        );
         if (variantInfo) {
           switchCases.push({
             value: { kind: "int", value: String(variantInfo.tag) },
@@ -1687,6 +1817,7 @@ function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
     );
   }
 
+  let branchesToJoin = false;
   for (let i = 0; i < statement.arms.length; i++) {
     const arm = statement.arms[i];
     const armBlock = armBlocks[i];
@@ -1700,14 +1831,29 @@ function lowerMatchStatement(statement: MatchStatement, context: LowerContext) {
         kind: "branch",
         target: joinBlock.id,
       };
+      branchesToJoin = true;
     }
   }
 
   switchBlock(context, defaultBlock);
   if (!isTerminated(context)) {
-    context.currentBlock.terminator = { kind: "branch", target: joinBlock.id };
+    if (isEnum) {
+      context.currentBlock.terminator = {
+        kind: "unreachable",
+        span: statement.span,
+      };
+    } else {
+      context.currentBlock.terminator = {
+        kind: "branch",
+        target: joinBlock.id,
+      };
+      branchesToJoin = true;
+    }
   }
 
+  if (!branchesToJoin) {
+    joinBlock.terminator = { kind: "unreachable", span: statement.span };
+  }
   switchBlock(context, joinBlock);
 }
 
@@ -1736,11 +1882,14 @@ function lowerMatchExpression(
   const defaultBlock = newBlock(context);
 
   const matchType = matchOperand.type;
+  const matchedEnumName =
+    matchType.kind === "named" ? matchType.name : undefined;
   const isEnum =
     matchType.kind === "named" &&
-    [...context.variantInfos.values()].some(
-      (v) => v.enumName === (matchType as { name: string }).name,
-    );
+    (matchType.decl === "enum" ||
+      [...context.variantInfos.values()].some(
+        (v) => v.enumName === (matchType as { name: string }).name,
+      ));
 
   if (isEnum) {
     const tagTarget = nextTemp(context);
@@ -1765,7 +1914,11 @@ function lowerMatchExpression(
       if (pattern.kind === "WildcardPattern") {
         defaultTarget = armBlock.id;
       } else if (pattern.kind === "IdentifierPattern") {
-        const variantInfo = context.variantInfos.get(pattern.name.name);
+        const variantInfo = findVariantInfo(
+          context.variantInfos,
+          pattern.name.name,
+          matchedEnumName,
+        );
         if (variantInfo) {
           switchCases.push({
             value: { kind: "int", value: String(variantInfo.tag) },
@@ -1775,7 +1928,11 @@ function lowerMatchExpression(
           defaultTarget = armBlock.id;
         }
       } else if (pattern.kind === "EnumPattern") {
-        const variantInfo = context.variantInfos.get(pattern.name.name);
+        const variantInfo = findVariantInfo(
+          context.variantInfos,
+          pattern.name.name,
+          matchedEnumName,
+        );
         if (variantInfo) {
           switchCases.push({
             value: { kind: "int", value: String(variantInfo.tag) },
@@ -1839,7 +1996,9 @@ function lowerMatchExpression(
 
   switchBlock(context, defaultBlock);
   if (!isTerminated(context)) {
-    context.currentBlock.terminator = { kind: "branch", target: joinBlock.id };
+    context.currentBlock.terminator = isEnum
+      ? { kind: "unreachable", span: expression.span }
+      : { kind: "branch", target: joinBlock.id };
   }
 
   switchBlock(context, joinBlock);
@@ -1852,9 +2011,11 @@ function lowerMatchExpressionArmBindings(
   context: LowerContext,
 ) {
   const pattern = arm.pattern;
+  const matchedEnumName =
+    matchOperand.type.kind === "named" ? matchOperand.type.name : undefined;
   if (
     pattern.kind === "IdentifierPattern" &&
-    !context.variantInfos.has(pattern.name.name)
+    !findVariantInfo(context.variantInfos, pattern.name.name, matchedEnumName)
   ) {
     const local = declareLocal(
       context,
@@ -1872,7 +2033,11 @@ function lowerMatchExpressionArmBindings(
     });
     markLocalOwns(local.id, matchOperand, context);
   } else if (pattern.kind === "EnumPattern") {
-    const variantInfo = context.variantInfos.get(pattern.name.name);
+    const variantInfo = findVariantInfo(
+      context.variantInfos,
+      pattern.name.name,
+      matchedEnumName,
+    );
     if (variantInfo) {
       for (let i = 0; i < pattern.args.length; i++) {
         const arg = pattern.args[i];
@@ -1955,10 +2120,12 @@ function lowerMatchArmBindings(
   context: LowerContext,
 ) {
   const pattern = arm.pattern;
+  const matchedEnumName =
+    matchOperand.type.kind === "named" ? matchOperand.type.name : undefined;
 
   if (
     pattern.kind === "IdentifierPattern" &&
-    !context.variantInfos.has(pattern.name.name)
+    !findVariantInfo(context.variantInfos, pattern.name.name, matchedEnumName)
   ) {
     const local = declareLocal(
       context,
@@ -1976,7 +2143,11 @@ function lowerMatchArmBindings(
     });
     markLocalOwns(local.id, matchOperand, context);
   } else if (pattern.kind === "EnumPattern") {
-    const variantInfo = context.variantInfos.get(pattern.name.name);
+    const variantInfo = findVariantInfo(
+      context.variantInfos,
+      pattern.name.name,
+      matchedEnumName,
+    );
     if (variantInfo) {
       for (let i = 0; i < pattern.args.length; i++) {
         const arg = pattern.args[i];
@@ -2200,15 +2371,27 @@ function lowerIdentifier(
       expression.span,
     );
   }
-  const variant = context.variantInfos.get(expression.name);
+  const checkedType = typeFromNodeInContext(context, expression);
+  const checkedEnumName =
+    checkedType.kind === "named" && checkedType.decl === "enum"
+      ? checkedType.name
+      : undefined;
+  const variant = findVariantInfo(
+    context.variantInfos,
+    expression.name,
+    checkedEnumName,
+  );
   if (variant && variant.payloadTypes.length === 0) {
     const target = nextTemp(context);
-    const type: IrType = {
-      kind: "named",
-      name: variant.enumName,
-      args: [],
-      decl: "enum",
-    };
+    const type: IrType =
+      checkedType.kind === "named" && checkedType.decl === "enum"
+        ? checkedType
+        : {
+            kind: "named",
+            name: variant.enumName,
+            args: [],
+            decl: "enum",
+          };
     context.currentBlock.instructions.push({
       kind: "construct_enum",
       target,
@@ -2391,15 +2574,24 @@ function lowerCall(
   const returnsVoid = type.kind === "primitive" && type.name === "void";
 
   if (callee.kind === "function") {
-    const variant = context.variantInfos.get(callee.name);
+    const enumName =
+      type.kind === "named" && type.decl === "enum" ? type.name : undefined;
+    const variant = findVariantInfo(
+      context.variantInfos,
+      callee.name,
+      enumName,
+    );
     if (variant && variant.payloadTypes.length > 0) {
       const target = nextTemp(context);
-      const enumType: IrType = {
-        kind: "named",
-        name: variant.enumName,
-        args: [],
-        decl: "enum",
-      };
+      const enumType: IrType =
+        type.kind === "named" && type.decl === "enum"
+          ? type
+          : {
+              kind: "named",
+              name: variant.enumName,
+              args: [],
+              decl: "enum",
+            };
       const payload = expression.args.map((arg) =>
         lowerExpression(arg, context),
       );
@@ -3235,7 +3427,7 @@ function typeSubstitutionsFromParams(
 }
 
 function ownerTypeSubstitutionsForMethod(
-  owner: StructDeclaration | undefined,
+  owner: StructDeclaration | EnumDeclaration | undefined,
   typeArgs: string[],
   enumNames: Set<string>,
 ): Map<string, IrType> {
@@ -3444,14 +3636,14 @@ function typeFromCheckerType(type: unknown): IrType {
       isRecord(type.symbol) &&
       "enumDecl" in type.symbol &&
       !!type.symbol.enumDecl;
-    return normalizeSpecializedNamedTypes({
+    return {
       kind: "named",
       name: type.name,
       args: Array.isArray(type.typeArgs)
         ? type.typeArgs.map(typeFromCheckerType)
         : [],
       ...(isEnum ? { decl: "enum" as const } : {}),
-    });
+    };
   }
 
   if (type.kind === "Nullable") {
@@ -3647,6 +3839,19 @@ function isPrimitiveName(name: string): name is IrPrimitiveType["name"] {
 
 function methodKey(ownerName: string, methodName: string): string {
   return `${ownerName}.${methodName}`;
+}
+
+function variantInfoKey(enumName: string, variantName: string): string {
+  return `${enumName}.${variantName}`;
+}
+
+function findVariantInfo(
+  variantInfos: Map<string, VariantInfo>,
+  variantName: string,
+  enumName?: string,
+): VariantInfo | undefined {
+  if (enumName) return variantInfos.get(variantInfoKey(enumName, variantName));
+  return variantInfos.get(variantName);
 }
 
 function methodLinkName(ownerName: string, methodName: string): string {

@@ -483,6 +483,41 @@ fn main() -> void {
 `);
   });
 
+  test("generic enum variants and methods are type checked", () => {
+    checkOk(`
+struct User {
+  id: i32;
+}
+
+enum Option<T> {
+  Some(T);
+  None;
+
+  fn value_or(self, fallback: T) -> T {
+    match self {
+      Some(value) => { return value; }
+      None => { return fallback; }
+    }
+  }
+
+  fn pair<U>(self, other: U) -> (Self, U) {
+    return (self, other);
+  }
+}
+
+fn main() -> void {
+  let a: Option<i32> = Some(41);
+  let b: Option<i32> = None;
+  let user: User = User { id: 1 };
+  let maybe_user: Option<User> = Some(user);
+  let _x: i32 = a.value_or(0);
+  let _y: i32 = b.value_or(2);
+  let _u: User = maybe_user.value_or(User { id: 0 });
+  let _pair: (Option<i32>, bool) = a.pair(true);
+}
+`);
+  });
+
   test("generic function value assigned to matching bounded type is accepted", () => {
     checkOk(`
 fn same<T: Equal<T>>(a: T, b: T) -> bool {
