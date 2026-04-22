@@ -314,8 +314,7 @@ export function lowerProgramToIr(
       statement.kind !== "EnumDeclaration"
     )
       continue;
-    for (const member of statement.members) {
-      if (member.kind !== "MethodDeclaration") continue;
+    for (const member of methodDeclarationsFromMembers(statement.members)) {
       methodsByKey.set(methodKey(statement.name.name, member.name.name), {
         node: member,
         ownerName: statement.name.name,
@@ -348,12 +347,10 @@ export function lowerProgramToIr(
   }
 
   for (const specialization of genericStructSpecializations) {
-    for (const member of specialization.declaration.members) {
-      if (
-        member.kind !== "MethodDeclaration" ||
-        (member.typeParams?.length ?? 0) > 0
-      )
-        continue;
+    for (const member of methodDeclarationsFromMembers(
+      specialization.declaration.members,
+    )) {
+      if ((member.typeParams?.length ?? 0) > 0) continue;
       declarations.push(
         lowerMethod(
           member,
@@ -378,12 +375,10 @@ export function lowerProgramToIr(
   }
 
   for (const specialization of genericEnumSpecializations) {
-    for (const member of specialization.declaration.members) {
-      if (
-        member.kind !== "MethodDeclaration" ||
-        (member.typeParams?.length ?? 0) > 0
-      )
-        continue;
+    for (const member of methodDeclarationsFromMembers(
+      specialization.declaration.members,
+    )) {
+      if ((member.typeParams?.length ?? 0) > 0) continue;
       declarations.push(
         lowerMethod(
           member,
@@ -650,16 +645,33 @@ function recordEnumDeclarationInfo(
 
 function recordMethodLinks(
   ownerName: string,
-  members: Array<{ kind: string; name?: { name: string } }>,
+  members: Array<
+    StructDeclaration["members"][number] | EnumDeclaration["members"][number]
+  >,
   methodLinks: Map<string, string>,
 ) {
-  for (const member of members) {
-    if (member.kind !== "MethodDeclaration" || !member.name) continue;
+  for (const member of methodDeclarationsFromMembers(members)) {
     methodLinks.set(
       methodKey(ownerName, member.name.name),
       methodLinkName(ownerName, member.name.name),
     );
   }
+}
+
+function methodDeclarationsFromMembers(
+  members: Array<
+    StructDeclaration["members"][number] | EnumDeclaration["members"][number]
+  >,
+): MethodDeclaration[] {
+  const methods: MethodDeclaration[] = [];
+  for (const member of members) {
+    if (member.kind === "MethodDeclaration") {
+      methods.push(member);
+    } else if (member.kind === "TraitSatisfiesDeclaration") {
+      methods.push(...member.methods);
+    }
+  }
+  return methods;
 }
 
 function lowerGlobalDeclaration(

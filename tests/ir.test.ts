@@ -184,6 +184,43 @@ fn main() -> i32 {
     assert.ok(dump.includes("call @Box__User_get"));
   });
 
+  test("lowers trait satisfaction methods on generic struct owners", () => {
+    const ir = irOk(`
+trait Extract<T> {
+  fn extract(self) -> T;
+}
+
+struct User {
+  id: i32;
+}
+
+struct Box<T> {
+  value: T;
+
+  satisfies Extract<T> {
+    fn extract(self) -> T {
+      return self.value;
+    }
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let box: Box<User> = Box { value: user };
+  let copied: User = box.extract();
+  return copied.id;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(
+      dump.includes(
+        "fn fn.Box__User_extract Box__User_extract(self: Box__User) -> User",
+      ),
+    );
+    assert.ok(dump.includes("call @Box__User_extract"));
+  });
+
   test("lowers generic method specialization on generic struct owner", () => {
     const ir = irOk(`
 struct User {

@@ -711,6 +711,53 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs trait satisfaction methods on generic struct owners", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+trait Extract<T> {
+  fn extract(self) -> T;
+}
+
+struct User {
+  id: i32;
+}
+
+struct Box<T> {
+  value: T;
+
+  satisfies Extract<T> {
+    fn extract(self) -> T {
+      return self.value;
+    }
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let box: Box<User> = Box { value: user };
+  let copied: User = box.extract();
+  return copied.id;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs generic method specialization on generic struct owner", () => {
     if (!hasMuslGcc()) return;
 

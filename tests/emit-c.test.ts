@@ -695,6 +695,34 @@ fn main() -> i32 {
     assert.ok(c.includes("__vek_fn_User_show(v0);"));
   });
 
+  test("emits trait satisfaction methods as static functions", () => {
+    const c = emitOk(`
+trait Scored {
+  fn score(self) -> i32;
+}
+
+struct User {
+  id: i32;
+
+  satisfies Scored {
+    fn score(self) -> i32 {
+      return self.id;
+    }
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  return user.score();
+}
+`);
+
+    assert.ok(
+      c.includes("static int32_t __vek_fn_User_score(__vek_struct_User v0);"),
+    );
+    assert.ok(c.includes("__vek_fn_User_score(v0);"));
+  });
+
   test("emits Array<T> parameter and local as __vek_array *", () => {
     const c = emitOk(`
 fn len(xs: i32[]) -> i32 {
