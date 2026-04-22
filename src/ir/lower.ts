@@ -1598,6 +1598,11 @@ function lowerContinue(statement: ContinueStatement, context: LowerContext) {
 function lowerForStatement(statement: ForStatement, context: LowerContext) {
   const arrayOperand = lowerExpression(statement.iterable, context);
   const arrayType = arrayOperand.type;
+  if (!(arrayType.kind === "named" && arrayType.name === "Array")) {
+    lowerCustomIterableForStatement(statement, arrayOperand, context);
+    return;
+  }
+
   const elementType: IrType =
     arrayType.kind === "named" && arrayType.args.length > 0
       ? arrayType.args[0]
@@ -1739,6 +1744,133 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
     kind: "branch",
     target: condBlock.id,
   };
+
+  switchBlock(context, exitBlock);
+}
+
+function lowerCustomIterableForStatement(
+  statement: ForStatement,
+  iterableOperand: IrOperand,
+  context: LowerContext,
+) {
+  const iteratorType = iterableOperand.type;
+  if (iteratorType.kind !== "named") {
+    throw new Error("IR lowering: custom for loop requires named iterable.");
+  }
+
+  const nextLinkName = context.methodLinks.get(
+    methodKey(iteratorType.name, "next"),
+  );
+  if (!nextLinkName) {
+    throw new Error(
+      `IR lowering: iterable type '${displayIrType(iteratorType)}' has no emitted next method.`,
+    );
+  }
+
+  const itemType = typeFromCheckedNode(context, statement.iterator);
+  const nextType: IrType = { kind: "nullable", base: itemType };
+  const iteratorLocal = declareLocal(
+    context,
+    `__vek_iter_${context.nextLocal}`,
+    iteratorType,
+    true,
+    statement.span,
+  );
+  retainIfBorrowedHeap(iterableOperand, context, statement.span);
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: iteratorLocal.id,
+    value: iterableOperand,
+    span: statement.span,
+  });
+  markLocalOwns(iteratorLocal.id, iterableOperand, context);
+
+  const condBlock = newBlock(context);
+  const bodyBlock = newBlock(context);
+  const exitBlock = newBlock(context);
+
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: condBlock.id,
+    span: statement.span,
+  };
+
+  switchBlock(context, condBlock);
+  const nextTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "call",
+    target: nextTarget,
+    callee: {
+      kind: "function",
+      name: nextLinkName,
+      type: {
+        kind: "function",
+        params: [{ type: iteratorType, mutable: true }],
+        returnType: nextType,
+      },
+    },
+    args: [{ kind: "local", id: iteratorLocal.id, type: iteratorType }],
+    type: nextType,
+    span: statement.span,
+  });
+  markOwnedTemp(nextTarget, nextType, context);
+  const nextValue: IrOperand = { kind: "temp", id: nextTarget, type: nextType };
+  const isNullTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "is_null",
+    target: isNullTarget,
+    value: nextValue,
+    type: irPrimitive("bool"),
+    span: statement.span,
+  });
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: { kind: "temp", id: isNullTarget, type: irPrimitive("bool") },
+    thenTarget: exitBlock.id,
+    elseTarget: bodyBlock.id,
+    span: statement.span,
+  };
+
+  switchBlock(context, bodyBlock);
+  const itemValue = unwrapNullableOperand(nextValue, context, statement.span);
+  retainIfBorrowedHeap(itemValue, context, statement.span);
+  const itemLocal = declareLocal(
+    context,
+    statement.iterator.name,
+    itemType,
+    false,
+    statement.span,
+  );
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: itemLocal.id,
+    value: itemValue,
+    span: statement.span,
+  });
+  markLocalOwns(itemLocal.id, itemValue, context);
+  releaseIfOwnedTemp(nextValue, context);
+
+  const savedExit = context.loopExit;
+  const savedContinue = context.loopContinue;
+  const savedLoopCleanup = context.loopCleanup;
+  context.loopExit = exitBlock.id;
+  context.loopContinue = condBlock.id;
+
+  const savedLocals = saveLocals(context);
+  context.loopCleanup = savedLocals;
+  lowerBlock(statement.body, context);
+  restoreLocals(context, savedLocals);
+
+  context.loopExit = savedExit;
+  context.loopContinue = savedContinue;
+  context.loopCleanup = savedLoopCleanup;
+
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: condBlock.id,
+    };
+  }
 
   switchBlock(context, exitBlock);
 }
@@ -4236,6 +4368,15 @@ function typeFromNodeInContext(
   return normalizeSpecializedNamedTypes(
     substituteTypeParams(
       typeFromNode(context.checkResult, node as Expression | undefined),
+      context.typeSubstitutions,
+    ),
+  );
+}
+
+function typeFromCheckedNode(context: LowerContext, node: Node): IrType {
+  return normalizeSpecializedNamedTypes(
+    substituteTypeParams(
+      typeFromCheckerType(context.checkResult.types.get(node) as unknown),
       context.typeSubstitutions,
     ),
   );

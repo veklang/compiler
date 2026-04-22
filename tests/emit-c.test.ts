@@ -819,6 +819,50 @@ fn sum(xs: i32[]) -> i32 {
     assert.ok(c.includes("*(int32_t *)__vek_array_get("));
   });
 
+  test("emits custom iterable loop using next with mutable receiver", () => {
+    const c = emitOk(`
+struct Counter {
+  current: i32;
+  end: i32;
+
+  fn new(end: i32) -> Self {
+    return Self { current: 0, end };
+  }
+
+  satisfies Iterable<i32> {
+    fn next(mut self) -> i32? {
+      if self.current == self.end {
+        return null;
+      }
+
+      let value = self.current;
+      self.current = self.current + 1;
+      return value;
+    }
+  }
+}
+
+fn sum() -> i32 {
+  let total: i32 = 0;
+  for x in Counter.new(3) {
+    total = total + x;
+  }
+  return total;
+}
+`);
+
+    assert.ok(
+      c.includes(
+        "static __vek_nullable_i32 __vek_fn_Counter_next(__vek_struct_Counter *v0);",
+      ),
+    );
+    assert.ok(c.includes("__vek_fn_Counter_next(&v"));
+    assert.ok(c.includes(".is_null"));
+    assert.ok(c.includes(".value"));
+    assert.ok(!c.includes("__vek_array_len("));
+    assert.ok(!c.includes("__vek_array_get("));
+  });
+
   test("emits string literals as static __vek_string globals", () => {
     const c = emitOk(`
 fn greet() -> string {

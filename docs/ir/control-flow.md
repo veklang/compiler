@@ -212,6 +212,36 @@ exit_block:
 
 `break` and `continue` follow the same rules as for while loops.
 
+### For (custom Iterable)
+
+```
+entry_block:
+  %iter_value = ...
+  assign %iter_local, %iter_value
+  branch condition_block
+
+condition_block:
+  %next = call @Owner_next, %iter_local
+  %done = is_null %next
+  cond_branch %done, exit_block, body_block
+
+body_block:
+  %item = unwrap_nullable %next
+  assign %item_local, %item
+  ...
+  branch condition_block
+
+exit_block:
+  ...
+```
+
+The `next` method is the emitted concrete method for the iterable owner and
+must have shape `next(mut self) -> T?`. Mutable parameters emit as C pointers,
+so the hidden iterator local is advanced by each call.
+
+`break` and `continue` follow the same rules as for while loops. `continue`
+branches to `condition_block`, which calls `next` again.
+
 ### Match Statement
 
 Enum match:

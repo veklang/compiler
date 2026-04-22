@@ -24,6 +24,7 @@ interface FunctionEmitContext {
   ensureGlobalNames: Map<string, string>;
   stringLiteralNames: Map<string, string>;
   paramIds: Set<string>;
+  mutableParamIds: Set<string>;
   multiBlock: boolean;
   structs: Map<string, IrStructDeclaration>;
   enums: Map<string, IrEnumDeclaration>;
@@ -159,7 +160,12 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
 
 function functionPrototype(fn: IrFunction): string {
   const params = fn.params
-    .map((param) => emitDeclaration(param.type, cLocalName(param.local)))
+    .map((param) =>
+      emitDeclaration(
+        param.type,
+        param.mutable ? `*${cLocalName(param.local)}` : cLocalName(param.local),
+      ),
+    )
     .join(", ");
   return `static ${emitDeclaration(
     fn.signature.returnType,
@@ -221,6 +227,9 @@ function emitFunction(
     ensureGlobalNames,
     stringLiteralNames,
     paramIds: new Set(fn.params.map((param) => param.local)),
+    mutableParamIds: new Set(
+      fn.params.filter((param) => param.mutable).map((param) => param.local),
+    ),
     multiBlock,
     structs,
     enums,
@@ -255,7 +264,7 @@ function emitInstruction(
   context: FunctionEmitContext,
 ): string {
   if (instruction.kind === "assign") {
-    return `${requireLocal(context, instruction.target)} = ${emitOperand(
+    return `${emitAssignmentTarget(context, instruction.target)} = ${emitOperand(
       instruction.value,
       context,
     )};`;
@@ -288,8 +297,13 @@ function emitInstruction(
     const isPanic =
       instruction.callee.kind === "function" &&
       instruction.callee.name === "panic";
-    const args = instruction.args.map((arg) => {
+    const calleeType =
+      instruction.callee.type.kind === "function"
+        ? instruction.callee.type
+        : undefined;
+    const args = instruction.args.map((arg, index) => {
       const s = emitOperand(arg, context);
+      if (calleeType?.params[index]?.mutable) return `&${s}`;
       return isPanic &&
         arg.type.kind === "primitive" &&
         arg.type.name === "string"
@@ -380,7 +394,7 @@ function emitInstruction(
   }
 
   if (instruction.kind === "set_field") {
-    return `${requireLocal(context, instruction.target)}.${instruction.field} = ${emitOperand(instruction.value, context)};`;
+    return `${emitFieldTarget(context, instruction.target)}.${instruction.field} = ${emitOperand(instruction.value, context)};`;
   }
 
   if (instruction.kind === "detach") {
@@ -644,7 +658,7 @@ function emitMainWrapper(entry: IrFunction): string[] {
 function emitOperand(operand: IrOperand, context: FunctionEmitContext): string {
   if (operand.kind === "const")
     return emitConst(operand.value, context.stringLiteralNames);
-  if (operand.kind === "local") return requireLocal(context, operand.id);
+  if (operand.kind === "local") return emitLocalValue(context, operand.id);
   if (operand.kind === "temp") return requireTemp(context, operand.id);
   if (operand.kind === "global")
     return requireGlobal(context.globalNames, operand.id);
@@ -731,6 +745,7 @@ function emitArrayElementOwnershipHelpers(
     ensureGlobalNames: new Map(),
     stringLiteralNames: new Map(),
     paramIds: new Set(),
+    mutableParamIds: new Set(),
     multiBlock: false,
     structs,
     enums,
@@ -1187,6 +1202,24 @@ function requireLocal(context: FunctionEmitContext, id: string): string {
   const name = context.localNames.get(id);
   if (!name) throw new Error(`Unknown local '${id}' during C emission.`);
   return name;
+}
+
+function emitLocalValue(context: FunctionEmitContext, id: string): string {
+  const name = requireLocal(context, id);
+  return context.mutableParamIds.has(id) ? `(*${name})` : name;
+}
+
+function emitAssignmentTarget(
+  context: FunctionEmitContext,
+  id: string,
+): string {
+  const name = requireLocal(context, id);
+  return context.mutableParamIds.has(id) ? `*${name}` : name;
+}
+
+function emitFieldTarget(context: FunctionEmitContext, id: string): string {
+  const name = requireLocal(context, id);
+  return context.mutableParamIds.has(id) ? `(*${name})` : name;
 }
 
 function requireTemp(context: FunctionEmitContext, id: string): string {

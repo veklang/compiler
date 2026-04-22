@@ -1123,6 +1123,7 @@ export class Checker {
       functionDepth: this.currentFunctionDepth,
       isGlobal: false,
     });
+    this.types.set(node.iterator, itemType ?? this.unknownType());
     this.checkBlockStatement(node.body, bodyScope);
   }
 

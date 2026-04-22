@@ -433,6 +433,63 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs custom iterable for loop", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct Counter {
+  current: i32;
+  end: i32;
+
+  fn new(end: i32) -> Self {
+    return Self { current: 0, end };
+  }
+
+  satisfies Iterable<i32> {
+    fn next(mut self) -> i32? {
+      if self.current == self.end {
+        return null;
+      }
+
+      let value = self.current;
+      self.current = self.current + 1;
+      return value;
+    }
+  }
+}
+
+fn main() -> i32 {
+  let total: i32 = 0;
+  for x in Counter.new(7) {
+    if x == 2 {
+      continue;
+    }
+    if x == 5 {
+      break;
+    }
+    total = total + x;
+  }
+  return total;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 8);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs short-circuit logical operators", () => {
     if (!hasMuslGcc()) return;
 

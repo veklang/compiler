@@ -1113,4 +1113,44 @@ fn sum(xs: i32[]) -> i32 {
     assert.ok(fn_.kind === "function");
     assert.ok(fn_.blocks.length > 1);
   });
+
+  test("lowers for loop over custom iterable through next", () => {
+    const ir = irOk(`
+struct Counter {
+  current: i32;
+  end: i32;
+
+  fn new(end: i32) -> Self {
+    return Self { current: 0, end };
+  }
+
+  satisfies Iterable<i32> {
+    fn next(mut self) -> i32? {
+      if self.current == self.end {
+        return null;
+      }
+
+      let value = self.current;
+      self.current = self.current + 1;
+      return value;
+    }
+  }
+}
+
+fn sum() -> i32 {
+  let total: i32 = 0;
+  for x in Counter.new(3) {
+    total = total + x;
+  }
+  return total;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("call @Counter_next"));
+    assert.ok(dump.includes("is_null"));
+    assert.ok(dump.includes("unwrap_nullable"));
+    assert.ok(!dump.includes("array_len"));
+    assert.ok(!dump.includes("array_get"));
+  });
 });

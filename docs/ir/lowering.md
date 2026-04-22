@@ -88,7 +88,9 @@ Rules:
 
 ## For
 
-See [control-flow.md § For](./control-flow.md#for-array) for block diagrams.
+See [control-flow.md § For](./control-flow.md#for-array) and
+[control-flow.md § For (custom Iterable)](./control-flow.md#for-custom-iterable)
+for block diagrams.
 
 For array iteration:
 
@@ -100,9 +102,16 @@ For array iteration:
 - `break` and `continue` follow the same rules as for while loops. `continue`
   branches to `condition_block`, which re-evaluates the index comparison.
 
-Custom `Iterable<T>` is a checker-level model today. It must not lower to the C
-backend until the IR and runtime have concrete iterator instructions or helper
-calls.
+For custom `Iterable<T>` iteration:
+
+- The iterable expression is evaluated once before the loop.
+- The result is stored in a hidden mutable iterator local.
+- The lowerer calls the emitted concrete `next(mut self) -> T?` method at the
+  top of each iteration.
+- The nullable result is checked with `is_null`; null exits the loop.
+- The non-null payload is unwrapped and assigned to the user iterator local.
+- `break` and `continue` follow the same rules as for while loops. `continue`
+  branches to the block that calls `next` again.
 
 ## Match Statements
 
