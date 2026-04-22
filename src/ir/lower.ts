@@ -91,6 +91,12 @@ interface VariantInfo {
   payloadTypes: IrType[];
 }
 
+interface MethodDeclarationInfo {
+  node: MethodDeclaration;
+  ownerName: string;
+  ownerDecl: "struct" | "enum";
+}
+
 interface LowerContext {
   checkResult: IrTypeSource;
   runtime: IrRuntimeRequirements;
@@ -146,18 +152,67 @@ export function lowerProgramToIr(
     nextAnonymousFunction: 0,
   };
   const functionsByName = new Map<string, FunctionDeclaration>();
+  const structsByName = new Map<string, StructDeclaration>();
+  const genericStructSpecializations: Array<{
+    declaration: StructDeclaration;
+    linkName: string;
+    typeSubstitutions: Map<string, IrType>;
+  }> = [];
+  const methodsByKey = new Map<string, MethodDeclarationInfo>();
+  const enumNames = new Set(
+    program.body
+      .filter(
+        (statement): statement is EnumDeclaration =>
+          statement.kind === "EnumDeclaration",
+      )
+      .map((statement) => statement.name.name),
+  );
   let entry: string | undefined;
 
   for (const statement of program.body) {
     if (statement.kind === "StructDeclaration") {
+      structsByName.set(statement.name.name, statement);
+      if ((statement.typeParams?.length ?? 0) > 0) continue;
       declarations.push(
-        lowerStructDeclaration(statement, structFields, methodLinks),
+        lowerStructDeclaration(statement, structFields, methodLinks, enumNames),
       );
     } else if (statement.kind === "EnumDeclaration") {
       declarations.push(
-        lowerEnumDeclaration(statement, variantInfos, methodLinks),
+        lowerEnumDeclaration(statement, variantInfos, methodLinks, enumNames),
       );
     }
+  }
+
+  const loweredSpecializations = new Set<string>();
+  for (const instantiation of checkResult.instantiations ?? []) {
+    if (instantiation.kind !== "Struct") continue;
+    const declaration = structsByName.get(instantiation.name);
+    if (!declaration || (declaration.typeParams?.length ?? 0) === 0) continue;
+    const linkName = mangleName(instantiation.name, instantiation.typeArgs);
+    if (loweredSpecializations.has(linkName)) continue;
+    loweredSpecializations.add(linkName);
+    const typeSubstitutions = typeSubstitutionsFromParams(
+      declaration.typeParams,
+      instantiation.typeArgs,
+      enumNames,
+    );
+    genericStructSpecializations.push({
+      declaration,
+      linkName,
+      typeSubstitutions,
+    });
+    declarations.push(
+      lowerStructDeclaration(
+        declaration,
+        structFields,
+        methodLinks,
+        enumNames,
+        {
+          linkName,
+          typeSubstitutions,
+        },
+      ),
+    );
   }
 
   const globals = new Map<string, IrGlobalId>();
@@ -183,6 +238,17 @@ export function lowerProgramToIr(
       continue;
     for (const member of statement.members) {
       if (member.kind !== "MethodDeclaration") continue;
+      methodsByKey.set(methodKey(statement.name.name, member.name.name), {
+        node: member,
+        ownerName: statement.name.name,
+        ownerDecl: statement.kind === "EnumDeclaration" ? "enum" : "struct",
+      });
+      if (
+        statement.kind === "StructDeclaration" &&
+        (statement.typeParams?.length ?? 0) > 0
+      )
+        continue;
+      if ((member.typeParams?.length ?? 0) > 0) continue;
       declarations.push(
         lowerMethod(
           member,
@@ -197,6 +263,36 @@ export function lowerProgramToIr(
           globalTypes,
           lazyGlobals,
           session,
+        ),
+      );
+    }
+  }
+
+  for (const specialization of genericStructSpecializations) {
+    for (const member of specialization.declaration.members) {
+      if (
+        member.kind !== "MethodDeclaration" ||
+        (member.typeParams?.length ?? 0) > 0
+      )
+        continue;
+      declarations.push(
+        lowerMethod(
+          member,
+          specialization.linkName,
+          "struct",
+          checkResult,
+          runtime,
+          structFields,
+          variantInfos,
+          methodLinks,
+          globals,
+          globalTypes,
+          lazyGlobals,
+          session,
+          {
+            linkName: methodLinkName(specialization.linkName, member.name.name),
+            typeSubstitutions: specialization.typeSubstitutions,
+          },
         ),
       );
     }
@@ -244,7 +340,6 @@ export function lowerProgramToIr(
     if (statement.name.name === "main") entry = lowered.id;
   }
 
-  const loweredSpecializations = new Set<string>();
   for (const instantiation of checkResult.instantiations ?? []) {
     if (instantiation.kind !== "Function") continue;
     const declaration = functionsByName.get(instantiation.name);
@@ -276,6 +371,45 @@ export function lowerProgramToIr(
     );
   }
 
+  for (const instantiation of checkResult.instantiations ?? []) {
+    if (instantiation.kind !== "Method" || !instantiation.ownerName) continue;
+    const methodInfo = methodsByKey.get(
+      methodKey(instantiation.ownerName, instantiation.name),
+    );
+    if (!methodInfo || (methodInfo.node.typeParams?.length ?? 0) === 0)
+      continue;
+    const linkName = mangleName(
+      `${instantiation.ownerName}__${instantiation.name}`,
+      instantiation.typeArgs,
+    );
+    if (loweredSpecializations.has(linkName)) continue;
+    loweredSpecializations.add(linkName);
+    declarations.push(
+      lowerMethod(
+        methodInfo.node,
+        methodInfo.ownerName,
+        methodInfo.ownerDecl,
+        checkResult,
+        runtime,
+        structFields,
+        variantInfos,
+        methodLinks,
+        globals,
+        globalTypes,
+        lazyGlobals,
+        session,
+        {
+          linkName,
+          typeSubstitutions: typeSubstitutionsFromParams(
+            methodInfo.node.typeParams,
+            instantiation.typeArgs,
+            new Set([...variantInfos.values()].map((v) => v.enumName)),
+          ),
+        },
+      ),
+    );
+  }
+
   declarations.push(...session.generatedFunctions);
 
   return {
@@ -291,22 +425,32 @@ function lowerStructDeclaration(
   node: StructDeclaration,
   structFields: Map<string, IrStructField[]>,
   methodLinks: Map<string, string>,
+  enumNames: Set<string>,
+  specialization?: {
+    linkName: string;
+    typeSubstitutions: Map<string, IrType>;
+  },
 ): IrStructDeclaration {
   const fields: IrStructField[] = node.members
     .filter((m): m is StructField => m.kind === "StructField")
     .map((field, index) => ({
       name: field.name.name,
-      type: typeFromTypeNode(field.type),
+      type: typeFromTypeNodeWithSubstitutions(
+        field.type,
+        enumNames,
+        specialization?.typeSubstitutions,
+      ),
       index,
     }));
-  const id: IrTypeDeclId = `struct.${node.name.name}`;
-  structFields.set(node.name.name, fields);
-  recordMethodLinks(node.name.name, node.members, methodLinks);
+  const linkName = specialization?.linkName ?? node.name.name;
+  const id: IrTypeDeclId = `struct.${linkName}`;
+  structFields.set(linkName, fields);
+  recordMethodLinks(linkName, node.members, methodLinks);
   return {
     kind: "struct_decl",
     id,
     sourceName: node.name.name,
-    linkName: node.name.name,
+    linkName,
     fields,
     span: node.span,
   };
@@ -316,6 +460,7 @@ function lowerEnumDeclaration(
   node: EnumDeclaration,
   variantInfos: Map<string, VariantInfo>,
   methodLinks: Map<string, string>,
+  enumNames?: Set<string>,
 ): IrEnumDeclaration {
   const id: IrTypeDeclId = `enum.${node.name.name}`;
   const declId = id;
@@ -324,7 +469,7 @@ function lowerEnumDeclaration(
     .filter((m): m is EnumVariant => m.kind === "EnumVariant")
     .map((variant, tag) => {
       const payloadTypes = (variant.payload ?? []).map((n) =>
-        typeFromTypeNode(n),
+        typeFromTypeNode(n, enumNames),
       );
       const info: VariantInfo = {
         enumName: node.name.name,
@@ -481,6 +626,10 @@ function lowerMethod(
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
   session: LowerSession,
+  specialization?: {
+    linkName: string;
+    typeSubstitutions: Map<string, IrType>;
+  },
 ): IrFunction {
   const enumNames = new Set([...variantInfos.values()].map((v) => v.enumName));
   const ownerType: IrType = {
@@ -490,8 +639,16 @@ function lowerMethod(
     ...(ownerDecl === "enum" ? { decl: "enum" as const } : {}),
   };
   const returnType = node.returnType
-    ? typeFromTypeNodeWithSelf(node.returnType, ownerName, enumNames)
-    : checkedFunctionReturnType(checkResult, node);
+    ? typeFromTypeNodeWithSelfAndSubstitutions(
+        node.returnType,
+        ownerName,
+        enumNames,
+        specialization?.typeSubstitutions,
+      )
+    : substituteTypeParams(
+        checkedFunctionReturnType(checkResult, node),
+        specialization?.typeSubstitutions,
+      );
   const entryBlock: IrBlock = { id: "bb.0", instructions: [] };
   const context: LowerContext = {
     checkResult,
@@ -514,6 +671,7 @@ function lowerMethod(
     lazyGlobals,
     returnType,
     selfTypeName: ownerName,
+    typeSubstitutions: specialization?.typeSubstitutions,
     cleanupBlocks: new Map(),
     session,
   };
@@ -532,7 +690,8 @@ function lowerMethod(
     };
   }
 
-  const linkName = methodLinkName(ownerName, node.name.name);
+  const linkName =
+    specialization?.linkName ?? methodLinkName(ownerName, node.name.name);
   return {
     kind: "function",
     id: `fn.${linkName}`,
@@ -579,7 +738,12 @@ function lowerMethodParameter(
   const local = declareLocal(
     context,
     param.name.name,
-    typeFromTypeNodeWithSelf(param.type, ownerName, context.enumNames),
+    typeFromTypeNodeWithSelfAndSubstitutions(
+      param.type,
+      ownerName,
+      context.enumNames,
+      context.typeSubstitutions,
+    ),
     param.isMutable,
     param.span,
   );
@@ -2062,6 +2226,14 @@ function lowerInstanceMethodCall(
     methodKey(objectType.name, expression.callee.property.name),
   );
   if (!linkName) return undefined;
+  const instantiation = context.checkResult.callInstantiations?.get(expression);
+  const calleeName =
+    instantiation?.kind === "Method" && instantiation.ownerName
+      ? mangleName(
+          `${instantiation.ownerName}__${instantiation.name}`,
+          instantiation.typeArgs,
+        )
+      : linkName;
 
   const type = typeFromNodeInContext(context, expression);
   const returnsVoid = type.kind === "primitive" && type.name === "void";
@@ -2073,7 +2245,7 @@ function lowerInstanceMethodCall(
   context.currentBlock.instructions.push({
     kind: "call",
     target: returnsVoid ? undefined : target,
-    callee: { kind: "function", name: linkName, type: calleeType },
+    callee: { kind: "function", name: calleeName, type: calleeType },
     args,
     type,
     span: expression.span,
@@ -2281,16 +2453,20 @@ function lowerStructLiteral(
   expression: StructLiteralExpression,
   context: LowerContext,
 ): IrOperand {
-  const structName =
-    expression.name.name === "Self" && context.selfTypeName
-      ? context.selfTypeName
-      : expression.name.name;
-  const declId: IrTypeDeclId = `struct.${structName}`;
   const type = typeFromNodeInContext(context, expression);
   const structType: IrType =
     type.kind === "named"
-      ? { ...type, name: structName }
-      : { kind: "named", name: structName, args: [] };
+      ? type
+      : {
+          kind: "named",
+          name:
+            expression.name.name === "Self" && context.selfTypeName
+              ? context.selfTypeName
+              : expression.name.name,
+          args: [],
+        };
+  const structName = structType.kind === "named" ? structType.name : "";
+  const declId: IrTypeDeclId = `struct.${structName}`;
   const target = nextTemp(context);
   const fields = expression.fields.map((f) => ({
     name: f.name.name,
@@ -2796,17 +2972,21 @@ function typeSubstitutionsFromParams(
 
 function typeFromDisplay(source: string, enumNames: Set<string>): IrType {
   const parser = new DisplayTypeParser(source, enumNames);
-  return parser.parse();
+  return normalizeSpecializedNamedTypes(parser.parse());
 }
 
 function typeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
+  return normalizeSpecializedNamedTypes(rawTypeFromTypeNode(node, enumNames));
+}
+
+function rawTypeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
   if (node.kind === "NamedType") {
     const name = node.name.name;
     if (isPrimitiveName(name)) return irPrimitive(name);
     return {
       kind: "named",
       name,
-      args: (node.typeArgs ?? []).map((n) => typeFromTypeNode(n, enumNames)),
+      args: (node.typeArgs ?? []).map((n) => rawTypeFromTypeNode(n, enumNames)),
       ...(enumNames?.has(name) ? { decl: "enum" as const } : {}),
     };
   }
@@ -2814,26 +2994,29 @@ function typeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
     return {
       kind: "named",
       name: "Array",
-      args: [typeFromTypeNode(node.element, enumNames)],
+      args: [rawTypeFromTypeNode(node.element, enumNames)],
     };
   }
   if (node.kind === "NullableType") {
-    return { kind: "nullable", base: typeFromTypeNode(node.base, enumNames) };
+    return {
+      kind: "nullable",
+      base: rawTypeFromTypeNode(node.base, enumNames),
+    };
   }
   if (node.kind === "TupleType") {
     return {
       kind: "tuple",
-      elements: node.elements.map((e) => typeFromTypeNode(e, enumNames)),
+      elements: node.elements.map((e) => rawTypeFromTypeNode(e, enumNames)),
     };
   }
   if (node.kind === "FunctionType") {
     return {
       kind: "function",
       params: node.params.map((param) => ({
-        type: typeFromTypeNode(param.type, enumNames),
+        type: rawTypeFromTypeNode(param.type, enumNames),
         mutable: param.isMutable,
       })),
-      returnType: typeFromTypeNode(node.returnType, enumNames),
+      returnType: rawTypeFromTypeNode(node.returnType, enumNames),
     };
   }
   return { kind: "named", name: "Self", args: [] };
@@ -2855,16 +3038,20 @@ function typeFromTypeNodeWithSubstitutions(
   enumNames?: Set<string>,
   substitutions?: Map<string, IrType>,
 ): IrType {
-  return substituteTypeParams(typeFromTypeNode(node, enumNames), substitutions);
+  return normalizeSpecializedNamedTypes(
+    substituteTypeParams(rawTypeFromTypeNode(node, enumNames), substitutions),
+  );
 }
 
 function typeFromNodeInContext(
   context: LowerContext,
   node: Node | undefined,
 ): IrType {
-  return substituteTypeParams(
-    typeFromNode(context.checkResult, node as Expression | undefined),
-    context.typeSubstitutions,
+  return normalizeSpecializedNamedTypes(
+    substituteTypeParams(
+      typeFromNode(context.checkResult, node as Expression | undefined),
+      context.typeSubstitutions,
+    ),
   );
 }
 
@@ -2911,8 +3098,22 @@ function typeFromTypeNodeWithSelf(
   selfTypeName: string,
   enumNames?: Set<string>,
 ): IrType {
-  const type = typeFromTypeNode(node, enumNames);
+  const type = rawTypeFromTypeNode(node, enumNames);
   return replaceSelfType(type, selfTypeName);
+}
+
+function typeFromTypeNodeWithSelfAndSubstitutions(
+  node: TypeNode,
+  selfTypeName: string,
+  enumNames?: Set<string>,
+  substitutions?: Map<string, IrType>,
+): IrType {
+  return normalizeSpecializedNamedTypes(
+    substituteTypeParams(
+      typeFromTypeNodeWithSelf(node, selfTypeName, enumNames),
+      substitutions,
+    ),
+  );
 }
 
 function replaceSelfType(type: IrType, selfTypeName: string): IrType {
@@ -2964,14 +3165,14 @@ function typeFromCheckerType(type: unknown): IrType {
       isRecord(type.symbol) &&
       "enumDecl" in type.symbol &&
       !!type.symbol.enumDecl;
-    return {
+    return normalizeSpecializedNamedTypes({
       kind: "named",
       name: type.name,
       args: Array.isArray(type.typeArgs)
         ? type.typeArgs.map(typeFromCheckerType)
         : [],
       ...(isEnum ? { decl: "enum" as const } : {}),
-    };
+    });
   }
 
   if (type.kind === "Nullable") {
@@ -2999,6 +3200,54 @@ function typeFromCheckerType(type: unknown): IrType {
 
   if (type.kind === "Error") return { kind: "error" };
   return { kind: "unknown" };
+}
+
+function normalizeSpecializedNamedTypes(type: IrType): IrType {
+  if (type.kind === "nullable") {
+    return { ...type, base: normalizeSpecializedNamedTypes(type.base) };
+  }
+  if (type.kind === "tuple") {
+    return {
+      ...type,
+      elements: type.elements.map(normalizeSpecializedNamedTypes),
+    };
+  }
+  if (type.kind === "function") {
+    return {
+      ...type,
+      params: type.params.map((param) => ({
+        ...param,
+        type: normalizeSpecializedNamedTypes(param.type),
+      })),
+      returnType: normalizeSpecializedNamedTypes(type.returnType),
+    };
+  }
+  if (type.kind !== "named") return type;
+
+  const args = type.args.map(normalizeSpecializedNamedTypes);
+  if (type.name === "Array") return { ...type, args };
+  if (args.length === 0) return { ...type, args };
+
+  return {
+    ...type,
+    name: mangleName(type.name, args.map(typeMangleDisplay)),
+    args: [],
+  };
+}
+
+function typeMangleDisplay(type: IrType): string {
+  if (type.kind === "primitive") return type.name;
+  if (type.kind === "named") {
+    return type.args.length > 0
+      ? `${type.name}<${type.args.map(typeMangleDisplay).join(", ")}>`
+      : type.name;
+  }
+  if (type.kind === "nullable") return `${typeMangleDisplay(type.base)}?`;
+  if (type.kind === "tuple") {
+    return `(${type.elements.map(typeMangleDisplay).join(", ")})`;
+  }
+  if (type.kind === "function") return "fn";
+  return type.kind;
 }
 
 class DisplayTypeParser {

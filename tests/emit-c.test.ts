@@ -93,6 +93,73 @@ fn main() -> i32 {
     assert.ok(c.includes("__vek_fn_id__User(v0);"));
   });
 
+  test("emits generic method specialization for struct types", () => {
+    const c = emitOk(`
+struct User {
+  id: i32;
+}
+
+struct Container {
+  count: i32;
+
+  fn map<T>(self, value: T) -> T {
+    return value;
+  }
+}
+
+fn main() -> i32 {
+  let container: Container = Container { count: 0 };
+  let user: User = User { id: 42 };
+  let copied: User = container.map(user);
+  return copied.id;
+}
+`);
+
+    assert.ok(
+      c.includes(
+        "static __vek_struct_User __vek_fn_Container__map__User(__vek_struct_Container v0, __vek_struct_User v1);",
+      ),
+    );
+    assert.ok(!c.includes("__vek_fn_Container_map"));
+    assert.ok(!c.includes("__vek_struct_T"));
+    assert.ok(c.includes("__vek_fn_Container__map__User(v0, v1);"));
+  });
+
+  test("emits generic struct specialization for aggregate fields", () => {
+    const c = emitOk(`
+struct User {
+  id: i32;
+}
+
+struct Box<T> {
+  value: T;
+
+  fn get(self) -> T {
+    return self.value;
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let box: Box<User> = Box { value: user };
+  let copied: User = box.get();
+  return copied.id;
+}
+`);
+
+    assert.ok(c.includes("} __vek_struct_Box__User;"));
+    assert.ok(c.includes("  __vek_struct_User value;"));
+    assert.ok(
+      c.includes(
+        "static __vek_struct_User __vek_fn_Box__User_get(__vek_struct_Box__User v0);",
+      ),
+    );
+    assert.ok(c.includes("__vek_fn_Box__User_get(v1);"));
+    assert.ok(!c.includes("__vek_struct_T"));
+    assert.ok(!c.includes("__vek_struct_Box;"));
+    assert.ok(!c.includes("__vek_fn_Box_get"));
+  });
+
   test("lowers panic to the runtime helper", () => {
     const c = emitOk(`
 fn main() -> void {

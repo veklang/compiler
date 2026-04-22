@@ -504,6 +504,88 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs generic method specialization for struct types", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct User {
+  id: i32;
+}
+
+struct Container {
+  count: i32;
+
+  fn map<T>(self, value: T) -> T {
+    return value;
+  }
+}
+
+fn main() -> i32 {
+  let container: Container = Container { count: 0 };
+  let user: User = User { id: 42 };
+  let copied: User = container.map(user);
+  return copied.id;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs generic struct specialization for aggregate fields", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct User {
+  id: i32;
+}
+
+struct Box<T> {
+  value: T;
+
+  fn get(self) -> T {
+    return self.value;
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let box: Box<User> = Box { value: user };
+  let copied: User = box.get();
+  return copied.id;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs string len, concat, and eq", () => {
     if (!hasMuslGcc()) return;
 

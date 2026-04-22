@@ -86,6 +86,75 @@ fn main() -> i32 {
     assert.ok(dump.includes("call @id__User"));
   });
 
+  test("lowers generic method specialization for struct types", () => {
+    const ir = irOk(`
+struct User {
+  id: i32;
+}
+
+struct Container {
+  count: i32;
+
+  fn map<T>(self, value: T) -> T {
+    return value;
+  }
+}
+
+fn main() -> i32 {
+  let container: Container = Container { count: 0 };
+  let user: User = User { id: 42 };
+  let copied: User = container.map(user);
+  return copied.id;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(
+      dump.includes(
+        "fn fn.Container__map__User Container__map__User(self: Container, value: User) -> User",
+      ),
+    );
+    assert.ok(!dump.includes("fn fn.Container_map Container_map"));
+    assert.ok(dump.includes("call @Container__map__User"));
+  });
+
+  test("lowers generic struct specialization for aggregate fields", () => {
+    const ir = irOk(`
+struct User {
+  id: i32;
+}
+
+struct Box<T> {
+  value: T;
+
+  fn get(self) -> T {
+    return self.value;
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  let box: Box<User> = Box { value: user };
+  let copied: User = box.get();
+  return copied.id;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(
+      dump.includes("struct struct.Box__User Box__User { value: User }"),
+    );
+    assert.ok(!dump.includes("struct struct.Box Box { value: T }"));
+    assert.ok(
+      dump.includes(
+        "fn fn.Box__User_get Box__User_get(self: Box__User) -> User",
+      ),
+    );
+    assert.ok(!dump.includes("fn fn.Box_get Box_get(self: Box) -> T"));
+    assert.ok(dump.includes("construct_struct struct.Box__User"));
+    assert.ok(dump.includes("call @Box__User_get"));
+  });
+
   test("records runtime requirements for panic and strings", () => {
     const ir = irOk(`
 fn main() -> void {

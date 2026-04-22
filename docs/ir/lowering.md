@@ -263,8 +263,10 @@ Rules:
 - No generic function declarations may appear unless represented only as source
   metadata.
 - Each used type argument set gets a concrete `IrFunction`.
-- Each used generic struct/enum instantiation gets concrete type declarations as
+- Each used generic struct instantiation gets a concrete type declaration as
   needed.
+- Non-generic methods on used generic struct owners lower once per concrete
+  owner layout.
 - Mangled names must be deterministic.
 
 ## Traits

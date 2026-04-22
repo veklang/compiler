@@ -119,11 +119,12 @@ The IR and C backend currently cover:
 14. Function values for named functions, non-capturing anonymous functions,
     inherent methods, type-qualified method references, and direct instance
     method calls.
-15. Generic free function specializations for used concrete instantiations,
-    including aggregate struct type arguments.
+15. Generic free function specializations, generic method specializations on
+    concrete owner types, used generic struct layout specializations, and
+    non-generic methods on used generic struct owner specializations.
 
-Specialized generic methods and broader generic bodies remain an active backend
-area.
+Broader generic bodies, including method-generic functions on generic owner
+types, remain an active backend area.
 
 ## Non-Negotiable Invariants
 
