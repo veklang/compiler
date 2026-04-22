@@ -5,8 +5,18 @@ import type { Token } from "@/types/token";
 import { keywords } from "@/types/token";
 
 const operatorCandidates: Operator[] = [
+  "<<=",
+  ">>=",
   "=>",
   "->",
+  "+=",
+  "-=",
+  "*=",
+  "/=",
+  "%=",
+  "&=",
+  "^=",
+  "|=",
   "==",
   "!=",
   "<=",

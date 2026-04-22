@@ -215,6 +215,7 @@ export interface MatchStatementArm extends Node {
 
 export interface AssignmentStatement extends Node {
   kind: "AssignmentStatement";
+  operator: Operator;
   target: AssignableExpression;
   value: Expression;
 }

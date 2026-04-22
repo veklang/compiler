@@ -40,6 +40,16 @@ export const keywords = [
 export type Keyword = (typeof keywords)[number];
 
 export type Operator =
+  | "+="
+  | "-="
+  | "*="
+  | "/="
+  | "%="
+  | "<<="
+  | ">>="
+  | "&="
+  | "^="
+  | "|="
   | "+"
   | "-"
   | "!"

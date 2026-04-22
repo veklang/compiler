@@ -468,6 +468,49 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs compound assignments", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let x: i32 = 40;
+  x += 2;
+  x -= 2;
+  x *= 2;
+  x /= 2;
+  x %= 50;
+  x |= 2;
+  x &= 63;
+  x ^= 0;
+  x <<= 1;
+  x >>= 1;
+
+  let s: string = "ve";
+  s += "k";
+  if s != "vek" {
+    return 0;
+  }
+  return x;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs generic function specialization for struct types", () => {
     if (!hasMuslGcc()) return;
 

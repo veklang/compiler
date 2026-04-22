@@ -462,6 +462,27 @@ fn main() -> void {
 `);
   });
 
+  test("compound assignments are type checked", () => {
+    checkOk(`
+fn main() -> void {
+  let x: i32 = 4;
+  x += 2;
+  x -= 1;
+  x *= 3;
+  x /= 2;
+  x %= 5;
+  x <<= 1;
+  x >>= 1;
+  x &= 7;
+  x ^= 3;
+  x |= 8;
+
+  let s: string = "ve";
+  s += "k";
+}
+`);
+  });
+
   test("generic function value assigned to matching bounded type is accepted", () => {
     checkOk(`
 fn same<T: Equal<T>>(a: T, b: T) -> bool {

@@ -49,6 +49,7 @@ import type {
 } from "@/types/ast";
 import type { Diagnostic } from "@/types/diagnostic";
 import type { Span } from "@/types/position";
+import type { Operator } from "@/types/shared";
 
 type PrimitiveName =
   | "i8"
@@ -1177,10 +1178,95 @@ export class Checker {
 
     const targetType = this.checkAssignableTarget(node.target, scope);
     const valueType = this.checkExpression(node.value, scope, targetType);
+    const assignedType =
+      node.operator === "="
+        ? valueType
+        : this.checkCompoundAssignment(node, targetType, valueType);
 
-    if (!this.isAssignable(valueType, targetType)) {
+    if (!this.isAssignable(assignedType, targetType)) {
       this.report("Type mismatch in assignment.", node.span, "E2101");
     }
+  }
+
+  private checkCompoundAssignment(
+    node: AssignmentStatement,
+    targetType: Type,
+    valueType: Type,
+  ): Type {
+    const operator = compoundAssignmentOperator(node.operator);
+    if (!operator) return valueType;
+
+    if (operator === "+") {
+      if (this.isStringType(targetType) || this.isStringType(valueType)) {
+        if (!this.isStringType(targetType) || !this.isStringType(valueType)) {
+          this.report(
+            "String concatenation requires string operands.",
+            node.span,
+            "E2101",
+          );
+        }
+        return this.primitive("string");
+      }
+    }
+
+    if (["&", "|", "^"].includes(operator)) {
+      if (!this.isIntegerType(targetType) || !this.isIntegerType(valueType)) {
+        this.report(
+          "Bitwise operators require integer operands.",
+          node.span,
+          "E2101",
+        );
+        return this.errorType();
+      }
+      if (!this.typeEquals(targetType, valueType)) {
+        this.report(
+          "Bitwise operators require matching integer types.",
+          node.span,
+          "E2101",
+        );
+      }
+      return targetType;
+    }
+
+    if (operator === "<<" || operator === ">>") {
+      if (!this.isIntegerType(targetType) || !this.isIntegerType(valueType)) {
+        this.report(
+          "Shift operators require integer operands.",
+          node.span,
+          "E2101",
+        );
+        return this.errorType();
+      }
+      if (!this.typeEquals(targetType, valueType)) {
+        this.report(
+          "Shift operators require matching integer types.",
+          node.span,
+          "E2101",
+        );
+      }
+      return targetType;
+    }
+
+    if (["+", "-", "*", "/", "%"].includes(operator)) {
+      if (!this.isNumericType(targetType) || !this.isNumericType(valueType)) {
+        this.report(
+          "Arithmetic requires numeric operands.",
+          node.span,
+          "E2101",
+        );
+        return this.errorType();
+      }
+      if (!this.typeEquals(targetType, valueType)) {
+        this.report(
+          "Arithmetic requires matching numeric types.",
+          node.span,
+          "E2101",
+        );
+      }
+      return targetType;
+    }
+
+    return this.errorType();
   }
 
   private isAssignableTarget(node: Expression): boolean {
@@ -3952,4 +4038,18 @@ interface CoverageTracker {
   seen: Set<string>;
   enumType: NamedRefType | null;
   nullableBase: Type | null;
+}
+
+function compoundAssignmentOperator(operator: Operator): Operator | null {
+  if (operator === "+=") return "+";
+  if (operator === "-=") return "-";
+  if (operator === "*=") return "*";
+  if (operator === "/=") return "/";
+  if (operator === "%=") return "%";
+  if (operator === "<<=") return "<<";
+  if (operator === ">>=") return ">>";
+  if (operator === "&=") return "&";
+  if (operator === "^=") return "^";
+  if (operator === "|=") return "|";
+  return null;
 }

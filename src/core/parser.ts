@@ -457,7 +457,8 @@ export class Parser {
     const expression = this.parseExpression();
     if (!expression) return null;
 
-    if (this.matchOperator("=")) {
+    const assignmentOperator = this.matchAssignmentOperator();
+    if (assignmentOperator) {
       const value =
         this.parseExpression() ??
         this.placeholderExpression(this.currentSpan());
@@ -465,6 +466,7 @@ export class Parser {
       return {
         kind: "AssignmentStatement",
         span: this.spanFrom(expression.span, value.span),
+        operator: assignmentOperator,
         target: expression as AssignableExpression,
         value,
       };
@@ -1556,6 +1558,30 @@ export class Parser {
 
   private matchOperator(operator: Operator): Token | null {
     if (this.checkOperator(operator)) return this.advance();
+    return null;
+  }
+
+  private matchAssignmentOperator(): Operator | null {
+    const token = this.peek();
+    if (token?.kind !== "Operator") return null;
+    if (
+      [
+        "=",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "%=",
+        "<<=",
+        ">>=",
+        "&=",
+        "^=",
+        "|=",
+      ].includes(token.operator ?? "")
+    ) {
+      this.advance();
+      return token.operator ?? "=";
+    }
     return null;
   }
 

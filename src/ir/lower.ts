@@ -65,6 +65,7 @@ import type {
   VariableDeclaration,
   WhileStatement,
 } from "@/types/ast";
+import type { Operator } from "@/types/shared";
 
 interface LowerOptions {
   sourcePath?: string;
@@ -1012,6 +1013,11 @@ function lowerAssignment(
   statement: AssignmentStatement,
   context: LowerContext,
 ) {
+  if (statement.operator !== "=") {
+    lowerCompoundAssignment(statement, context);
+    return;
+  }
+
   if (statement.target.kind === "MemberExpression") {
     const localId = resolveLocalFromMember(statement.target, context);
     const value = lowerExpression(statement.value, context);
@@ -1094,6 +1100,192 @@ function lowerAssignment(
     span: statement.span,
   });
   markLocalOwns(target, value, context);
+}
+
+function lowerCompoundAssignment(
+  statement: AssignmentStatement,
+  context: LowerContext,
+) {
+  const operator = compoundAssignmentOperator(statement.operator);
+  if (!operator) throw new Error("IR lowering: invalid compound assignment.");
+
+  if (statement.target.kind === "MemberExpression") {
+    const localId = resolveLocalFromMember(statement.target, context);
+    const targetType = typeFromNodeInContext(context, statement.target);
+    const object: IrOperand = {
+      kind: "local",
+      id: localId,
+      type: context.localTypes.get(localId) ?? { kind: "unknown" },
+    };
+    const oldTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "get_field",
+      target: oldTarget,
+      object,
+      field: statement.target.property.name,
+      type: targetType,
+      span: statement.target.span,
+    });
+    const value = lowerCompoundOperation(
+      operator,
+      { kind: "temp", id: oldTarget, type: targetType },
+      lowerExpression(statement.value, context),
+      targetType,
+      context,
+      statement.span,
+    );
+    context.currentBlock.instructions.push({
+      kind: "set_field",
+      target: localId,
+      field: statement.target.property.name,
+      value,
+      span: statement.span,
+    });
+    releaseIfOwnedTemp(value, context);
+    return;
+  }
+
+  if (statement.target.kind === "IndexExpression") {
+    const arrayOperand = detachArrayForIndexedMutation(
+      statement.target.object,
+      context,
+      statement.span,
+    );
+    const indexOperand = lowerExpression(statement.target.index, context);
+    const targetType = typeFromNodeInContext(context, statement.target);
+    const oldTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "array_get",
+      target: oldTarget,
+      array: arrayOperand,
+      index: indexOperand,
+      elementType: targetType,
+      type: targetType,
+      span: statement.target.span,
+    });
+    const oldValue = { kind: "temp" as const, id: oldTarget, type: targetType };
+    retainIfBorrowedHeap(oldValue, context, statement.span);
+    markOwnedTemp(oldTarget, targetType, context);
+    const value = lowerCompoundOperation(
+      operator,
+      oldValue,
+      lowerExpression(statement.value, context),
+      targetType,
+      context,
+      statement.span,
+    );
+    context.currentBlock.instructions.push({
+      kind: "array_set",
+      array: arrayOperand,
+      index: indexOperand,
+      value,
+      elementType: targetType,
+      span: statement.span,
+    });
+    releaseIfOwnedTemp(arrayOperand, context);
+    releaseIfOwnedTemp(value, context);
+    return;
+  }
+
+  if (statement.target.kind !== "IdentifierExpression") {
+    throw new Error("IR lowering only supports assignable compound targets.");
+  }
+
+  const globalId = context.globals.get(statement.target.name);
+  if (globalId) {
+    const targetType = context.globalTypes.get(globalId) ?? {
+      kind: "unknown" as const,
+    };
+    const oldValue: IrOperand = {
+      kind: "global",
+      id: globalId,
+      type: targetType,
+    };
+    const value = lowerCompoundOperation(
+      operator,
+      oldValue,
+      lowerExpression(statement.value, context),
+      targetType,
+      context,
+      statement.span,
+    );
+    releaseGlobalIfHeap(globalId, context, statement.span);
+    retainIfBorrowedHeap(value, context, statement.span);
+    context.currentBlock.instructions.push({
+      kind: "store_global",
+      globalId,
+      value,
+      span: statement.span,
+    });
+    if (value.kind === "temp") context.ownedTemps.delete(value.id);
+    return;
+  }
+
+  const target = context.locals.get(statement.target.name);
+  if (!target) {
+    throw new Error(
+      `Unknown local '${statement.target.name}' during IR lowering.`,
+    );
+  }
+  const targetType = context.localTypes.get(target) ?? { kind: "unknown" };
+  const oldValue: IrOperand = { kind: "local", id: target, type: targetType };
+  const value = lowerCompoundOperation(
+    operator,
+    oldValue,
+    lowerExpression(statement.value, context),
+    targetType,
+    context,
+    statement.span,
+  );
+  releaseLocalIfOwned(target, context, statement.span);
+  retainIfBorrowedHeap(value, context, statement.span);
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target,
+    value,
+    span: statement.span,
+  });
+  markLocalOwns(target, value, context);
+}
+
+function lowerCompoundOperation(
+  operator: Operator,
+  left: IrOperand,
+  right: IrOperand,
+  type: IrType,
+  context: LowerContext,
+  span: IrLocal["span"],
+): IrOperand {
+  if (type.kind === "primitive" && type.name === "string" && operator === "+") {
+    const target = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "string_concat",
+      target,
+      left,
+      right,
+      type,
+      span,
+    });
+    releaseIfOwnedTemp(left, context);
+    releaseIfOwnedTemp(right, context);
+    markOwnedTemp(target, type, context);
+    context.runtime.strings = true;
+    return { kind: "temp", id: target, type };
+  }
+
+  const target = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "binary",
+    target,
+    operator,
+    left,
+    right,
+    type,
+    span,
+  });
+  releaseIfOwnedTemp(left, context);
+  releaseIfOwnedTemp(right, context);
+  return { kind: "temp", id: target, type };
 }
 
 function resolveLocalFromMember(
@@ -3416,4 +3608,18 @@ function methodInstantiationLinkName(
     ? methodLinkName(ownerName, instantiation.name)
     : `${ownerName}__${instantiation.name}`;
   return mangleName(base, instantiation.typeArgs);
+}
+
+function compoundAssignmentOperator(operator: Operator): Operator | null {
+  if (operator === "+=") return "+";
+  if (operator === "-=") return "-";
+  if (operator === "*=") return "*";
+  if (operator === "/=") return "/";
+  if (operator === "%=") return "%";
+  if (operator === "<<=") return "<<";
+  if (operator === ">>=") return ">>";
+  if (operator === "&=") return "&";
+  if (operator === "^=") return "^";
+  if (operator === "|=") return "|";
+  return null;
 }

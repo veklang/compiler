@@ -233,6 +233,22 @@ fn inc() -> i32 {
     assert.ok(c.includes("return __vek_global_counter;"));
   });
 
+  test("emits compound assignment as binary operation and assignment", () => {
+    const c = emitOk(`
+fn main() -> i32 {
+  let x: i32 = 4;
+  x += 2;
+  x *= 5;
+  return x;
+}
+`);
+
+    assert.ok(c.includes("int32_t t0 = v0 + 2;"));
+    assert.ok(c.includes("v0 = t0;"));
+    assert.ok(c.includes("int32_t t1 = v0 * 5;"));
+    assert.ok(c.includes("v0 = t1;"));
+  });
+
   test("emits lazy global initializer guards", () => {
     const c = emitOk(`
 fn make() -> i32 {

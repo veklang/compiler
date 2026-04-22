@@ -56,6 +56,10 @@ arr[i] = value
 
 Invalid assignment targets must never reach IR.
 
+Compound assignments lower as a read of the assignable place, a binary
+operation, and a write back to the same place. The assignable place is evaluated
+once.
+
 ## If
 
 See [control-flow.md § If](./control-flow.md#if) for block diagrams.

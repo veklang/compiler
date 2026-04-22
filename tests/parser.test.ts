@@ -162,6 +162,44 @@ fn main() -> void {
     assert.equal(program.body[0].kind, "FunctionDeclaration");
   });
 
+  test("compound assignment statements", () => {
+    const program = parseOk(`
+fn main() -> void {
+  let x: i32 = 1;
+  x += 2;
+  x -= 1;
+  x *= 3;
+  x /= 2;
+  x %= 4;
+  x <<= 1;
+  x >>= 1;
+  x &= 7;
+  x ^= 3;
+  x |= 8;
+}
+`);
+    assert.equal(program.body[0].kind, "FunctionDeclaration");
+    const fn = program.body[0];
+    assert.ok(fn.kind === "FunctionDeclaration" && fn.body);
+    const assignments = fn.body.body
+      .filter((statement) => statement.kind === "AssignmentStatement")
+      .map((statement) =>
+        statement.kind === "AssignmentStatement" ? statement.operator : "",
+      );
+    assert.deepEqual(assignments, [
+      "+=",
+      "-=",
+      "*=",
+      "/=",
+      "%=",
+      "<<=",
+      ">>=",
+      "&=",
+      "^=",
+      "|=",
+    ]);
+  });
+
   test("match statement and match expression", () => {
     const program = parseOk(`
 enum Result<T, E> {

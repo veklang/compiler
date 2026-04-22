@@ -246,6 +246,23 @@ fn inc() -> i32 {
     assert.ok(dump.includes("return global.counter"));
   });
 
+  test("lowers compound assignment to binary operation and assignment", () => {
+    const ir = irOk(`
+fn main() -> i32 {
+  let x: i32 = 4;
+  x += 2;
+  x *= 5;
+  return x;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("tmp.0: i32 = local.0 + 2"));
+    assert.ok(dump.includes("tmp.1: i32 = local.0 * 5"));
+    assert.ok(dump.includes("local.0 = tmp.0"));
+    assert.ok(dump.includes("local.0 = tmp.1"));
+  });
+
   test("lowers non-literal global initializers to lazy init functions", () => {
     const ir = irOk(`
 fn make() -> i32 {
