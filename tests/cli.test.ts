@@ -511,6 +511,47 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs compound assignment places", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+let total: i32 = 1;
+
+struct Acc {
+  value: i32;
+  name: string;
+}
+
+fn main() -> i32 {
+  let acc: Acc = Acc { value: 40, name: "ve" };
+  let xs: i32[] = [1, 2, 3];
+  acc.value += 2;
+  xs[1] += acc.value;
+  total += xs[1];
+  acc.name += "k";
+  if acc.name != "vek" {
+    return 0;
+  }
+  return total - 3;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+        try {
+          const result = spawnSync(options.outputPath, [], {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs generic function specialization for struct types", () => {
     if (!hasMuslGcc()) return;
 

@@ -139,6 +139,35 @@ interface LocalSnapshot {
   ownedLocals: Set<IrLocalId>;
 }
 
+type AssignablePlace =
+  | {
+      kind: "local";
+      target: IrLocalId;
+      type: IrType;
+      span?: IrLocal["span"];
+    }
+  | {
+      kind: "global";
+      target: IrGlobalId;
+      type: IrType;
+      span?: IrLocal["span"];
+    }
+  | {
+      kind: "field";
+      target: IrLocalId;
+      object: IrOperand;
+      field: string;
+      type: IrType;
+      span?: IrLocal["span"];
+    }
+  | {
+      kind: "index";
+      array: IrOperand;
+      index: IrOperand;
+      type: IrType;
+      span?: IrLocal["span"];
+    };
+
 export function lowerProgramToIr(
   program: Program,
   checkResult: IrTypeSource,
@@ -1013,239 +1042,260 @@ function lowerAssignment(
   statement: AssignmentStatement,
   context: LowerContext,
 ) {
+  const place = resolveAssignablePlace(statement.target, context);
+
   if (statement.operator !== "=") {
-    lowerCompoundAssignment(statement, context);
+    lowerCompoundAssignment(statement, place, context);
     return;
   }
 
-  if (statement.target.kind === "MemberExpression") {
-    const localId = resolveLocalFromMember(statement.target, context);
-    const value = lowerExpression(statement.value, context);
-    context.currentBlock.instructions.push({
-      kind: "set_field",
-      target: localId,
-      field: statement.target.property.name,
-      value,
-      span: statement.span,
-    });
-    releaseIfOwnedTemp(value, context);
-    return;
-  }
-  if (statement.target.kind === "IndexExpression") {
-    const arrayOperand = detachArrayForIndexedMutation(
-      statement.target.object,
-      context,
-      statement.span,
-    );
-    const indexOperand = lowerExpression(statement.target.index, context);
-    const valueOperand = lowerExpression(statement.value, context);
-    context.currentBlock.instructions.push({
-      kind: "array_set",
-      array: arrayOperand,
-      index: indexOperand,
-      value: valueOperand,
-      elementType: valueOperand.type,
-      span: statement.span,
-    });
-    releaseIfOwnedTemp(arrayOperand, context);
-    releaseIfOwnedTemp(valueOperand, context);
-    return;
-  }
-  if (statement.target.kind !== "IdentifierExpression") {
-    throw new Error("IR lowering only supports identifier assignment so far.");
-  }
-  const globalId = context.globals.get(statement.target.name);
-  if (globalId) {
-    const value = coerceOperand(
-      lowerExpression(statement.value, context),
-      context.globalTypes.get(globalId) ??
-        typeFromNodeInContext(context, statement.value),
-      context,
-      statement.span,
-    );
-    if (!(value.kind === "global" && value.id === globalId)) {
-      releaseGlobalIfHeap(globalId, context, statement.span);
-      retainIfBorrowedHeap(value, context, statement.span);
-    }
-    context.currentBlock.instructions.push({
-      kind: "store_global",
-      globalId,
-      value,
-      span: statement.span,
-    });
-    if (value.kind === "temp") context.ownedTemps.delete(value.id);
-    return;
-  }
-  const target = context.locals.get(statement.target.name);
-  if (!target) {
-    throw new Error(
-      `Unknown local '${statement.target.name}' during IR lowering.`,
-    );
-  }
   const value = coerceOperand(
     lowerExpression(statement.value, context),
-    context.localTypes.get(target) ??
-      typeFromNodeInContext(context, statement.value),
+    place.type,
     context,
     statement.span,
   );
-  if (!(value.kind === "local" && value.id === target)) {
-    releaseLocalIfOwned(target, context, statement.span);
-    retainIfBorrowedHeap(value, context, statement.span);
-  }
-  context.currentBlock.instructions.push({
-    kind: "assign",
-    target,
-    value,
-    span: statement.span,
-  });
-  markLocalOwns(target, value, context);
+  writeAssignablePlace(place, value, context, statement.span);
 }
 
 function lowerCompoundAssignment(
   statement: AssignmentStatement,
+  place: AssignablePlace,
   context: LowerContext,
 ) {
   const operator = compoundAssignmentOperator(statement.operator);
   if (!operator) throw new Error("IR lowering: invalid compound assignment.");
+  const oldValue = readAssignablePlace(place, context, true);
+  const value = lowerCompoundOperation(
+    operator,
+    oldValue,
+    lowerExpression(statement.value, context),
+    place.type,
+    context,
+    statement.span,
+  );
+  writeAssignablePlace(place, value, context, statement.span, {
+    releaseOld: place.kind !== "field",
+  });
+}
 
-  if (statement.target.kind === "MemberExpression") {
-    const localId = resolveLocalFromMember(statement.target, context);
-    const targetType = typeFromNodeInContext(context, statement.target);
-    const object: IrOperand = {
-      kind: "local",
-      id: localId,
-      type: context.localTypes.get(localId) ?? { kind: "unknown" },
+function resolveAssignablePlace(
+  target: Expression,
+  context: LowerContext,
+): AssignablePlace {
+  if (target.kind === "IdentifierExpression") {
+    const localId = context.locals.get(target.name);
+    if (localId) {
+      return {
+        kind: "local",
+        target: localId,
+        type:
+          context.localTypes.get(localId) ??
+          typeFromNodeInContext(context, target),
+        span: target.span,
+      };
+    }
+
+    const globalId = context.globals.get(target.name);
+    if (globalId) {
+      return {
+        kind: "global",
+        target: globalId,
+        type:
+          context.globalTypes.get(globalId) ??
+          typeFromNodeInContext(context, target),
+        span: target.span,
+      };
+    }
+
+    throw new Error(`Unknown local '${target.name}' during IR lowering.`);
+  }
+
+  if (target.kind === "MemberExpression") {
+    const localId = resolveLocalFromMember(target, context);
+    const objectType = context.localTypes.get(localId) ?? { kind: "unknown" };
+    const checkedType = typeFromNodeInContext(context, target);
+    const fieldType =
+      checkedType.kind !== "unknown"
+        ? checkedType
+        : objectType.kind === "named"
+          ? (context.structFields
+              .get(objectType.name)
+              ?.find((field) => field.name === target.property.name)?.type ??
+            checkedType)
+          : checkedType;
+    return {
+      kind: "field",
+      target: localId,
+      object: { kind: "local", id: localId, type: objectType },
+      field: target.property.name,
+      type: fieldType,
+      span: target.span,
     };
-    const oldTarget = nextTemp(context);
+  }
+
+  if (target.kind === "IndexExpression") {
+    const array = detachArrayForIndexedMutation(
+      target.object,
+      context,
+      target.span,
+    );
+    const checkedType = typeFromNodeInContext(context, target);
+    const elementType =
+      checkedType.kind !== "unknown"
+        ? checkedType
+        : array.type.kind === "named" &&
+            array.type.name === "Array" &&
+            array.type.args.length > 0
+          ? array.type.args[0]
+          : checkedType;
+    return {
+      kind: "index",
+      array,
+      index: lowerExpression(target.index, context),
+      type: elementType,
+      span: target.span,
+    };
+  }
+
+  throw new Error("IR lowering only supports assignable targets.");
+}
+
+function readAssignablePlace(
+  place: AssignablePlace,
+  context: LowerContext,
+  releaseBorrowedFieldOnUse = false,
+): IrOperand {
+  if (place.kind === "local") {
+    return { kind: "local", id: place.target, type: place.type };
+  }
+
+  if (place.kind === "global") {
+    if (context.lazyGlobals.has(place.target)) {
+      context.currentBlock.instructions.push({
+        kind: "ensure_global_initialized",
+        globalId: place.target,
+        span: place.span,
+      });
+    }
+    return { kind: "global", id: place.target, type: place.type };
+  }
+
+  const target = nextTemp(context);
+  if (place.kind === "field") {
     context.currentBlock.instructions.push({
       kind: "get_field",
-      target: oldTarget,
-      object,
-      field: statement.target.property.name,
-      type: targetType,
-      span: statement.target.span,
+      target,
+      object: place.object,
+      field: place.field,
+      type: place.type,
+      span: place.span,
     });
-    const value = lowerCompoundOperation(
-      operator,
-      { kind: "temp", id: oldTarget, type: targetType },
-      lowerExpression(statement.value, context),
-      targetType,
-      context,
-      statement.span,
-    );
+    if (releaseBorrowedFieldOnUse) markOwnedTemp(target, place.type, context);
+    return { kind: "temp", id: target, type: place.type };
+  }
+
+  context.currentBlock.instructions.push({
+    kind: "array_get",
+    target,
+    array: place.array,
+    index: place.index,
+    elementType: place.type,
+    type: place.type,
+    span: place.span,
+  });
+  const value = { kind: "temp" as const, id: target, type: place.type };
+  retainIfBorrowedHeap(value, context, place.span);
+  markOwnedTemp(target, place.type, context);
+  return value;
+}
+
+function writeAssignablePlace(
+  place: AssignablePlace,
+  value: IrOperand,
+  context: LowerContext,
+  span?: IrLocal["span"],
+  options: { releaseOld?: boolean } = {},
+) {
+  const releaseOld = options.releaseOld ?? true;
+
+  if (place.kind === "local") {
+    if (!(value.kind === "local" && value.id === place.target)) {
+      releaseLocalIfOwned(place.target, context, span);
+      retainIfBorrowedHeap(value, context, span);
+    }
     context.currentBlock.instructions.push({
-      kind: "set_field",
-      target: localId,
-      field: statement.target.property.name,
+      kind: "assign",
+      target: place.target,
       value,
-      span: statement.span,
+      span,
     });
-    releaseIfOwnedTemp(value, context);
+    markLocalOwns(place.target, value, context);
     return;
   }
 
-  if (statement.target.kind === "IndexExpression") {
-    const arrayOperand = detachArrayForIndexedMutation(
-      statement.target.object,
-      context,
-      statement.span,
-    );
-    const indexOperand = lowerExpression(statement.target.index, context);
-    const targetType = typeFromNodeInContext(context, statement.target);
-    const oldTarget = nextTemp(context);
-    context.currentBlock.instructions.push({
-      kind: "array_get",
-      target: oldTarget,
-      array: arrayOperand,
-      index: indexOperand,
-      elementType: targetType,
-      type: targetType,
-      span: statement.target.span,
-    });
-    const oldValue = { kind: "temp" as const, id: oldTarget, type: targetType };
-    retainIfBorrowedHeap(oldValue, context, statement.span);
-    markOwnedTemp(oldTarget, targetType, context);
-    const value = lowerCompoundOperation(
-      operator,
-      oldValue,
-      lowerExpression(statement.value, context),
-      targetType,
-      context,
-      statement.span,
-    );
-    context.currentBlock.instructions.push({
-      kind: "array_set",
-      array: arrayOperand,
-      index: indexOperand,
-      value,
-      elementType: targetType,
-      span: statement.span,
-    });
-    releaseIfOwnedTemp(arrayOperand, context);
-    releaseIfOwnedTemp(value, context);
-    return;
-  }
-
-  if (statement.target.kind !== "IdentifierExpression") {
-    throw new Error("IR lowering only supports assignable compound targets.");
-  }
-
-  const globalId = context.globals.get(statement.target.name);
-  if (globalId) {
-    const targetType = context.globalTypes.get(globalId) ?? {
-      kind: "unknown" as const,
-    };
-    const oldValue: IrOperand = {
-      kind: "global",
-      id: globalId,
-      type: targetType,
-    };
-    const value = lowerCompoundOperation(
-      operator,
-      oldValue,
-      lowerExpression(statement.value, context),
-      targetType,
-      context,
-      statement.span,
-    );
-    releaseGlobalIfHeap(globalId, context, statement.span);
-    retainIfBorrowedHeap(value, context, statement.span);
+  if (place.kind === "global") {
+    if (!(value.kind === "global" && value.id === place.target)) {
+      releaseGlobalIfHeap(place.target, context, span);
+      retainIfBorrowedHeap(value, context, span);
+    }
     context.currentBlock.instructions.push({
       kind: "store_global",
-      globalId,
+      globalId: place.target,
       value,
-      span: statement.span,
+      span,
     });
     if (value.kind === "temp") context.ownedTemps.delete(value.id);
     return;
   }
 
-  const target = context.locals.get(statement.target.name);
-  if (!target) {
-    throw new Error(
-      `Unknown local '${statement.target.name}' during IR lowering.`,
-    );
+  if (place.kind === "field") {
+    retainIfBorrowedHeap(value, context, span);
+    if (releaseOld) releaseFieldIfHeap(place, context, span);
+    context.currentBlock.instructions.push({
+      kind: "set_field",
+      target: place.target,
+      field: place.field,
+      value,
+      span,
+    });
+    if (value.kind === "temp") context.ownedTemps.delete(value.id);
+    return;
   }
-  const targetType = context.localTypes.get(target) ?? { kind: "unknown" };
-  const oldValue: IrOperand = { kind: "local", id: target, type: targetType };
-  const value = lowerCompoundOperation(
-    operator,
-    oldValue,
-    lowerExpression(statement.value, context),
-    targetType,
-    context,
-    statement.span,
-  );
-  releaseLocalIfOwned(target, context, statement.span);
-  retainIfBorrowedHeap(value, context, statement.span);
+
   context.currentBlock.instructions.push({
-    kind: "assign",
-    target,
+    kind: "array_set",
+    array: place.array,
+    index: place.index,
     value,
-    span: statement.span,
+    elementType: place.type,
+    span,
   });
-  markLocalOwns(target, value, context);
+  releaseIfOwnedTemp(place.array, context);
+  releaseIfOwnedTemp(value, context);
+}
+
+function releaseFieldIfHeap(
+  place: Extract<AssignablePlace, { kind: "field" }>,
+  context: LowerContext,
+  span?: IrLocal["span"],
+) {
+  if (!hasOwnedStorage(place.type, context)) return;
+  const oldTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "get_field",
+    target: oldTarget,
+    object: place.object,
+    field: place.field,
+    type: place.type,
+    span,
+  });
+  context.currentBlock.instructions.push({
+    kind: "release",
+    value: { kind: "temp", id: oldTarget, type: place.type },
+    span,
+  });
+  context.runtime.refCounting = true;
 }
 
 function lowerCompoundOperation(
@@ -2996,6 +3046,13 @@ function releaseGlobalIfHeap(
 ) {
   const type = context.globalTypes.get(globalId);
   if (!type || !hasOwnedStorage(type, context)) return;
+  if (context.lazyGlobals.has(globalId)) {
+    context.currentBlock.instructions.push({
+      kind: "ensure_global_initialized",
+      globalId,
+      span,
+    });
+  }
   context.currentBlock.instructions.push({
     kind: "release",
     value: { kind: "global", id: globalId, type },

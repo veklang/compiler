@@ -263,6 +263,35 @@ fn main() -> i32 {
     assert.ok(dump.includes("local.0 = tmp.1"));
   });
 
+  test("lowers compound assignment through assignable places", () => {
+    const ir = irOk(`
+let total: i32 = 1;
+
+struct Acc {
+  value: i32;
+  name: string;
+}
+
+fn main() -> i32 {
+  let acc: Acc = Acc { value: 40, name: "ve" };
+  let xs: i32[] = [1, 2, 3];
+  acc.value += 2;
+  xs[1] += acc.value;
+  total += xs[1];
+  acc.name += "k";
+  return total;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("get_field local.0.value"));
+    assert.ok(dump.includes("set_field local.0.value"));
+    assert.ok(dump.includes("array_get"));
+    assert.ok(dump.includes("array_set"));
+    assert.ok(dump.includes("store_global global.total"));
+    assert.ok(dump.includes("string_concat"));
+  });
+
   test("lowers non-literal global initializers to lazy init functions", () => {
     const ir = irOk(`
 fn make() -> i32 {

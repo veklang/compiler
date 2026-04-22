@@ -249,6 +249,33 @@ fn main() -> i32 {
     assert.ok(c.includes("v0 = t1;"));
   });
 
+  test("emits compound assignment through assignable places", () => {
+    const c = emitOk(`
+let total: i32 = 1;
+
+struct Acc {
+  value: i32;
+  name: string;
+}
+
+fn main() -> i32 {
+  let acc: Acc = Acc { value: 40, name: "ve" };
+  let xs: i32[] = [1, 2, 3];
+  acc.value += 2;
+  xs[1] += acc.value;
+  total += xs[1];
+  acc.name += "k";
+  return total;
+}
+`);
+
+    assert.ok(c.includes(".value ="));
+    assert.ok(c.includes("__vek_array_get("));
+    assert.ok(c.includes("__vek_array_set("));
+    assert.ok(c.includes("__vek_global_total ="));
+    assert.ok(c.includes("__vek_string_concat("));
+  });
+
   test("emits lazy global initializer guards", () => {
     const c = emitOk(`
 fn make() -> i32 {

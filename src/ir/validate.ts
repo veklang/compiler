@@ -261,6 +261,16 @@ function validateInstruction(
     return;
   }
 
+  if (instruction.kind === "set_field") {
+    if (!locals.has(instruction.target)) {
+      diagnostics.push({
+        message: `set_field in '${fn.id}' targets unknown local '${instruction.target}'.`,
+      });
+    }
+    validate(instruction.value);
+    return;
+  }
+
   if ("target" in instruction && instruction.target) {
     if (temps.has(instruction.target)) {
       diagnostics.push({
@@ -353,16 +363,6 @@ function validateInstruction(
 
   if (instruction.kind === "get_field") {
     validate(instruction.object);
-    return;
-  }
-
-  if (instruction.kind === "set_field") {
-    if (!locals.has(instruction.target)) {
-      diagnostics.push({
-        message: `set_field in '${fn.id}' targets unknown local '${instruction.target}'.`,
-      });
-    }
-    validate(instruction.value);
     return;
   }
 
