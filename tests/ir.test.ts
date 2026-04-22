@@ -63,6 +63,35 @@ fn main() {
     assert.ok(dump.includes("return local.0"));
   });
 
+  test("lowers short-circuit logical operators to blocks", () => {
+    const ir = irOk(`
+let hits: i32 = 0;
+
+fn rhs() -> bool {
+  hits = hits + 1;
+  return true;
+}
+
+fn main() -> i32 {
+  let left: bool = false && rhs();
+  let right: bool = true || rhs();
+  if left {
+    return 1;
+  }
+  if !right {
+    return 2;
+  }
+  return hits;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("cond_branch"));
+    assert.ok(dump.includes("branch"));
+    assert.ok(!dump.includes(" && "));
+    assert.ok(!dump.includes(" || "));
+  });
+
   test("lowers generic function specialization for struct types", () => {
     const ir = irOk(`
 struct User {

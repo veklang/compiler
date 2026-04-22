@@ -2426,6 +2426,10 @@ function lowerBinary(
   const nullComparison = lowerNullComparison(expression, context);
   if (nullComparison) return nullComparison;
 
+  if (expression.operator === "&&" || expression.operator === "||") {
+    return lowerShortCircuitBinary(expression, context);
+  }
+
   const leftType = typeFromNodeInContext(context, expression.left);
   const isString = leftType.kind === "primitive" && leftType.name === "string";
 
@@ -2493,6 +2497,63 @@ function lowerBinary(
     span: expression.span,
   });
   return { kind: "temp", id: target, type };
+}
+
+function lowerShortCircuitBinary(
+  expression: BinaryExpression,
+  context: LowerContext,
+): IrOperand {
+  const resultType = irPrimitive("bool");
+  const resultLocal = declareLocal(
+    context,
+    `__vek_sc_${context.nextLocal}`,
+    resultType,
+    true,
+    expression.span,
+  );
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: resultLocal.id,
+    value: {
+      kind: "const",
+      value: {
+        kind: "bool",
+        value: expression.operator === "||",
+      },
+      type: resultType,
+    },
+    span: expression.span,
+  });
+
+  const left = lowerExpression(expression.left, context);
+  const rhsBlock = newBlock(context);
+  const joinBlock = newBlock(context);
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: left,
+    thenTarget: expression.operator === "&&" ? rhsBlock.id : joinBlock.id,
+    elseTarget: expression.operator === "&&" ? joinBlock.id : rhsBlock.id,
+    span: expression.span,
+  };
+
+  switchBlock(context, rhsBlock);
+  const right = lowerExpression(expression.right, context);
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: resultLocal.id,
+    value: right,
+    span: expression.span,
+  });
+  if (!isTerminated(context)) {
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: joinBlock.id,
+      span: expression.span,
+    };
+  }
+
+  switchBlock(context, joinBlock);
+  return { kind: "local", id: resultLocal.id, type: resultType };
 }
 
 function lowerNullComparison(

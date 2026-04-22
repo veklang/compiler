@@ -433,6 +433,47 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs short-circuit logical operators", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+let hits: i32 = 0;
+
+fn rhs() -> bool {
+  hits = hits + 1;
+  return true;
+}
+
+fn main() -> i32 {
+  let left: bool = false && rhs();
+  let right: bool = true || rhs();
+  if left {
+    return 1;
+  }
+  if !right {
+    return 2;
+  }
+  return hits;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 0);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs direct instance method calls", () => {
     if (!hasMuslGcc()) return;
 
