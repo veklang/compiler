@@ -29,6 +29,4 @@ pub trait Formattable {
 pub trait Unwrappable<T> {
   fn unwrap(self) -> T;
   fn unwrap_or(self, default: T) -> T;
-  fn is_some(self) -> bool;
-  fn is_none(self) -> bool;
 }

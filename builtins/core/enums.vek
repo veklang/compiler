@@ -22,19 +22,5 @@ pub enum Result<T, E> {
         Err(_) => default,
       };
     }
-
-    fn is_some(self) -> bool {
-      return match self {
-        Ok(_) => true,
-        Err(_) => false,
-      };
-    }
-
-    fn is_none(self) -> bool {
-      return match self {
-        Ok(_) => false,
-        Err(_) => true,
-      };
-    }
   }
 }

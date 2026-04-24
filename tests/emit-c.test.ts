@@ -911,13 +911,10 @@ fn main() -> i32 {
   let maybe: i32? = null;
   let ok: Result<i32, string> = Ok(40);
   let err: Result<i32, string> = Err("bad");
-  if maybe.is_none() {
-    match compare(ok.unwrap() + err.unwrap_or(1) + maybe.unwrap_or(1), 42) {
-      Equal => { return 1; }
-      _ => { return 0; }
-    }
+  match compare(ok.unwrap() + err.unwrap_or(1) + maybe.unwrap_or(1), 42) {
+    Equal => { return 1; }
+    _ => { return 0; }
   }
-  return 0;
 }
 `);
 

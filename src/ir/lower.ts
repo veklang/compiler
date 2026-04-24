@@ -3579,12 +3579,7 @@ function lowerNullableMethodCall(
   if (expression.callee.kind !== "MemberExpression") return undefined;
   const callee = expression.callee;
   const method = callee.property.name;
-  if (
-    method !== "unwrap" &&
-    method !== "unwrap_or" &&
-    method !== "is_some" &&
-    method !== "is_none"
-  ) {
+  if (method !== "unwrap" && method !== "unwrap_or") {
     return undefined;
   }
 
@@ -3667,44 +3662,23 @@ function lowerNullableMethodCall(
       target: joinBlock.id,
       span: expression.span,
     };
-  } else {
-    context.currentBlock.instructions.push({
-      kind: "assign",
-      target: resultLocal!.id,
-      value: boolOperand(method === "is_none"),
-      span: expression.span,
-    });
-    context.currentBlock.terminator = {
-      kind: "branch",
-      target: joinBlock.id,
-      span: expression.span,
-    };
   }
 
   switchBlock(context, elseBlock);
-  if (method === "unwrap" || method === "unwrap_or") {
-    const unwrapped = maybeUnwrapNullable(
-      object,
-      objectType.base,
-      context,
-      expression.span,
-    );
-    retainIfBorrowedHeap(unwrapped, context, expression.span);
-    context.currentBlock.instructions.push({
-      kind: "assign",
-      target: resultLocal!.id,
-      value: unwrapped,
-      span: expression.span,
-    });
-    markLocalOwns(resultLocal!.id, unwrapped, context);
-  } else {
-    context.currentBlock.instructions.push({
-      kind: "assign",
-      target: resultLocal!.id,
-      value: boolOperand(method === "is_some"),
-      span: expression.span,
-    });
-  }
+  const unwrapped = maybeUnwrapNullable(
+    object,
+    objectType.base,
+    context,
+    expression.span,
+  );
+  retainIfBorrowedHeap(unwrapped, context, expression.span);
+  context.currentBlock.instructions.push({
+    kind: "assign",
+    target: resultLocal!.id,
+    value: unwrapped,
+    span: expression.span,
+  });
+  markLocalOwns(resultLocal!.id, unwrapped, context);
   context.currentBlock.terminator = {
     kind: "branch",
     target: joinBlock.id,

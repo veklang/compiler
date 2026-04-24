@@ -1078,8 +1078,8 @@ fn main() -> i32 {
   let ok: Result<i32, string> = Ok(30);
   let err: Result<i32, string> = Err("bad");
 
-  if some.is_some() {} else { return 1; }
-  if none.is_none() {} else { return 2; }
+  if some == null { return 1; }
+  if none != null { return 2; }
 
   let total = some.unwrap() + none.unwrap_or(2) + ok.unwrap() + err.unwrap_or(1);
 
