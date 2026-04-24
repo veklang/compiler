@@ -1107,6 +1107,51 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs custom trait satisfaction through a generic bound", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+trait Doubles {
+  fn doubled(self) -> i32;
+}
+
+struct Metric {
+  value: i32;
+
+  satisfies Doubles {
+    fn doubled(self) -> i32 {
+      return self.value * 2;
+    }
+  }
+}
+
+fn use_double<T: Doubles>(value: T) -> i32 {
+  return value.doubled();
+}
+
+fn main() -> i32 {
+  let metric: Metric = Metric { value: 21 };
+  return use_double(metric);
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs string len, concat, and eq", () => {
     if (!hasMuslGcc()) return;
 
