@@ -41,7 +41,6 @@ It is not responsible for:
 | `u16` | `uint16_t` |
 | `u32` | `uint32_t` |
 | `u64` | `uint64_t` |
-| `f16` | not supported until a C representation is chosen |
 | `f32` | `float` |
 | `f64` | `double` |
 | `null` | `void *` |

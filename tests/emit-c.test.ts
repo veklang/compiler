@@ -582,19 +582,6 @@ fn area(s: Shape) -> i32 {
     assert.ok(c.includes(".data.Circle._0;"));
   });
 
-  test("rejects f16 during C emission", () => {
-    const result = check(`
-fn half(x: f16) -> f16 {
-  return x;
-}
-`);
-    expectNoDiagnostics(result.lexDiagnostics, result.parseDiagnostics);
-    expectNoCheckDiagnostics(result.checkDiagnostics);
-    const ir = lowerProgramToIr(result.program, result);
-
-    assert.throws(() => emitC(ir), /f16/);
-  });
-
   test("emits checked integer helper calls for wrapping arithmetic and invalid operations", () => {
     const c = emitOk(`
 fn main() -> i32 {

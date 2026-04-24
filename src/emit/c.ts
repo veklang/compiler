@@ -1062,8 +1062,6 @@ function emitType(type: IrType): string {
       return "uint32_t";
     case "u64":
       return "uint64_t";
-    case "f16":
-      throw new Error("C emission does not support f16 yet.");
     case "f32":
       return "float";
     case "f64":

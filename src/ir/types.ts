@@ -139,7 +139,6 @@ export interface IrPrimitiveType {
     | "u16"
     | "u32"
     | "u64"
-    | "f16"
     | "f32"
     | "f64"
     | "bool"

@@ -60,7 +60,6 @@ type PrimitiveName =
   | "u16"
   | "u32"
   | "u64"
-  | "f16"
   | "f32"
   | "f64"
   | "bool"
@@ -231,7 +230,6 @@ const primitiveNames: PrimitiveName[] = [
   "u16",
   "u32",
   "u64",
-  "f16",
   "f32",
   "f64",
   "bool",
@@ -3768,7 +3766,6 @@ export class Checker {
           "u16",
           "u32",
           "u64",
-          "f16",
           "f32",
           "f64",
           "bool",
@@ -3844,9 +3841,7 @@ export class Checker {
   }
 
   private isFloatType(type: Type): type is PrimitiveType {
-    return (
-      type.kind === "Primitive" && ["f16", "f32", "f64"].includes(type.name)
-    );
+    return type.kind === "Primitive" && ["f32", "f64"].includes(type.name);
   }
 
   private isNumericType(type: Type) {
