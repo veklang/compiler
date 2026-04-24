@@ -1653,11 +1653,32 @@ export class Checker {
     const right = this.evaluateIntegerConstant(node.right);
     if (left === null || right === null) return;
 
+    if (node.operator === "<<" || node.operator === ">>") {
+      if (right < 0 || right >= this.intBitWidth(target.name)) {
+        this.report("Compile-time invalid shift.", node.span, "E2403");
+        return;
+      }
+    }
+
     if (
-      (node.operator === "<<" || node.operator === ">>") &&
-      (right < 0 || right >= this.intBitWidth(target.name))
+      (node.operator === "/" || node.operator === "%") &&
+      right === BigInt(0)
     ) {
-      this.report("Compile-time invalid shift.", node.span, "E2403");
+      this.report(
+        "Compile-time division or modulo by zero.",
+        node.span,
+        "E2404",
+      );
+      return;
+    }
+
+    if (
+      node.operator === "/" &&
+      this.isSignedIntegerPrimitiveName(target.name) &&
+      left === this.intRange(target.name)[0] &&
+      right === BigInt(-1)
+    ) {
+      this.report("Compile-time integer overflow.", node.span, "E2402");
       return;
     }
 
@@ -1674,6 +1695,10 @@ export class Checker {
     }
   }
 
+  private isSignedIntegerPrimitiveName(name: PrimitiveName): boolean {
+    return /^i(8|16|32|64)$/.test(name);
+  }
+
   private evaluateIntegerConstant(node: Expression): bigint | null {
     if (node.kind === "LiteralExpression" && node.literalType === "Integer") {
       try {
@@ -1688,6 +1713,30 @@ export class Checker {
     }
     if (node.kind === "GroupingExpression") {
       return this.evaluateIntegerConstant(node.expression);
+    }
+    if (node.kind === "BinaryExpression") {
+      const left = this.evaluateIntegerConstant(node.left);
+      const right = this.evaluateIntegerConstant(node.right);
+      if (left === null || right === null) return null;
+      if (node.operator === "+") return left + right;
+      if (node.operator === "-") return left - right;
+      if (node.operator === "*") return left * right;
+      if (node.operator === "/") {
+        if (right === BigInt(0)) return null;
+        return left / right;
+      }
+      if (node.operator === "%") {
+        if (right === BigInt(0)) return null;
+        return left % right;
+      }
+      if (node.operator === "<<") {
+        if (right < 0) return null;
+        return left << right;
+      }
+      if (node.operator === ">>") {
+        if (right < 0) return null;
+        return left >> right;
+      }
     }
     return null;
   }

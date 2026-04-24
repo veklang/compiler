@@ -609,6 +609,109 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs signed wrapping arithmetic", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let a: i8 = 127;
+  let b: i8 = a + 1;
+  let c: i8 = b - 1;
+  let d: i8 = c * 2;
+  let min: i8 = -128;
+  let e: i8 = -min;
+  let expected_b: i8 = -128;
+  let expected_c: i8 = 127;
+  let expected_d: i8 = -2;
+  let expected_e: i8 = -128;
+  if b != expected_b { return 1; }
+  if c != expected_c { return 2; }
+  if d != expected_d { return 3; }
+  if e != expected_e { return 4; }
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("panics on invalid runtime integer shift", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> void {
+  let count: i32 = 32;
+  let _x: i32 = 1 << count;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+          assert.equal(
+            result.stderr.includes("panic: invalid integer shift"),
+            true,
+          );
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("panics on runtime integer division by zero", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> void {
+  let x: i32 = 1;
+  let y: i32 = 0;
+  let _z: i32 = x / y;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+          assert.equal(
+            result.stderr.includes("panic: integer division by zero"),
+            true,
+          );
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs compound assignment places", () => {
     if (!hasMuslGcc()) return;
 

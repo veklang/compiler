@@ -901,6 +901,33 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2402"]);
   });
 
+  test("E2404: compile-time division by zero is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let _x: i32 = 1 / 0;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2404"]);
+  });
+
+  test("E2404: compile-time modulo by zero is rejected", () => {
+    const result = check(`
+fn main() -> void {
+  let _x: i32 = 1 % 0;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2404"]);
+  });
+
+  test("E2402: signed min divided by minus one is rejected at compile time", () => {
+    const result = check(`
+fn main() -> void {
+  let _x: i8 = -128 / -1;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2402"]);
+  });
+
   test("E2104: invalid index target is rejected", () => {
     const result = check(`
 fn main() -> void {

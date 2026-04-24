@@ -6,6 +6,7 @@ import type {
   IrInstruction,
   IrNullableType,
   IrOperand,
+  IrPrimitiveType,
   IrProgram,
   IrStructDeclaration,
   IrTerminator,
@@ -74,6 +75,14 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
     lines.push(...emitNullableTypedef(nullable));
   }
   if (nullables.length > 0) lines.push("");
+
+  const integerHelpers = collectIntegerHelpers(program);
+  if (integerHelpers.length > 0) {
+    for (const helper of integerHelpers) {
+      lines.push(...emitIntegerHelper(helper));
+    }
+    lines.push("");
+  }
 
   const structMap = new Map(structs.map((s) => [s.linkName, s]));
   const enumMap = new Map(enums.map((e) => [e.linkName, e]));
@@ -280,6 +289,13 @@ function emitInstruction(
 
   if (instruction.kind === "binary") {
     const target = declareTemp(context, instruction.target);
+    const helper = integerBinaryHelperName(instruction);
+    if (helper) {
+      return `${emitDeclaration(instruction.type, target)} = ${helper}(${emitOperand(
+        instruction.left,
+        context,
+      )}, ${emitOperand(instruction.right, context)});`;
+    }
     return `${emitDeclaration(instruction.type, target)} = ${emitOperand(
       instruction.left,
       context,
@@ -288,6 +304,13 @@ function emitInstruction(
 
   if (instruction.kind === "unary") {
     const target = declareTemp(context, instruction.target);
+    const helper = integerUnaryHelperName(instruction);
+    if (helper) {
+      return `${emitDeclaration(instruction.type, target)} = ${helper}(${emitOperand(
+        instruction.argument,
+        context,
+      )});`;
+    }
     return `${emitDeclaration(instruction.type, target)} = ${
       instruction.operator
     }${emitOperand(instruction.argument, context)};`;
@@ -731,6 +754,224 @@ function emitNullableTypedef(nullable: IrNullableType): string[] {
     `  ${emitDeclaration(nullable.base, "value")};`,
     `} ${cNullableName(nullable)};`,
   ];
+}
+
+type IntegerHelperOp =
+  | "add"
+  | "sub"
+  | "mul"
+  | "div"
+  | "mod"
+  | "shl"
+  | "shr"
+  | "neg";
+
+interface IntegerHelper {
+  type: IrPrimitiveType;
+  op: IntegerHelperOp;
+}
+
+function collectIntegerHelpers(program: IrProgram): IntegerHelper[] {
+  const helpers = new Map<string, IntegerHelper>();
+  for (const declaration of program.declarations) {
+    if (declaration.kind !== "function" || declaration.body !== "defined")
+      continue;
+    for (const block of declaration.blocks) {
+      for (const instruction of block.instructions) {
+        const binary = integerBinaryHelperInfo(instruction);
+        if (binary) helpers.set(integerHelperKey(binary), binary);
+        const unary = integerUnaryHelperInfo(instruction);
+        if (unary) helpers.set(integerHelperKey(unary), unary);
+      }
+    }
+  }
+  return [...helpers.values()].sort((left, right) =>
+    integerHelperName(left).localeCompare(integerHelperName(right)),
+  );
+}
+
+function integerBinaryHelperInfo(
+  instruction: IrInstruction,
+): IntegerHelper | null {
+  if (instruction.kind !== "binary") return null;
+  if (!isIntegerPrimitiveType(instruction.type)) return null;
+  const op = binaryHelperOp(instruction.operator);
+  if (!op) return null;
+  return { type: instruction.type, op };
+}
+
+function integerUnaryHelperInfo(
+  instruction: IrInstruction,
+): IntegerHelper | null {
+  if (instruction.kind !== "unary") return null;
+  if (instruction.operator !== "-") return null;
+  if (!isIntegerPrimitiveType(instruction.type)) return null;
+  return { type: instruction.type, op: "neg" };
+}
+
+function integerBinaryHelperName(instruction: IrInstruction): string | null {
+  const info = integerBinaryHelperInfo(instruction);
+  return info ? integerHelperName(info) : null;
+}
+
+function integerUnaryHelperName(instruction: IrInstruction): string | null {
+  const info = integerUnaryHelperInfo(instruction);
+  return info ? integerHelperName(info) : null;
+}
+
+function binaryHelperOp(operator: string): IntegerHelperOp | null {
+  if (operator === "+") return "add";
+  if (operator === "-") return "sub";
+  if (operator === "*") return "mul";
+  if (operator === "/") return "div";
+  if (operator === "%") return "mod";
+  if (operator === "<<") return "shl";
+  if (operator === ">>") return "shr";
+  return null;
+}
+
+function integerHelperKey(helper: IntegerHelper): string {
+  return `${helper.type.name}:${helper.op}`;
+}
+
+function integerHelperName(helper: IntegerHelper): string {
+  return `__vek_${helper.type.name}_${helper.op}`;
+}
+
+function emitIntegerHelper(helper: IntegerHelper): string[] {
+  const typeName = emitType(helper.type);
+  const unsignedType = unsignedIntegerTypeName(helper.type.name);
+  const name = integerHelperName(helper);
+  const bits = integerBitWidth(helper.type.name);
+  const min = signedMinMacro(helper.type.name);
+
+  if (helper.op === "add") {
+    return [
+      `static inline ${typeName} ${name}(${typeName} a, ${typeName} b) {`,
+      `  return (${typeName})((${unsignedType})a + (${unsignedType})b);`,
+      "}",
+    ];
+  }
+  if (helper.op === "sub") {
+    return [
+      `static inline ${typeName} ${name}(${typeName} a, ${typeName} b) {`,
+      `  return (${typeName})((${unsignedType})a - (${unsignedType})b);`,
+      "}",
+    ];
+  }
+  if (helper.op === "mul") {
+    return [
+      `static inline ${typeName} ${name}(${typeName} a, ${typeName} b) {`,
+      `  return (${typeName})((${unsignedType})a * (${unsignedType})b);`,
+      "}",
+    ];
+  }
+  if (helper.op === "neg") {
+    return [
+      `static inline ${typeName} ${name}(${typeName} a) {`,
+      `  return (${typeName})(((${unsignedType})0) - (${unsignedType})a);`,
+      "}",
+    ];
+  }
+  if (helper.op === "div") {
+    return [
+      `static inline ${typeName} ${name}(${typeName} a, ${typeName} b) {`,
+      `  if (b == 0) __vek_panic_cstr("integer division by zero");`,
+      ...(!isSignedIntegerTypeName(helper.type.name)
+        ? [`  return (${typeName})(a / b);`]
+        : [
+            `  if (a == ${min} && b == (${typeName})-1) return ${min};`,
+            `  return (${typeName})(a / b);`,
+          ]),
+      "}",
+    ];
+  }
+  if (helper.op === "mod") {
+    return [
+      `static inline ${typeName} ${name}(${typeName} a, ${typeName} b) {`,
+      `  if (b == 0) __vek_panic_cstr("integer modulo by zero");`,
+      ...(!isSignedIntegerTypeName(helper.type.name)
+        ? [`  return (${typeName})(a % b);`]
+        : [
+            `  if (a == ${min} && b == (${typeName})-1) return (${typeName})0;`,
+            `  return (${typeName})(a % b);`,
+          ]),
+      "}",
+    ];
+  }
+  if (helper.op === "shl") {
+    return [
+      `static inline ${typeName} ${name}(${typeName} a, ${typeName} b) {`,
+      ...shiftGuards(helper.type.name, "b", bits),
+      `  return (${typeName})((${unsignedType})a << (${unsignedType})b);`,
+      "}",
+    ];
+  }
+  return [
+    `static inline ${typeName} ${name}(${typeName} a, ${typeName} b) {`,
+    ...shiftGuards(helper.type.name, "b", bits),
+    ...(!isSignedIntegerTypeName(helper.type.name)
+      ? [`  return (${typeName})((${unsignedType})a >> (${unsignedType})b);`]
+      : [
+          `  ${unsignedType} ua = (${unsignedType})a;`,
+          `  ${unsignedType} shift = (${unsignedType})b;`,
+          `  if (a >= 0) return (${typeName})(ua >> shift);`,
+          `  ${unsignedType} shifted = ua >> shift;`,
+          `  if (shift == 0) return (${typeName})shifted;`,
+          `  ${unsignedType} fill = (~(${unsignedType})0) << (${bits} - shift);`,
+          `  return (${typeName})(shifted | fill);`,
+        ]),
+    "}",
+  ];
+}
+
+function shiftGuards(
+  typeName: IrPrimitiveType["name"],
+  countVar: string,
+  bits: number,
+): string[] {
+  const guards: string[] = [];
+  if (isSignedIntegerTypeName(typeName)) {
+    guards.push(
+      `  if (${countVar} < 0) __vek_panic_cstr("invalid integer shift");`,
+    );
+  }
+  guards.push(
+    `  if ((${unsignedIntegerTypeName(typeName)})${countVar} >= ${bits}) __vek_panic_cstr("invalid integer shift");`,
+  );
+  return guards;
+}
+
+function isIntegerPrimitiveType(type: IrType): type is IrPrimitiveType {
+  return (
+    type.kind === "primitive" &&
+    ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(type.name)
+  );
+}
+
+function isSignedIntegerTypeName(typeName: IrPrimitiveType["name"]): boolean {
+  return ["i8", "i16", "i32", "i64"].includes(typeName);
+}
+
+function unsignedIntegerTypeName(typeName: IrPrimitiveType["name"]): string {
+  if (typeName === "i8" || typeName === "u8") return "uint8_t";
+  if (typeName === "i16" || typeName === "u16") return "uint16_t";
+  if (typeName === "i32" || typeName === "u32") return "uint32_t";
+  return "uint64_t";
+}
+
+function integerBitWidth(typeName: IrPrimitiveType["name"]): number {
+  if (typeName.endsWith("8")) return 8;
+  if (typeName.endsWith("16")) return 16;
+  if (typeName.endsWith("32")) return 32;
+  return 64;
+}
+
+function signedMinMacro(typeName: IrPrimitiveType["name"]): string {
+  if (typeName === "i8") return "INT8_MIN";
+  if (typeName === "i16") return "INT16_MIN";
+  if (typeName === "i32") return "INT32_MIN";
+  return "INT64_MIN";
 }
 
 function emitArrayElementOwnershipHelpers(

@@ -46,7 +46,7 @@ fn add(a: i32, b: i32) -> i32 {
       c.includes("static int32_t __vek_fn_add(int32_t v0, int32_t v1);"),
     );
     assert.ok(c.includes("int32_t v2;"));
-    assert.ok(c.includes("int32_t t0 = v0 + v1;"));
+    assert.ok(c.includes("int32_t t0 = __vek_i32_add(v0, v1);"));
     assert.ok(c.includes("v2 = t0;"));
     assert.ok(c.includes("return v2;"));
   });
@@ -288,9 +288,9 @@ fn main() -> i32 {
 }
 `);
 
-    assert.ok(c.includes("int32_t t0 = v0 + 2;"));
+    assert.ok(c.includes("int32_t t0 = __vek_i32_add(v0, 2);"));
     assert.ok(c.includes("v0 = t0;"));
-    assert.ok(c.includes("int32_t t1 = v0 * 5;"));
+    assert.ok(c.includes("int32_t t1 = __vek_i32_mul(v0, 5);"));
     assert.ok(c.includes("v0 = t1;"));
   });
 
@@ -593,6 +593,32 @@ fn half(x: f16) -> f16 {
     const ir = lowerProgramToIr(result.program, result);
 
     assert.throws(() => emitC(ir), /f16/);
+  });
+
+  test("emits checked integer helper calls for wrapping arithmetic and invalid operations", () => {
+    const c = emitOk(`
+fn main() -> i32 {
+  let a: i8 = 127;
+  let b: i8 = a + 1;
+  let c1: i8 = b * 2;
+  let d: i8 = c1 << 1;
+  let e: i8 = d >> 1;
+  let f: i8 = -e;
+  let g: i8 = f / 2;
+  let h: i8 = g % 3;
+  return h as i32;
+}
+`);
+
+    assert.ok(c.includes("__vek_i8_add("));
+    assert.ok(c.includes("__vek_i8_mul("));
+    assert.ok(c.includes("__vek_i8_shl("));
+    assert.ok(c.includes("__vek_i8_shr("));
+    assert.ok(c.includes("__vek_i8_neg("));
+    assert.ok(c.includes("__vek_i8_div("));
+    assert.ok(c.includes("__vek_i8_mod("));
+    assert.ok(c.includes('__vek_panic_cstr("invalid integer shift")'));
+    assert.ok(c.includes('__vek_panic_cstr("integer division by zero")'));
   });
 
   test("emits function pointer declarations and indirect calls", () => {
