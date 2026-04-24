@@ -954,6 +954,56 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs core Result, Ordering, and nullable unwrap helpers", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn compare(a: i32, b: i32) -> Ordering {
+  if a < b {
+    return Less;
+  }
+  if a > b {
+    return Greater;
+  }
+  return Equal;
+}
+
+fn main() -> i32 {
+  let some: i32? = 9;
+  let none: i32? = null;
+  let ok: Result<i32, string> = Ok(30);
+  let err: Result<i32, string> = Err("bad");
+
+  if some.is_some() {} else { return 1; }
+  if none.is_none() {} else { return 2; }
+
+  let total = some.unwrap() + none.unwrap_or(2) + ok.unwrap() + err.unwrap_or(1);
+
+  match compare(total, 42) {
+    Less => { return 3; }
+    Equal => { return 42; }
+    Greater => { return 4; }
+  }
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs string len, concat, and eq", () => {
     if (!hasMuslGcc()) return;
 

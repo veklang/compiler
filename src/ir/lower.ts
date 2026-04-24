@@ -76,6 +76,7 @@ interface IrTypeSource {
   types: WeakMap<Node, unknown>;
   instantiations?: GenericInstantiationInfo[];
   callInstantiations?: WeakMap<CallExpression, GenericInstantiationInfo>;
+  coreStatements?: Statement[];
 }
 
 interface GenericInstantiationInfo {
@@ -174,6 +175,7 @@ export function lowerProgramToIr(
   checkResult: IrTypeSource,
   options: LowerOptions = {},
 ): IrProgram {
+  const statements = [...(checkResult.coreStatements ?? []), ...program.body];
   const runtime = emptyRuntimeRequirements();
   const declarations: IrDeclaration[] = [];
   const structFields = new Map<string, IrStructField[]>();
@@ -198,7 +200,7 @@ export function lowerProgramToIr(
   }> = [];
   const methodsByKey = new Map<string, MethodDeclarationInfo>();
   const enumNames = new Set(
-    program.body
+    statements
       .filter(
         (statement): statement is EnumDeclaration =>
           statement.kind === "EnumDeclaration",
@@ -207,7 +209,7 @@ export function lowerProgramToIr(
   );
   let entry: string | undefined;
 
-  for (const statement of program.body) {
+  for (const statement of statements) {
     if (statement.kind === "StructDeclaration") {
       structsByName.set(statement.name.name, statement);
       if ((statement.typeParams?.length ?? 0) > 0) continue;
@@ -292,7 +294,7 @@ export function lowerProgramToIr(
   const globalTypes = new Map<IrGlobalId, IrType>();
   const lazyGlobals = new Set<IrGlobalId>();
   const globalStatements: VariableDeclaration[] = [];
-  for (const statement of program.body) {
+  for (const statement of statements) {
     if (statement.kind === "VariableDeclaration") {
       const global = lowerGlobalDeclaration(
         statement,
@@ -308,7 +310,7 @@ export function lowerProgramToIr(
     }
   }
 
-  for (const statement of program.body) {
+  for (const statement of statements) {
     if (
       statement.kind !== "StructDeclaration" &&
       statement.kind !== "EnumDeclaration"
@@ -424,7 +426,7 @@ export function lowerProgramToIr(
     );
   }
 
-  for (const statement of program.body) {
+  for (const statement of statements) {
     if (statement.kind !== "FunctionDeclaration") continue;
     functionsByName.set(statement.name.name, statement);
     if ((statement.typeParams?.length ?? 0) > 0) continue;
@@ -3476,6 +3478,10 @@ function lowerCall(
       span: expression.span,
     };
     const afterBlock = newBlock(context);
+    afterBlock.terminator = {
+      kind: "unreachable",
+      span: expression.span,
+    };
     switchBlock(context, afterBlock);
     return voidOperand();
   }
@@ -3514,6 +3520,14 @@ function lowerInstanceMethodCall(
   if (calleeType.kind !== "function") return undefined;
 
   const objectType = typeFromNodeInContext(context, expression.callee.object);
+  if (objectType.kind === "nullable") {
+    const nullableCall = lowerNullableMethodCall(
+      expression,
+      objectType,
+      context,
+    );
+    if (nullableCall) return nullableCall;
+  }
   if (objectType.kind !== "named") return undefined;
 
   const linkName = context.methodLinks.get(
@@ -3551,6 +3565,151 @@ function lowerInstanceMethodCall(
   if (returnsVoid) return voidOperand();
   markOwnedTemp(target, type, context);
   return { kind: "temp", id: target, type };
+}
+
+function lowerNullableMethodCall(
+  expression: CallExpression,
+  objectType: Extract<IrType, { kind: "nullable" }>,
+  context: LowerContext,
+): IrOperand | undefined {
+  const method = expression.callee.property.name;
+  if (
+    method !== "unwrap" &&
+    method !== "unwrap_or" &&
+    method !== "is_some" &&
+    method !== "is_none"
+  ) {
+    return undefined;
+  }
+
+  const object = lowerExpression(expression.callee.object, context);
+  const targetType = typeFromNodeInContext(context, expression);
+  const returnsVoid =
+    targetType.kind === "primitive" && targetType.name === "void";
+  const resultLocal = returnsVoid
+    ? undefined
+    : declareLocal(
+        context,
+        `__nullable_${method}_${context.nextLocal}`,
+        targetType,
+        true,
+        expression.span,
+      );
+  const nullCheck = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "is_null",
+    target: nullCheck,
+    value: object,
+    type: irPrimitive("bool"),
+    span: expression.span,
+  });
+  const thenBlock = newBlock(context);
+  const elseBlock = newBlock(context);
+  const joinBlock = newBlock(context);
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition: { kind: "temp", id: nullCheck, type: irPrimitive("bool") },
+    thenTarget: thenBlock.id,
+    elseTarget: elseBlock.id,
+    span: expression.span,
+  };
+
+  switchBlock(context, thenBlock);
+  if (method === "unwrap") {
+    context.runtime.panic = true;
+    context.currentBlock.instructions.push({
+      kind: "call",
+      target: undefined,
+      callee: {
+        kind: "function",
+        name: "panic",
+        type: {
+          kind: "function",
+          params: [{ type: irPrimitive("string"), mutable: false }],
+          returnType: irPrimitive("void"),
+        },
+      },
+      args: [
+        {
+          kind: "const",
+          value: {
+            kind: "string",
+            value: "called unwrap on a null value",
+          },
+          type: irPrimitive("string"),
+        },
+      ],
+      type: irPrimitive("void"),
+      span: expression.span,
+    });
+    context.currentBlock.terminator = {
+      kind: "unreachable",
+      span: expression.span,
+    };
+  } else if (method === "unwrap_or") {
+    const fallback = lowerExpression(expression.args[0], context);
+    retainIfBorrowedHeap(fallback, context, expression.span);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal!.id,
+      value: fallback,
+      span: expression.span,
+    });
+    markLocalOwns(resultLocal!.id, fallback, context);
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: joinBlock.id,
+      span: expression.span,
+    };
+  } else {
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal!.id,
+      value: boolOperand(method === "is_none"),
+      span: expression.span,
+    });
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: joinBlock.id,
+      span: expression.span,
+    };
+  }
+
+  switchBlock(context, elseBlock);
+  if (method === "unwrap" || method === "unwrap_or") {
+    const unwrapped = maybeUnwrapNullable(
+      object,
+      objectType.base,
+      context,
+      expression.span,
+    );
+    retainIfBorrowedHeap(unwrapped, context, expression.span);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal!.id,
+      value: unwrapped,
+      span: expression.span,
+    });
+    markLocalOwns(resultLocal!.id, unwrapped, context);
+  } else {
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal!.id,
+      value: boolOperand(method === "is_some"),
+      span: expression.span,
+    });
+  }
+  context.currentBlock.terminator = {
+    kind: "branch",
+    target: joinBlock.id,
+    span: expression.span,
+  };
+
+  switchBlock(context, joinBlock);
+  releaseIfOwnedTemp(object, context);
+
+  if (returnsVoid) return voidOperand();
+  return { kind: "local", id: resultLocal!.id, type: targetType };
 }
 
 function lowerCast(

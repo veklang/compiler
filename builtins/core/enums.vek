@@ -10,10 +10,10 @@ pub enum Result<T, E> {
 
   satisfies Unwrappable<T> {
     fn unwrap(self) -> T {
-      return match self {
-        Ok(value) => value,
-        Err(_) => panic("called unwrap on an Err value"),
-      };
+      match self {
+        Ok(value) => { return value; }
+        Err(_) => { panic("called unwrap on an Err value"); }
+      }
     }
 
     fn unwrap_or(self, default: T) -> T {

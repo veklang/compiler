@@ -863,6 +863,36 @@ fn sum() -> i32 {
     assert.ok(!c.includes("__vek_array_get("));
   });
 
+  test("emits builtin core Result, Ordering, and nullable helpers", () => {
+    const c = emitOk(`
+fn compare(a: i32, b: i32) -> Ordering {
+  if a < b { return Less; }
+  if a > b { return Greater; }
+  return Equal;
+}
+
+fn main() -> i32 {
+  let maybe: i32? = null;
+  let ok: Result<i32, string> = Ok(40);
+  let err: Result<i32, string> = Err("bad");
+  if maybe.is_none() {
+    match compare(ok.unwrap() + err.unwrap_or(1) + maybe.unwrap_or(1), 42) {
+      Equal => { return 1; }
+      _ => { return 0; }
+    }
+  }
+  return 0;
+}
+`);
+
+    assert.ok(c.includes("__vek_enum_Ordering"));
+    assert.ok(c.includes("__vek_enum_Result__i32__string"));
+    assert.ok(c.includes("__vek_fn_Result__i32__string_unwrap("));
+    assert.ok(c.includes("__vek_fn_Result__i32__string_unwrap_or("));
+    assert.ok(c.includes("__vek_fn_compare("));
+    assert.ok(c.includes(".is_null"));
+  });
+
   test("emits string literals as static __vek_string globals", () => {
     const c = emitOk(`
 fn greet() -> string {

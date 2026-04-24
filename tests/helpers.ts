@@ -28,6 +28,7 @@ export const check = (source: string) => {
     types: checkResult.types,
     instantiations: checkResult.instantiations,
     callInstantiations: checkResult.callInstantiations,
+    coreStatements: checkResult.coreStatements,
   };
 };
 

@@ -28,7 +28,11 @@ fn main() -> void {
 `);
 
     assert.equal(ir.entry, "fn.main");
-    assert.equal(ir.declarations.length, 1);
+    assert.ok(
+      ir.declarations.some(
+        (decl) => decl.kind === "function" && decl.linkName === "main",
+      ),
+    );
     assert.equal(ir.runtime.panic, false);
     assert.equal(ir.runtime.strings, false);
   });
@@ -534,7 +538,9 @@ fn main() -> void {
 }
 `);
 
-    const fn = ir.declarations[0];
+    const fn = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.linkName === "main",
+    );
     assert.ok(fn.kind === "function");
     assert.equal(fn.blocks.length, 3);
     assert.equal(fn.blocks[0].id, "bb.0");
@@ -558,7 +564,9 @@ fn max(a: i32, b: i32) -> i32 {
 }
 `);
 
-    const fn = ir.declarations[0];
+    const fn = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.linkName === "max",
+    );
     assert.ok(fn.kind === "function");
     assert.equal(fn.blocks.length, 4);
 
@@ -579,7 +587,9 @@ fn count() -> void {
 }
 `);
 
-    const fn = ir.declarations[0];
+    const fn = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.linkName === "count",
+    );
     assert.ok(fn.kind === "function");
     assert.equal(fn.blocks.length, 4);
 
@@ -602,7 +612,9 @@ fn find() -> void {
 }
 `);
 
-    const fn = ir.declarations[0];
+    const fn = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.linkName === "find",
+    );
     assert.ok(fn.kind === "function");
     const dump = dumpIr(ir);
     assert.ok(dump.includes("branch bb."));
@@ -639,7 +651,9 @@ fn skip() -> void {
 }
 `);
 
-    const fn = ir.declarations[0];
+    const fn = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.linkName === "skip",
+    );
     assert.ok(fn.kind === "function");
     const dump = dumpIr(ir);
     assert.ok(dump.includes("branch bb."));
@@ -671,7 +685,9 @@ fn main() -> void {
 }
 `);
 
-    const fn = ir.declarations[0];
+    const fn = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.linkName === "main",
+    );
     assert.ok(fn.kind === "function");
     const hasUnreachable = fn.blocks.some(
       (b) => b.terminator?.kind === "unreachable",
@@ -777,7 +793,9 @@ enum Color {
 fn main() -> void { return; }
 `);
 
-    const enumDecl = ir.declarations.find((d) => d.kind === "enum_decl");
+    const enumDecl = ir.declarations.find(
+      (d) => d.kind === "enum_decl" && d.sourceName === "Color",
+    );
     assert.ok(enumDecl?.kind === "enum_decl");
     assert.equal(enumDecl.sourceName, "Color");
     assert.equal(enumDecl.variants.length, 3);
@@ -1108,10 +1126,39 @@ fn sum(xs: i32[]) -> i32 {
     const dump = dumpIr(ir);
     assert.ok(dump.includes("array_len"));
     assert.ok(dump.includes("array_get"));
-    assert.ok(ir.declarations.length === 1);
-    const fn_ = ir.declarations[0];
+    const fn_ = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.linkName === "sum",
+    );
     assert.ok(fn_.kind === "function");
     assert.ok(fn_.blocks.length > 1);
+  });
+
+  test("lowers builtin Result, Ordering, and nullable unwrapping support", () => {
+    const ir = irOk(`
+fn compare(a: i32, b: i32) -> Ordering {
+  if a < b { return Less; }
+  if a > b { return Greater; }
+  return Equal;
+}
+
+fn main() -> i32 {
+  let maybe: i32? = null;
+  let ok: Result<i32, string> = Ok(40);
+  let err: Result<i32, string> = Err("bad");
+  let total = ok.unwrap() + err.unwrap_or(1) + maybe.unwrap_or(1);
+  match compare(total, 42) {
+    Equal => { return 42; }
+    _ => { return 0; }
+  }
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("enum enum.Ordering"));
+    assert.ok(dump.includes("enum enum.Result__i32__string"));
+    assert.ok(dump.includes("fn fn.Result__i32__string_unwrap"));
+    assert.ok(dump.includes("fn fn.Result__i32__string_unwrap_or"));
+    assert.ok(dump.includes("is_null"));
   });
 
   test("lowers for loop over custom iterable through next", () => {

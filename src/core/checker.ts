@@ -219,6 +219,7 @@ export interface CheckResult {
   types: WeakMap<Node, Type>;
   instantiations: GenericInstantiation[];
   callInstantiations: WeakMap<CallExpression, GenericInstantiation>;
+  coreStatements: Statement[];
 }
 
 const primitiveNames: PrimitiveName[] = [
@@ -270,6 +271,8 @@ export class Checker {
     this.predeclareTypes();
     this.predeclareFunctions();
     this.materializeTypes();
+    for (const statement of coreStatements)
+      this.checkStatement(statement, this.globalScope);
     for (const statement of this.program.body)
       this.checkStatement(statement, this.globalScope);
     this.checkMainFunction();
@@ -278,6 +281,7 @@ export class Checker {
       types: this.types,
       instantiations: this.instantiations,
       callInstantiations: this.callInstantiations,
+      coreStatements,
     };
   }
 
