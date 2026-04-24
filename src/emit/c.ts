@@ -176,7 +176,8 @@ function functionPrototype(fn: IrFunction): string {
       ),
     )
     .join(", ");
-  return `static ${emitDeclaration(
+  const storage = fn.isInline ? "static inline " : "static ";
+  return `${storage}${emitDeclaration(
     fn.signature.returnType,
     `${cFunctionName(fn.linkName)}(${params || "void"})`,
   )}`;

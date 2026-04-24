@@ -556,6 +556,47 @@ fn main() -> void {
 `);
   });
 
+  test("inline function emits non-guarantee warning", () => {
+    const result = check(`
+inline fn add(a: i32, b: i32) -> i32 {
+  return a + b;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["W2903"]);
+    assert.match(
+      result.checkDiagnostics[0]?.message ?? "",
+      /not required to inline/i,
+    );
+  });
+
+  test("inline extern function warns that inline has no effect", () => {
+    const result = check(`
+inline extern fn add(a: i32, b: i32) -> i32;
+`);
+    expectDiagnostics(result.checkDiagnostics, ["W2904"]);
+    assert.match(
+      result.checkDiagnostics[0]?.message ?? "",
+      /do not emit a local function body/i,
+    );
+  });
+
+  test("inline method emits non-guarantee warning", () => {
+    const result = check(`
+struct Counter {
+  value: i32;
+
+  inline fn get(self) -> i32 {
+    return self.value;
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["W2903"]);
+    assert.match(
+      result.checkDiagnostics[0]?.message ?? "",
+      /not required to inline/i,
+    );
+  });
+
   test("primitives satisfy Hashable, Ordered, Cloneable, Defaultable", () => {
     checkOk(`
 fn needs_hashable<T: Hashable>(_x: T) -> void { return; }

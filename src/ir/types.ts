@@ -43,6 +43,7 @@ export interface IrFunction {
   id: IrFunctionId;
   sourceName?: string;
   linkName: string;
+  isInline: boolean;
   signature: IrFunctionType;
   params: IrParam[];
   locals: IrLocal[];

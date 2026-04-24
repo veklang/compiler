@@ -67,6 +67,29 @@ fn main() {
     assert.ok(c.includes("  return __vek_fn_main();"));
   });
 
+  test("emits static inline for inline functions with bodies", () => {
+    const result = check(`
+inline fn add(a: i32, b: i32) -> i32 {
+  return a + b;
+}
+`);
+    expectNoDiagnostics(result.lexDiagnostics, result.parseDiagnostics);
+    assert.deepEqual(
+      result.checkDiagnostics.map((diagnostic) => diagnostic.code),
+      ["W2903"],
+    );
+
+    const c = emitC(lowerProgramToIr(result.program, result));
+    assert.ok(
+      c.includes("static inline int32_t __vek_fn_add(int32_t v0, int32_t v1);"),
+    );
+    assert.ok(
+      c.includes(
+        "static inline int32_t __vek_fn_add(int32_t v0, int32_t v1) {",
+      ),
+    );
+  });
+
   test("emits generic function specialization for struct types", () => {
     const c = emitOk(`
 struct User {

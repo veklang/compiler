@@ -762,6 +762,7 @@ export class Checker {
   private checkFunctionDeclaration(node: FunctionDeclaration, scope: Scope) {
     const symbol = this.lookupValue(node.name.name, scope);
     if (!symbol || symbol.type.kind !== "Function") return;
+    this.warnInlineFunction(node);
 
     const functionType = symbol.type;
     const bodyScope = this.createScope(scope, scope.selfType);
@@ -929,6 +930,7 @@ export class Checker {
     owner: TypeSymbol,
     scope: Scope,
   ) {
+    this.warnInlineMethod(method, owner);
     const resolved = this.resolveMethod(method, owner, scope);
     this.checkMethodBody(method, resolved, owner, scope);
   }
@@ -4096,6 +4098,33 @@ export class Checker {
     if (this.diagnosticSet.has(key)) return;
     this.diagnosticSet.add(key);
     this.diagnostics.push({ severity: "warning", message, span, code });
+  }
+
+  private warnInlineFunction(node: FunctionDeclaration) {
+    if (!node.isInline) return;
+    if (node.isExtern) {
+      this.warn(
+        `inline on extern function '${node.name.name}' has no effect; extern declarations do not emit a local function body that the C backend can inline.`,
+        node.span,
+        "W2904",
+      );
+      return;
+    }
+
+    this.warn(
+      `inline on function '${node.name.name}' is only a backend hint; the C backend emits static inline, but the downstream C compiler is not required to inline it.`,
+      node.span,
+      "W2903",
+    );
+  }
+
+  private warnInlineMethod(method: MethodDeclaration, owner: TypeSymbol) {
+    if (!method.isInline) return;
+    this.warn(
+      `inline on method '${owner.name}.${method.name.name}' is only a backend hint; the C backend emits static inline, but the downstream C compiler is not required to inline it.`,
+      method.span,
+      "W2903",
+    );
   }
 
   private warnUnusedLocals(frame: ValueSymbol[]): void {

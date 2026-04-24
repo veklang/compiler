@@ -781,6 +781,7 @@ function lowerGlobalInitializerFunction(
     id: `fn.__vek_init_global_${node.name.name}`,
     sourceName: `__vek_init_global_${node.name.name}`,
     linkName: `__vek_init_global_${node.name.name}`,
+    isInline: false,
     signature: { params: [], returnType: irPrimitive("void") },
     params: [],
     locals: context.localDecls,
@@ -874,6 +875,7 @@ function lowerMethod(
     id: `fn.${linkName}`,
     sourceName: `${ownerName}.${node.name.name}`,
     linkName,
+    isInline: node.isInline,
     signature: {
       params: params.map((param) => ({
         type: param.type,
@@ -1020,6 +1022,7 @@ function lowerFunction(
     id: `fn.${specialization?.linkName ?? node.name.name}`,
     sourceName: node.name.name,
     linkName: specialization?.linkName ?? node.name.name,
+    isInline: node.isInline && !node.isExtern,
     signature: {
       params: params.map((param) => ({
         type: param.type,
@@ -2651,6 +2654,7 @@ function lowerFunctionExpression(
     id: `fn.${sourceName}`,
     sourceName,
     linkName: sourceName,
+    isInline: false,
     signature: {
       params: params.map((param) => ({
         type: param.type,
@@ -3572,7 +3576,9 @@ function lowerNullableMethodCall(
   objectType: Extract<IrType, { kind: "nullable" }>,
   context: LowerContext,
 ): IrOperand | undefined {
-  const method = expression.callee.property.name;
+  if (expression.callee.kind !== "MemberExpression") return undefined;
+  const callee = expression.callee;
+  const method = callee.property.name;
   if (
     method !== "unwrap" &&
     method !== "unwrap_or" &&
@@ -3582,7 +3588,7 @@ function lowerNullableMethodCall(
     return undefined;
   }
 
-  const object = lowerExpression(expression.callee.object, context);
+  const object = lowerExpression(callee.object, context);
   const targetType = typeFromNodeInContext(context, expression);
   const returnsVoid =
     targetType.kind === "primitive" && targetType.name === "void";
