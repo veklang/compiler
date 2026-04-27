@@ -1494,4 +1494,129 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiled array indexing panics out of bounds", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let xs: i32[] = [1, 2];
+  return xs[2];
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+          assert.equal(
+            result.stderr.includes("panic: array index out of bounds"),
+            true,
+          );
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiled string indexing panics out of bounds", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let s: string = "hi";
+  let _c: string = s[2];
+  return 0;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+          assert.equal(
+            result.stderr.includes("panic: string index out of bounds"),
+            true,
+          );
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiled Result unwrap panics on Err", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let err: Result<i32, string> = Err("bad");
+  return err.unwrap();
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+          assert.equal(
+            result.stderr.includes("panic: called unwrap on an Err value"),
+            true,
+          );
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiled nullable unwrap panics on null", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let value: i32? = null;
+  return value.unwrap();
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 1);
+          assert.equal(
+            result.stderr.includes("panic: called unwrap on a null value"),
+            true,
+          );
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });
