@@ -769,6 +769,7 @@ export class Checker {
     const symbol = this.lookupValue(node.name.name, scope);
     if (!symbol || symbol.type.kind !== "Function") return;
     this.warnInlineFunction(node);
+    this.checkExternFunctionDeclaration(node);
 
     const functionType = symbol.type;
     const bodyScope = this.createScope(scope, scope.selfType);
@@ -789,7 +790,7 @@ export class Checker {
       });
     }
 
-    if (node.isExtern) {
+    if (node.isExtern && !node.body) {
       this.functionLocals.pop();
       return;
     }
@@ -833,6 +834,26 @@ export class Checker {
     this.currentFunctionInferReturn = previousInfer;
     this.currentFunctionInferredReturn = previousInferred;
     this.warnUnusedLocals(this.functionLocals.pop()!);
+  }
+
+  private checkExternFunctionDeclaration(node: FunctionDeclaration) {
+    if (!node.isExtern) return;
+
+    if (node.externName && !isValidExternSymbolName(node.externName.value)) {
+      this.report(
+        `Invalid extern symbol name '${node.externName.value}'.`,
+        node.externName.span,
+        "E2910",
+      );
+    }
+
+    if (node.body && !node.isPublic) {
+      this.report(
+        "Exported extern fn with a body must be top-level and pub.",
+        node.span,
+        "E2906",
+      );
+    }
   }
 
   private checkTypeDeclaration(symbol: TypeSymbol | undefined, scope: Scope) {
@@ -4495,4 +4516,8 @@ function compoundAssignmentOperator(operator: Operator): Operator | null {
   if (operator === "^=") return "^";
   if (operator === "|=") return "|";
   return null;
+}
+
+function isValidExternSymbolName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 }

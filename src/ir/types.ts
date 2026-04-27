@@ -43,6 +43,9 @@ export interface IrFunction {
   id: IrFunctionId;
   sourceName?: string;
   linkName: string;
+  abi?: "vek" | "c";
+  linkage?: "internal" | "imported" | "exported";
+  safety?: "safe" | "unsafe";
   isInline: boolean;
   signature: IrFunctionType;
   params: IrParam[];
@@ -214,6 +217,7 @@ export interface IrTempOperand {
 export interface IrFunctionOperand {
   kind: "function";
   name: string;
+  abi?: "vek" | "c";
   type: IrType;
 }
 

@@ -631,6 +631,36 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs an exported extern symbol alias", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+pub extern "vek_answer" fn answer() -> i32 {
+  return 42;
+}
+
+fn main() -> i32 {
+  return answer();
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs compound assignments", () => {
     if (!hasMuslGcc()) return;
 

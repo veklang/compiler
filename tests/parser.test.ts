@@ -339,11 +339,28 @@ let f: fn<T>(T, T) -> bool where T: Equal<T> = fn(a: i32, b: i32) -> bool {
     const program = parseOk(`
 pub extern fn panic(message: string) -> void;
 extern fn add(a: i32, b: i32) -> i32;
+extern "abs" fn c_abs(value: i32) -> i32;
+pub extern "vek_add" fn add_export(a: i32, b: i32) -> i32 {
+  return a + b;
+}
 `);
     assert.deepEqual(getProgramBodyKinds(program), [
       "FunctionDeclaration",
       "FunctionDeclaration",
+      "FunctionDeclaration",
+      "FunctionDeclaration",
     ]);
+    const imported = program.body[2];
+    assert.ok(imported.kind === "FunctionDeclaration");
+    assert.equal(imported.externName?.value, "abs");
+    assert.equal(imported.name.name, "c_abs");
+    assert.equal(imported.body, undefined);
+
+    const exported = program.body[3];
+    assert.ok(exported.kind === "FunctionDeclaration");
+    assert.equal(exported.externName?.value, "vek_add");
+    assert.equal(exported.name.name, "add_export");
+    assert.ok(exported.body);
   });
 });
 

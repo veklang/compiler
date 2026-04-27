@@ -132,11 +132,10 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
   if (globals.length > 0) lines.push("");
 
   const functions = program.declarations.filter(
-    (declaration): declaration is IrFunction =>
-      declaration.kind === "function" && declaration.body === "defined",
+    (declaration): declaration is IrFunction => declaration.kind === "function",
   );
 
-  for (const fn of functions) {
+  for (const fn of functions.filter(shouldEmitFunctionPrototype)) {
     lines.push(`${functionPrototype(fn)};`);
   }
   if (functions.length > 0) lines.push("");
@@ -145,7 +144,7 @@ export function emitC(program: IrProgram, options: CEmitOptions = {}): string {
     lines.push(...emitEnsureGlobalFunction(global, ensureGlobalNames), "");
   }
 
-  for (const fn of functions) {
+  for (const fn of functions.filter((fn) => fn.body === "defined")) {
     lines.push(
       ...emitFunction(
         fn,
@@ -176,11 +175,16 @@ function functionPrototype(fn: IrFunction): string {
       ),
     )
     .join(", ");
-  const storage = fn.isInline ? "static inline " : "static ";
+  const storage =
+    fn.abi === "c" ? "" : fn.isInline ? "static inline " : "static ";
   return `${storage}${emitDeclaration(
     fn.signature.returnType,
-    `${cFunctionName(fn.linkName)}(${params || "void"})`,
+    `${emitFunctionName(fn)}(${params || "void"})`,
   )}`;
+}
+
+function shouldEmitFunctionPrototype(fn: IrFunction): boolean {
+  return !(fn.linkage === "imported" && fn.linkName.startsWith("__vek_"));
 }
 
 function emitGlobalDeclaration(
@@ -320,7 +324,8 @@ function emitInstruction(
   if (instruction.kind === "call") {
     const isPanic =
       instruction.callee.kind === "function" &&
-      instruction.callee.name === "panic";
+      (instruction.callee.name === "panic" ||
+        instruction.callee.name === "__vek_panic_cstr");
     const calleeType =
       instruction.callee.type.kind === "function"
         ? instruction.callee.type
@@ -669,7 +674,7 @@ function hasOwnedStorage(
 }
 
 function emitMainWrapper(entry: IrFunction): string[] {
-  const call = `${cFunctionName(entry.linkName)}()`;
+  const call = `${emitFunctionName(entry)}()`;
   if (
     entry.signature.returnType.kind === "primitive" &&
     entry.signature.returnType.name === "void"
@@ -687,6 +692,7 @@ function emitOperand(operand: IrOperand, context: FunctionEmitContext): string {
   if (operand.kind === "global")
     return requireGlobal(context.globalNames, operand.id);
   if (operand.name === "panic") return "__vek_panic_cstr";
+  if (operand.abi === "c") return sanitizeName(operand.name);
   return cFunctionName(operand.name);
 }
 
@@ -1077,6 +1083,12 @@ function emitType(type: IrType): string {
     case "null":
       return "void *";
   }
+}
+
+function emitFunctionName(fn: IrFunction): string {
+  return fn.abi === "c"
+    ? sanitizeName(fn.linkName)
+    : cFunctionName(fn.linkName);
 }
 
 function cFunctionName(name: string): string {

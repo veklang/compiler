@@ -373,7 +373,45 @@ fn main() -> void {
 
     assert.equal(ir.runtime.panic, true);
     assert.equal(ir.runtime.strings, true);
-    assert.ok(dumpIr(ir).includes('call @panic("boom")'));
+    assert.ok(dumpIr(ir).includes('call @__vek_panic_cstr("boom")'));
+  });
+
+  test("lowers extern symbol aliases as C ABI link names", () => {
+    const ir = irOk(`
+extern "abs" fn c_abs(value: i32) -> i32;
+
+pub extern "vek_answer" fn answer() -> i32 {
+  return 42;
+}
+
+fn main() -> i32 {
+  return c_abs(answer());
+}
+`);
+
+    const imported = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.sourceName === "c_abs",
+    );
+    assert.ok(imported?.kind === "function");
+    assert.equal(imported.linkName, "abs");
+    assert.equal(imported.abi, "c");
+    assert.equal(imported.linkage, "imported");
+    assert.equal(imported.body, "extern");
+
+    const exported = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.sourceName === "answer",
+    );
+    assert.ok(exported?.kind === "function");
+    assert.equal(exported.linkName, "vek_answer");
+    assert.equal(exported.abi, "c");
+    assert.equal(exported.linkage, "exported");
+    assert.equal(exported.body, "defined");
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.c_abs abs(value: i32) -> i32"));
+    assert.ok(dump.includes("fn fn.answer vek_answer() -> i32"));
+    assert.ok(dump.includes("call @abs"));
+    assert.ok(dump.includes("call @vek_answer"));
   });
 
   test("lowers top-level declarations to globals", () => {

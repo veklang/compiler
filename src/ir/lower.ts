@@ -123,6 +123,7 @@ interface LowerContext {
   variantInfos: Map<string, VariantInfo>;
   enumNames: Set<string>;
   methodLinks: Map<string, string>;
+  functionLinks: Map<string, FunctionLinkInfo>;
   globals: Map<string, IrGlobalId>;
   globalTypes: Map<IrGlobalId, IrType>;
   lazyGlobals: Set<IrGlobalId>;
@@ -130,6 +131,11 @@ interface LowerContext {
   typeSubstitutions?: Map<string, IrType>;
   selfTypeName?: string;
   session: LowerSession;
+}
+
+interface FunctionLinkInfo {
+  linkName: string;
+  abi: "vek" | "c";
 }
 
 interface LowerSession {
@@ -187,6 +193,7 @@ export function lowerProgramToIr(
     nextAnonymousFunction: 0,
   };
   const functionsByName = new Map<string, FunctionDeclaration>();
+  const functionLinks = new Map<string, FunctionLinkInfo>();
   const structsByName = new Map<string, StructDeclaration>();
   const enumsByName = new Map<string, EnumDeclaration>();
   const genericStructSpecializations: Array<{
@@ -291,6 +298,17 @@ export function lowerProgramToIr(
     );
   }
 
+  for (const statement of statements) {
+    if (statement.kind !== "FunctionDeclaration") continue;
+    functionLinks.set(statement.name.name, {
+      linkName:
+        statement.isExtern && statement.externName
+          ? statement.externName.value
+          : statement.name.name,
+      abi: statement.isExtern ? "c" : "vek",
+    });
+  }
+
   const globals = new Map<string, IrGlobalId>();
   const globalTypes = new Map<IrGlobalId, IrType>();
   const lazyGlobals = new Set<IrGlobalId>();
@@ -343,6 +361,7 @@ export function lowerProgramToIr(
           globals,
           globalTypes,
           lazyGlobals,
+          functionLinks,
           session,
         ),
       );
@@ -367,6 +386,7 @@ export function lowerProgramToIr(
           globals,
           globalTypes,
           lazyGlobals,
+          functionLinks,
           session,
           {
             linkName: methodLinkName(specialization.linkName, member.name.name),
@@ -395,6 +415,7 @@ export function lowerProgramToIr(
           globals,
           globalTypes,
           lazyGlobals,
+          functionLinks,
           session,
           {
             linkName: methodLinkName(specialization.linkName, member.name.name),
@@ -422,6 +443,7 @@ export function lowerProgramToIr(
         globals,
         globalTypes,
         lazyGlobals,
+        functionLinks,
         session,
       ),
     );
@@ -441,6 +463,7 @@ export function lowerProgramToIr(
       globals,
       globalTypes,
       lazyGlobals,
+      functionLinks,
       session,
     );
     declarations.push(lowered);
@@ -465,6 +488,7 @@ export function lowerProgramToIr(
         globals,
         globalTypes,
         lazyGlobals,
+        functionLinks,
         session,
         {
           linkName,
@@ -518,6 +542,7 @@ export function lowerProgramToIr(
         globals,
         globalTypes,
         lazyGlobals,
+        functionLinks,
         session,
         {
           linkName,
@@ -721,6 +746,7 @@ function lowerGlobalInitializerFunction(
   globals: Map<string, IrGlobalId>,
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
+  functionLinks: Map<string, FunctionLinkInfo>,
   session: LowerSession,
 ): IrFunction {
   if (!node.initializer) {
@@ -745,6 +771,7 @@ function lowerGlobalInitializerFunction(
     variantInfos,
     enumNames: new Set([...variantInfos.values()].map((v) => v.enumName)),
     methodLinks,
+    functionLinks,
     globals,
     globalTypes,
     lazyGlobals,
@@ -782,6 +809,9 @@ function lowerGlobalInitializerFunction(
     id: `fn.__vek_init_global_${node.name.name}`,
     sourceName: `__vek_init_global_${node.name.name}`,
     linkName: `__vek_init_global_${node.name.name}`,
+    abi: "vek",
+    linkage: "internal",
+    safety: "safe",
     isInline: false,
     signature: { params: [], returnType: irPrimitive("void") },
     params: [],
@@ -804,6 +834,7 @@ function lowerMethod(
   globals: Map<string, IrGlobalId>,
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
+  functionLinks: Map<string, FunctionLinkInfo>,
   session: LowerSession,
   specialization?: {
     linkName: string;
@@ -845,6 +876,7 @@ function lowerMethod(
     variantInfos,
     enumNames,
     methodLinks,
+    functionLinks,
     globals,
     globalTypes,
     lazyGlobals,
@@ -876,6 +908,9 @@ function lowerMethod(
     id: `fn.${linkName}`,
     sourceName: `${ownerName}.${node.name.name}`,
     linkName,
+    abi: "vek",
+    linkage: "internal",
+    safety: "safe",
     isInline: node.isInline,
     signature: {
       params: params.map((param) => ({
@@ -946,6 +981,7 @@ function lowerFunction(
   globals: Map<string, IrGlobalId>,
   globalTypes: Map<IrGlobalId, IrType>,
   lazyGlobals: Set<IrGlobalId>,
+  functionLinks: Map<string, FunctionLinkInfo>,
   session: LowerSession,
   specialization?: {
     linkName: string;
@@ -980,6 +1016,7 @@ function lowerFunction(
     variantInfos,
     enumNames,
     methodLinks,
+    functionLinks,
     globals,
     globalTypes,
     lazyGlobals,
@@ -1018,11 +1055,20 @@ function lowerFunction(
     };
   }
 
+  const sourceLinkName = specialization?.linkName ?? node.name.name;
+  const linkName =
+    !specialization && node.isExtern && node.externName
+      ? node.externName.value
+      : sourceLinkName;
+  const body = node.isExtern && !node.body ? "extern" : "defined";
   return {
     kind: "function",
-    id: `fn.${specialization?.linkName ?? node.name.name}`,
+    id: `fn.${sourceLinkName}`,
     sourceName: node.name.name,
-    linkName: specialization?.linkName ?? node.name.name,
+    linkName,
+    abi: node.isExtern ? "c" : "vek",
+    linkage: node.isExtern ? (node.body ? "exported" : "imported") : "internal",
+    safety: "safe",
     isInline: node.isInline && !node.isExtern,
     signature: {
       params: params.map((param) => ({
@@ -1033,8 +1079,8 @@ function lowerFunction(
     },
     params,
     locals: context.localDecls,
-    blocks: node.isExtern ? [] : context.blocks,
-    body: node.isExtern ? "extern" : "defined",
+    blocks: body === "extern" ? [] : context.blocks,
+    body,
     span: node.span,
   };
 }
@@ -2854,6 +2900,7 @@ function lowerFunctionExpression(
     variantInfos: outerContext.variantInfos,
     enumNames: outerContext.enumNames,
     methodLinks: outerContext.methodLinks,
+    functionLinks: outerContext.functionLinks,
     globals: outerContext.globals,
     globalTypes: outerContext.globalTypes,
     lazyGlobals: outerContext.lazyGlobals,
@@ -2899,6 +2946,9 @@ function lowerFunctionExpression(
     id: `fn.${sourceName}`,
     sourceName,
     linkName: sourceName,
+    abi: "vek",
+    linkage: "internal",
+    safety: "safe",
     isInline: false,
     signature: {
       params: params.map((param) => ({
@@ -2997,9 +3047,11 @@ function lowerIdentifier(
     markOwnedTemp(target, type, context);
     return { kind: "temp", id: target, type };
   }
+  const functionLink = context.functionLinks.get(expression.name);
   return {
     kind: "function",
-    name: expression.name,
+    name: functionLink?.linkName ?? expression.name,
+    abi: functionLink?.abi,
     type: typeFromNodeInContext(context, expression),
   };
 }
@@ -3712,7 +3764,10 @@ function lowerCall(
   }
 
   if (type.kind === "primitive" && type.name === "never") {
-    if (callee.kind === "function" && callee.name === "panic") {
+    if (
+      callee.kind === "function" &&
+      (callee.name === "panic" || callee.name === "__vek_panic_cstr")
+    ) {
       context.runtime.panic = true;
     }
     const args = expression.args.map((arg) => lowerExpression(arg, context));

@@ -148,6 +148,10 @@ export class Parser {
     const before = this.current;
     const isInline = !!this.matchKeyword("inline");
     const isExtern = !!this.matchKeyword("extern");
+    const externName =
+      isExtern && this.checkKind("String")
+        ? this.stringLiteralFromToken(this.expectKind("String"))
+        : undefined;
     if (!this.checkKeyword("fn")) {
       this.current = before;
       return null;
@@ -161,7 +165,7 @@ export class Parser {
     const returnType = this.matchOperator("->") ? this.parseType() : undefined;
     const whereClause = this.parseWhereClause();
 
-    if (isExtern) {
+    if (isExtern && this.checkPunctuator(";")) {
       const semi = this.expectPunctuator(";");
       return {
         kind: "FunctionDeclaration",
@@ -171,6 +175,7 @@ export class Parser {
         params,
         returnType: returnType ?? undefined,
         whereClause,
+        externName,
         isInline,
         isExtern,
         isPublic,
@@ -188,6 +193,7 @@ export class Parser {
       returnType: returnType ?? undefined,
       whereClause,
       body,
+      externName,
       isInline,
       isExtern,
       isPublic,

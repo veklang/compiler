@@ -610,11 +610,21 @@ fn main() -> void {
   test("extern fn is callable and return type is checked", () => {
     checkOk(`
 extern fn add(a: i32, b: i32) -> i32;
+extern "abs" fn c_abs(value: i32) -> i32;
 
 fn main() -> void {
   let _x: i32 = add(1, 2);
+  let _y: i32 = c_abs(-1);
 }
 `);
+  });
+
+  test("E2910: extern symbol names must be C identifiers", () => {
+    const result = check(`
+extern "bad-name" fn bad(value: i32) -> i32;
+`);
+
+    expectDiagnostics(result.checkDiagnostics, ["E2910"]);
   });
 
   test("inline function emits non-guarantee warning", () => {

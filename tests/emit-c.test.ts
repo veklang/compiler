@@ -280,6 +280,39 @@ fn main() -> void {
 `);
 
     assert.ok(c.includes("__vek_panic_cstr(") && c.includes("->data"));
+    assert.ok(!c.includes("void __vek_panic_cstr(__vek_string *"));
+  });
+
+  test("emits extern imports with explicit C link names", () => {
+    const c = emitOk(`
+extern "abs" fn c_abs(value: i32) -> i32;
+
+fn main() -> i32 {
+  return c_abs(42);
+}
+`);
+
+    assert.ok(c.includes("int32_t abs(int32_t v0);"));
+    assert.ok(c.includes("= abs(42);"));
+    assert.ok(!c.includes("__vek_fn_c_abs"));
+  });
+
+  test("emits extern exports with explicit C link names", () => {
+    const c = emitOk(`
+pub extern "vek_answer" fn answer() -> i32 {
+  return 42;
+}
+
+fn main() -> i32 {
+  return answer();
+}
+`);
+
+    assert.ok(c.includes("int32_t vek_answer(void);"));
+    assert.ok(c.includes("int32_t vek_answer(void) {"));
+    assert.ok(c.includes("= vek_answer();"));
+    assert.ok(!c.includes("static int32_t vek_answer"));
+    assert.ok(!c.includes("__vek_fn_answer"));
   });
 
   test("emits top-level globals and global loads", () => {
