@@ -1070,6 +1070,7 @@ function emitType(type: IrType): string {
     case "bool":
       return "bool";
     case "void":
+    case "never":
       return "void";
     case "string":
       return "__vek_string *";

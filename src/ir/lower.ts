@@ -3711,8 +3711,10 @@ function lowerCall(
     }
   }
 
-  if (callee.kind === "function" && callee.name === "panic") {
-    context.runtime.panic = true;
+  if (type.kind === "primitive" && type.name === "never") {
+    if (callee.kind === "function" && callee.name === "panic") {
+      context.runtime.panic = true;
+    }
     const args = expression.args.map((arg) => lowerExpression(arg, context));
     context.currentBlock.instructions.push({
       kind: "call",
@@ -4684,6 +4686,7 @@ function typeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
 function rawTypeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
   if (node.kind === "NamedType") {
     const name = node.name.name;
+    if (name === "never") return irPrimitive("never");
     if (isPrimitiveName(name)) return irPrimitive(name);
     return {
       kind: "named",
@@ -4909,6 +4912,7 @@ function typeFromCheckerType(type: unknown): IrType {
     return { kind: "named", name: type.name, args: [] };
   }
 
+  if (type.kind === "Never") return irPrimitive("never");
   if (type.kind === "Error") return { kind: "error" };
   return { kind: "unknown" };
 }
@@ -5077,6 +5081,7 @@ function isPrimitiveName(name: string): name is IrPrimitiveType["name"] {
     "string",
     "void",
     "null",
+    "never",
   ].includes(name);
 }
 

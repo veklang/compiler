@@ -1279,7 +1279,12 @@ export class Parser {
     return this.parseNamedType();
   }
 
-  private static readonly typeKeywords = new Set(["void", "null", "Self"]);
+  private static readonly typeKeywords = new Set([
+    "void",
+    "null",
+    "never",
+    "Self",
+  ]);
 
   private parseNamedType(): NamedType | null {
     const token = this.advance();

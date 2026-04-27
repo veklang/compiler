@@ -1699,6 +1699,71 @@ fn main() -> void {
     );
   });
 
+  test("-> never functions satisfy any branch type", () => {
+    checkOk(`
+fn fail(message: string) -> never {
+  panic(message);
+}
+
+fn unwrap_or_fail(value: i32?, message: string) -> i32 {
+  if value != null {
+    value
+  } else {
+    fail(message)
+  }
+}
+
+fn label(flag: bool) -> string {
+  return match flag {
+    true => "yes",
+    _ => { fail("impossible"); },
+  };
+}
+
+fn main() -> void {
+  let _x: i32 = unwrap_or_fail(42, "bad");
+}
+`);
+  });
+
+  test("-> never wraps panic and propagates divergence through callers", () => {
+    checkOk(`
+fn die(message: string) -> never {
+  panic(message);
+}
+
+fn check_positive(n: i32) -> i32 {
+  if n > 0 {
+    n
+  } else {
+    die("not positive")
+  }
+}
+
+fn main() -> void {
+  let _x: i32 = check_positive(5);
+}
+`);
+  });
+
+  test("E2303: -> never function with reachable normal exit is an error", () => {
+    const result = check(`
+fn bad() -> never {
+  let _x = 1;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2303"]);
+  });
+
+  test("E2303: -> never function ending in a value expression is an error", () => {
+    const result = check(`
+fn bad() -> never {
+  42
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2302", "E2303"]);
+  });
+
   test("E2106: const without initializer (checker)", () => {
     const result = check(`
 const x: i32;

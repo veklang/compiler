@@ -816,6 +816,17 @@ export class Checker {
           : undefined,
       };
     }
+    if (
+      node.returnType &&
+      functionType.returnType.kind === "Never" &&
+      !this.blockTerminates(node.body!)
+    ) {
+      this.report(
+        "Function declared `-> never` has a reachable normal exit.",
+        node.body!.span,
+        "E2303",
+      );
+    }
     this.types.set(node, symbol.type);
     this.currentFunctionDepth = previousDepth;
     this.currentFunctionReturnType = previousReturnType;
@@ -1001,6 +1012,17 @@ export class Checker {
     if (this.currentFunctionInferReturn) {
       resolved.returnType =
         this.currentFunctionInferredReturn ?? this.primitive("void");
+    }
+    if (
+      method.returnType &&
+      resolved.returnType.kind === "Never" &&
+      !this.blockTerminates(method.body)
+    ) {
+      this.report(
+        "Function declared `-> never` has a reachable normal exit.",
+        method.body.span,
+        "E2303",
+      );
     }
     this.types.set(method, {
       kind: "Function",
@@ -2734,11 +2756,20 @@ export class Checker {
   }
 
   private expressionTerminates(expression: Expression): boolean {
-    return (
+    const type = this.types.get(expression);
+    if (type?.kind === "Never") return true;
+    if (
       expression.kind === "CallExpression" &&
-      expression.callee.kind === "IdentifierExpression" &&
-      expression.callee.name === "panic"
-    );
+      expression.callee.kind === "IdentifierExpression"
+    ) {
+      const symbol = this.globalScope.values.get(expression.callee.name);
+      if (
+        symbol?.type.kind === "Function" &&
+        symbol.type.returnType.kind === "Never"
+      )
+        return true;
+    }
+    return false;
   }
 
   private checkMatchLikeExpression(
@@ -3141,6 +3172,8 @@ export class Checker {
       const spec = scope.typeParams.get(node.name.name)!;
       return this.typeParamType(spec.name, spec.bounds);
     }
+
+    if (node.name.name === "never") return this.neverType();
 
     if (primitiveNames.includes(node.name.name as PrimitiveName)) {
       return this.primitive(node.name.name as PrimitiveName);

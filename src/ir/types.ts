@@ -145,7 +145,8 @@ export interface IrPrimitiveType {
     | "bool"
     | "string"
     | "void"
-    | "null";
+    | "null"
+    | "never";
 }
 
 export interface IrNamedType {

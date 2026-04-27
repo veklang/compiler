@@ -179,6 +179,44 @@ fn main() -> void {
     );
   });
 
+  test("compiles and runs user-defined -> never wrapper", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn fail(message: string) -> never {
+  panic(message);
+}
+
+fn pick(flag: bool) -> i32 {
+  if flag {
+    42
+  } else {
+    fail("not flag")
+  }
+}
+
+fn main() -> i32 {
+  pick(true)
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs global reads and writes", () => {
     if (!hasMuslGcc()) return;
 

@@ -31,6 +31,7 @@ export const keywords = [
   "Self",
   "void",
   "null",
+  "never",
   "true",
   "false",
   "NaN",
