@@ -192,6 +192,12 @@ function dumpInstruction(instruction: IrInstruction): string {
   if (instruction.kind === "string_eq") {
     return `${instruction.target}: ${dumpType(instruction.type)} = string_eq ${dumpOperand(instruction.left)} == ${dumpOperand(instruction.right)}`;
   }
+  if (instruction.kind === "pointer_load") {
+    return `${instruction.target}: ${dumpType(instruction.type)} = pointer_load ${dumpOperand(instruction.pointer)}`;
+  }
+  if (instruction.kind === "pointer_store") {
+    return `pointer_store ${dumpOperand(instruction.pointer)} = ${dumpOperand(instruction.value)}`;
+  }
   if (instruction.kind === "ensure_global_initialized") {
     return `ensure_global_initialized ${instruction.globalId}`;
   }
@@ -238,6 +244,8 @@ function dumpConst(value: IrConst): string {
 
 export function dumpType(type: IrType): string {
   if (type.kind === "primitive") return type.name;
+  if (type.kind === "pointer")
+    return `${type.mutable ? "ptr" : "const_ptr"}<${dumpType(type.target)}>`;
   if (type.kind === "named") {
     return type.args.length
       ? `${type.name}<${type.args.map(dumpType).join(", ")}>`

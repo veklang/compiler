@@ -115,6 +115,9 @@ function collectRefs(expr: Expression, names: Set<string>): Set<string> {
       case "CastExpression":
         walk(e.expression);
         break;
+      case "UnsafeBlockExpression":
+        walkBlock(e.body);
+        break;
       case "IfExpression":
         walk(e.condition);
         walkBlock(e.thenBranch);

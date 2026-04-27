@@ -40,6 +40,7 @@ import type {
   TypeAliasDeclaration,
   TypeNode,
   TypeParameter,
+  UnsafeBlockExpression,
   VariableDeclaration,
   WhereConstraint,
   WhileStatement,
@@ -147,6 +148,7 @@ export class Parser {
   ): FunctionDeclaration | null {
     const before = this.current;
     const isInline = !!this.matchKeyword("inline");
+    const isUnsafe = !!this.matchKeyword("unsafe");
     const isExtern = !!this.matchKeyword("extern");
     const externName =
       isExtern && this.checkKind("String")
@@ -177,6 +179,7 @@ export class Parser {
         whereClause,
         externName,
         isInline,
+        isUnsafe,
         isExtern,
         isPublic,
       };
@@ -195,6 +198,7 @@ export class Parser {
       body,
       externName,
       isInline,
+      isUnsafe,
       isExtern,
       isPublic,
     };
@@ -401,6 +405,7 @@ export class Parser {
   private parseMethodDeclaration(): MethodDeclaration | null {
     const before = this.current;
     const isInline = !!this.matchKeyword("inline");
+    const isUnsafe = !!this.matchKeyword("unsafe");
     if (!this.checkKeyword("fn")) {
       this.current = before;
       return null;
@@ -425,6 +430,7 @@ export class Parser {
       whereClause,
       body,
       isInline,
+      isUnsafe,
     };
   }
 
@@ -480,7 +486,11 @@ export class Parser {
     }
 
     const semicolon = this.matchPunctuator(";");
-    if (!semicolon && !this.checkPunctuator("}")) {
+    if (
+      !semicolon &&
+      !this.checkPunctuator("}") &&
+      expression.kind !== "UnsafeBlockExpression"
+    ) {
       this.expectSemicolon();
     }
     return {
@@ -703,7 +713,11 @@ export class Parser {
   }
 
   private parseUnary(): Expression | null {
-    if (this.matchOperator("!") || this.matchOperator("-")) {
+    if (
+      this.matchOperator("!") ||
+      this.matchOperator("-") ||
+      this.matchOperator("*")
+    ) {
       const operatorToken = this.previous();
       const argument =
         this.parseUnary() ?? this.placeholderExpression(this.currentSpan());
@@ -809,6 +823,7 @@ export class Parser {
   private parsePrimary(): Expression | null {
     if (this.checkKeyword("if")) return this.parseIfExpression();
     if (this.checkKeyword("match")) return this.parseMatchExpression();
+    if (this.checkKeyword("unsafe")) return this.parseUnsafeBlockExpression();
     if (this.checkKeyword("fn")) return this.parseFunctionExpression();
     if (this.checkPunctuator("(")) return this.parseGroupingOrTuple();
     if (this.matchPunctuator("[")) return this.parseArrayLiteral();
@@ -914,6 +929,16 @@ export class Parser {
       span: this.spanFrom(start?.span, body.span),
       params,
       returnType: returnType ?? undefined,
+      body,
+    };
+  }
+
+  private parseUnsafeBlockExpression(): UnsafeBlockExpression {
+    const start = this.expectKeyword("unsafe");
+    const body = this.parseBlockStatement();
+    return {
+      kind: "UnsafeBlockExpression",
+      span: this.spanFrom(start?.span, body.span),
       body,
     };
   }

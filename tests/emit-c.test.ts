@@ -285,10 +285,10 @@ fn main() -> void {
 
   test("emits extern imports with explicit C link names", () => {
     const c = emitOk(`
-extern "abs" fn c_abs(value: i32) -> i32;
+unsafe extern "abs" fn c_abs(value: i32) -> i32;
 
 fn main() -> i32 {
-  return c_abs(42);
+  return unsafe { c_abs(42) };
 }
 `);
 

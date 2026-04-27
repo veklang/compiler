@@ -296,6 +296,17 @@ function validateInstruction(
     return;
   }
 
+  if (instruction.kind === "pointer_load") {
+    validate(instruction.pointer);
+    return;
+  }
+
+  if (instruction.kind === "pointer_store") {
+    validate(instruction.pointer);
+    validate(instruction.value);
+    return;
+  }
+
   if (instruction.kind === "call") {
     validate(instruction.callee);
     for (const arg of instruction.args) validate(arg);

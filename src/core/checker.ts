@@ -44,6 +44,7 @@ import type {
   TypeAliasDeclaration,
   TypeNode,
   TypeParameter,
+  UnsafeBlockExpression,
   VariableDeclaration,
   WhereConstraint,
   WhileStatement,
@@ -64,12 +65,14 @@ type PrimitiveName =
   | "f32"
   | "f64"
   | "bool"
+  | "cstr"
   | "string"
   | "void"
   | "null";
 
 type Type =
   | PrimitiveType
+  | PointerRefType
   | NamedRefType
   | NullableRefType
   | TupleRefType
@@ -86,6 +89,12 @@ interface BaseType {
 interface PrimitiveType extends BaseType {
   kind: "Primitive";
   name: PrimitiveName;
+}
+
+interface PointerRefType extends BaseType {
+  kind: "Pointer";
+  mutable: boolean;
+  target: Type;
 }
 
 interface NamedRefType extends BaseType {
@@ -119,6 +128,7 @@ interface TypeParamSpec {
 interface CallableTarget {
   kind: "function" | "method" | "variant";
   name: string;
+  isUnsafe?: boolean;
   typeParams: TypeParamSpec[];
   params: FunctionParamType[];
   returnType: Type;
@@ -130,6 +140,7 @@ interface CallableTarget {
 
 interface FunctionRefType extends BaseType {
   kind: "Function";
+  isUnsafe?: boolean;
   typeParams: TypeParamSpec[];
   params: FunctionParamType[];
   returnType: Type;
@@ -183,6 +194,7 @@ interface ValueSymbol extends BaseSymbol {
 interface MethodInfo {
   name: string;
   node: MethodDeclaration | TraitMethodSignature;
+  isUnsafe?: boolean;
   receiver?: {
     type: Type;
     isMutable: boolean;
@@ -239,6 +251,7 @@ const primitiveNames: PrimitiveName[] = [
   "f32",
   "f64",
   "bool",
+  "cstr",
   "string",
   "void",
   "null",
@@ -260,8 +273,10 @@ export class Checker {
   private currentFunctionDepth = 0;
   private currentFunctionInferReturn = false;
   private currentFunctionInferredReturn: Type | null = null;
+  private unsafeDepth = 0;
   private functionLocals: ValueSymbol[][] = [];
   private instantiations: GenericInstantiation[] = [];
+  private externLinkNames = new Map<string, FunctionDeclaration>();
 
   constructor(private program: Program) {
     this.globalScope = this.createScope();
@@ -769,9 +784,9 @@ export class Checker {
     const symbol = this.lookupValue(node.name.name, scope);
     if (!symbol || symbol.type.kind !== "Function") return;
     this.warnInlineFunction(node);
-    this.checkExternFunctionDeclaration(node);
 
     const functionType = symbol.type;
+    this.checkExternFunctionDeclaration(node, functionType);
     const bodyScope = this.createScope(scope, scope.selfType);
     for (const param of functionType.typeParams)
       bodyScope.typeParams.set(param.name, param);
@@ -799,12 +814,14 @@ export class Checker {
     const previousDepth = this.currentFunctionDepth;
     const previousInfer = this.currentFunctionInferReturn;
     const previousInferred = this.currentFunctionInferredReturn;
+    const previousUnsafeDepth = this.unsafeDepth;
     this.currentFunctionInferReturn = !node.returnType;
     this.currentFunctionInferredReturn = null;
     this.currentFunctionReturnType = node.returnType
       ? functionType.returnType
       : this.unknownType();
     this.currentFunctionDepth++;
+    if (node.isUnsafe) this.unsafeDepth++;
     this.checkFunctionBlockStatement(node.body!, bodyScope);
     if (this.currentFunctionInferReturn) {
       const inferred =
@@ -833,10 +850,14 @@ export class Checker {
     this.currentFunctionReturnType = previousReturnType;
     this.currentFunctionInferReturn = previousInfer;
     this.currentFunctionInferredReturn = previousInferred;
+    this.unsafeDepth = previousUnsafeDepth;
     this.warnUnusedLocals(this.functionLocals.pop()!);
   }
 
-  private checkExternFunctionDeclaration(node: FunctionDeclaration) {
+  private checkExternFunctionDeclaration(
+    node: FunctionDeclaration,
+    functionType: FunctionRefType,
+  ) {
     if (!node.isExtern) return;
 
     if (node.externName && !isValidExternSymbolName(node.externName.value)) {
@@ -847,11 +868,59 @@ export class Checker {
       );
     }
 
+    const linkName = node.externName?.value ?? node.name.name;
+    const isRuntimeExtern = linkName.startsWith("__vek_");
+    const previous = this.externLinkNames.get(linkName);
+    if (previous && previous !== node && !isRuntimeExtern) {
+      this.report(
+        `Duplicate extern C symbol name '${linkName}'.`,
+        node.externName?.span ?? node.name.span,
+        "E2910",
+      );
+    } else if (!isRuntimeExtern) {
+      this.externLinkNames.set(linkName, node);
+    }
+
     if (node.body && !node.isPublic) {
       this.report(
         "Exported extern fn with a body must be top-level and pub.",
         node.span,
         "E2906",
+      );
+    }
+
+    if (!isRuntimeExtern && !node.body && !node.isUnsafe) {
+      this.report(
+        "Imported extern fn declarations must be marked unsafe.",
+        node.span,
+        "E2902",
+      );
+    }
+
+    if ((node.typeParams?.length ?? 0) > 0) {
+      this.report(
+        "User-authored extern fn may not be generic.",
+        node.span,
+        "E2904",
+      );
+    }
+
+    if (isRuntimeExtern) return;
+
+    for (const param of functionType.params) {
+      if (param.isMutable || !this.isCAbiSafeType(param.type, false)) {
+        this.report(
+          `User-authored extern fn signature uses non-ABI-safe type '${this.displayType(param.type)}'.`,
+          node.span,
+          "E2903",
+        );
+      }
+    }
+    if (!this.isCAbiSafeType(functionType.returnType, true)) {
+      this.report(
+        `User-authored extern fn signature uses non-ABI-safe type '${this.displayType(functionType.returnType)}'.`,
+        node.span,
+        "E2903",
       );
     }
   }
@@ -1022,6 +1091,7 @@ export class Checker {
     const previousDepth = this.currentFunctionDepth;
     const previousInfer = this.currentFunctionInferReturn;
     const previousInferred = this.currentFunctionInferredReturn;
+    const previousUnsafeDepth = this.unsafeDepth;
     this.currentFunctionInferReturn =
       method.kind === "MethodDeclaration" && !method.returnType;
     this.currentFunctionInferredReturn = null;
@@ -1029,6 +1099,7 @@ export class Checker {
       ? resolved.returnType
       : this.unknownType();
     this.currentFunctionDepth++;
+    if (method.isUnsafe) this.unsafeDepth++;
     this.checkFunctionBlockStatement(method.body, bodyScope);
     if (this.currentFunctionInferReturn) {
       resolved.returnType =
@@ -1047,6 +1118,7 @@ export class Checker {
     }
     this.types.set(method, {
       kind: "Function",
+      isUnsafe: resolved.isUnsafe,
       typeParams: resolved.typeParams,
       params: [
         ...(resolved.receiver
@@ -1065,6 +1137,7 @@ export class Checker {
     this.currentFunctionReturnType = previousReturnType;
     this.currentFunctionInferReturn = previousInfer;
     this.currentFunctionInferredReturn = previousInferred;
+    this.unsafeDepth = previousUnsafeDepth;
     this.warnUnusedLocals(this.functionLocals.pop()!);
   }
 
@@ -1417,7 +1490,8 @@ export class Checker {
     return (
       node.kind === "IdentifierExpression" ||
       node.kind === "MemberExpression" ||
-      node.kind === "IndexExpression"
+      node.kind === "IndexExpression" ||
+      (node.kind === "UnaryExpression" && node.operator === "*")
     );
   }
 
@@ -1443,8 +1517,50 @@ export class Checker {
     }
 
     if (node.kind === "IndexExpression") {
+      const objectType = this.checkExpression(node.object, scope);
+      if (this.isRawPointerType(objectType)) {
+        if (!this.inUnsafeContext()) {
+          this.report(
+            "Unsafe operation requires an unsafe context.",
+            node.span,
+            "E2901",
+          );
+        }
+        if (objectType.kind !== "Pointer" || !objectType.mutable) {
+          this.report("Cannot write through const_ptr<T>.", node.span, "E2908");
+        }
+        this.checkExpression(node.index, scope, this.primitive("i32"));
+        return objectType.kind === "Pointer"
+          ? objectType.target
+          : this.primitive("u8");
+      }
       this.ensureMutableRoot(node.object, node.span, scope);
       return this.checkIndex(node, scope);
+    }
+
+    if (node.kind === "UnaryExpression" && node.operator === "*") {
+      if (!this.inUnsafeContext()) {
+        this.report(
+          "Unsafe operation requires an unsafe context.",
+          node.span,
+          "E2901",
+        );
+      }
+      const pointerType = this.checkExpression(node.argument, scope);
+      if (!this.isRawPointerType(pointerType)) {
+        this.report(
+          "Raw pointer operation requires a raw pointer operand.",
+          node.span,
+          "E2907",
+        );
+        return this.errorType();
+      }
+      if (pointerType.kind !== "Pointer" || !pointerType.mutable) {
+        this.report("Cannot write through const_ptr<T>.", node.span, "E2908");
+      }
+      return pointerType.kind === "Pointer"
+        ? pointerType.target
+        : this.primitive("u8");
     }
 
     this.report("Invalid assignment target.", node.span, "E2504");
@@ -1523,6 +1639,9 @@ export class Checker {
       case "CastExpression":
         type = this.checkCast(node, scope);
         break;
+      case "UnsafeBlockExpression":
+        type = this.checkUnsafeBlockExpression(node, scope, expected);
+        break;
       case "IfExpression":
         type = this.checkIfExpression(node, scope, expected);
         break;
@@ -1546,7 +1665,19 @@ export class Checker {
     if (node.literalType === "Float")
       return this.pickNumericType(expected, false);
     if (node.literalType === "Boolean") return this.primitive("bool");
-    if (node.literalType === "String") return this.primitive("string");
+    if (node.literalType === "String") {
+      if (expected?.kind === "Primitive" && expected.name === "cstr") {
+        if (node.value.includes("\0")) {
+          this.report(
+            "String literal used as cstr may not contain an interior NUL.",
+            node.span,
+            "E2903",
+          );
+        }
+        return this.primitive("cstr");
+      }
+      return this.primitive("string");
+    }
     return this.primitive("null");
   }
 
@@ -1773,6 +1904,38 @@ export class Checker {
       }
       return this.primitive("bool");
     }
+    if (node.operator === "*") {
+      if (!this.inUnsafeContext()) {
+        this.report(
+          "Unsafe operation requires an unsafe context.",
+          node.span,
+          "E2901",
+        );
+      }
+      if (!this.isRawPointerType(argument)) {
+        this.report(
+          "Raw pointer operation requires a raw pointer operand.",
+          node.span,
+          "E2907",
+        );
+        return this.errorType();
+      }
+      if (
+        argument.kind === "Pointer" &&
+        argument.target.kind === "Primitive" &&
+        argument.target.name === "void"
+      ) {
+        this.report(
+          `Invalid raw pointer target type '${this.displayType(argument.target)}'.`,
+          node.span,
+          "E2909",
+        );
+        return this.errorType();
+      }
+      return argument.kind === "Pointer"
+        ? argument.target
+        : this.primitive("u8");
+    }
     if (!this.isNumericType(argument)) {
       this.report("Unary '-' requires a numeric operand.", node.span, "E2101");
     } else if (this.isIntegerType(argument)) {
@@ -1901,6 +2064,13 @@ export class Checker {
       scope,
       expected,
     );
+    if (instantiated.isUnsafe && !this.inUnsafeContext()) {
+      this.report(
+        "Unsafe operation requires an unsafe context.",
+        node.span,
+        "E2901",
+      );
+    }
     if (
       node.callee.kind === "MemberExpression" &&
       instantiated.target?.kind === "method" &&
@@ -2093,6 +2263,10 @@ export class Checker {
     }
     if (template.kind === "Nullable" && actual.kind === "Nullable") {
       this.inferBindingsFromTypes(template.base, actual.base, bindings);
+      return;
+    }
+    if (template.kind === "Pointer" && actual.kind === "Pointer") {
+      this.inferBindingsFromTypes(template.target, actual.target, bindings);
     }
   }
 
@@ -2132,6 +2306,34 @@ export class Checker {
     const objectType = this.checkExpression(node.object, scope);
     if (objectType.kind === "TypeParam") {
       return this.checkTypeParamMember(node, objectType, scope);
+    }
+
+    if (this.isRawPointerType(objectType) && node.property.name === "offset") {
+      if (!this.inUnsafeContext()) {
+        this.report(
+          "Unsafe operation requires an unsafe context.",
+          node.span,
+          "E2901",
+        );
+      }
+      if (
+        objectType.kind === "Pointer" &&
+        objectType.target.kind === "Primitive" &&
+        objectType.target.name === "void"
+      ) {
+        this.report(
+          `Invalid raw pointer target type '${this.displayType(objectType.target)}'.`,
+          node.span,
+          "E2909",
+        );
+      }
+      return {
+        kind: "Function",
+        isUnsafe: true,
+        typeParams: [],
+        params: [{ type: this.primitive("i32"), isMutable: false }],
+        returnType: objectType,
+      };
     }
 
     if (
@@ -2306,6 +2508,30 @@ export class Checker {
       return objectType.typeArgs?.[0] ?? this.unknownType();
     }
     if (this.isStringType(objectType)) return this.primitive("string");
+    if (this.isRawPointerType(objectType)) {
+      if (!this.inUnsafeContext()) {
+        this.report(
+          "Unsafe operation requires an unsafe context.",
+          node.span,
+          "E2901",
+        );
+      }
+      if (objectType.kind === "Pointer") {
+        if (
+          objectType.target.kind === "Primitive" &&
+          objectType.target.name === "void"
+        ) {
+          this.report(
+            `Invalid raw pointer target type '${this.displayType(objectType.target)}'.`,
+            node.span,
+            "E2909",
+          );
+          return this.errorType();
+        }
+        return objectType.target;
+      }
+      return this.primitive("u8");
+    }
     this.report(
       "Indexing is only supported on arrays and strings.",
       node.span,
@@ -2500,6 +2726,17 @@ export class Checker {
       return;
     }
 
+    if (
+      template.kind === "NamedType" &&
+      (template.name.name === "ptr" || template.name.name === "const_ptr") &&
+      actual.kind === "Pointer"
+    ) {
+      const target = template.typeArgs?.[0];
+      if (target)
+        this.inferBindingsFromAstType(target, actual.target, bindings, scope);
+      return;
+    }
+
     if (template.kind === "NullableType" && actual.kind === "Nullable") {
       this.inferBindingsFromAstType(
         template.base,
@@ -2582,6 +2819,16 @@ export class Checker {
   private checkCast(node: CastExpression, scope: Scope): Type {
     const from = this.checkExpression(node.expression, scope);
     const to = this.resolveType(node.type, scope);
+    if (
+      (this.isRawPointerType(from) || this.isRawPointerType(to)) &&
+      !this.inUnsafeContext()
+    ) {
+      this.report(
+        "Unsafe operation requires an unsafe context.",
+        node.span,
+        "E2901",
+      );
+    }
     if (this.isValidCast(from, to)) return to;
     this.report(
       `Cannot cast '${this.displayType(from)}' to '${this.displayType(to)}'.`,
@@ -2593,7 +2840,29 @@ export class Checker {
 
   private isValidCast(from: Type, to: Type): boolean {
     if (from.kind === "Error" || to.kind === "Error") return true;
+    if (
+      (this.isRawPointerType(from) && this.isRawPointerType(to)) ||
+      (this.isRawPointerType(from) && this.isIntegerType(to)) ||
+      (this.isIntegerType(from) && this.isRawPointerType(to))
+    ) {
+      return true;
+    }
     return this.isNumericType(from) && this.isNumericType(to);
+  }
+
+  private checkUnsafeBlockExpression(
+    node: UnsafeBlockExpression,
+    scope: Scope,
+    expected?: Type,
+  ): Type {
+    this.unsafeDepth++;
+    const type = this.checkBlockValue(
+      node.body,
+      this.createScope(scope, scope.selfType),
+      expected,
+    );
+    this.unsafeDepth--;
+    return type;
   }
 
   private checkIfExpression(
@@ -3196,6 +3465,31 @@ export class Checker {
 
     if (node.name.name === "never") return this.neverType();
 
+    if (node.name.name === "ptr" || node.name.name === "const_ptr") {
+      const targetNode = node.typeArgs?.[0];
+      if ((node.typeArgs?.length ?? 0) !== 1 || !targetNode) {
+        this.report(
+          `Type argument count mismatch for '${node.name.name}'.`,
+          node.span,
+          "E2005",
+        );
+        return this.errorType();
+      }
+      const target = this.resolveType(targetNode, scope);
+      if (!this.isValidRawPointerTarget(target)) {
+        this.report(
+          `Invalid raw pointer target type '${this.displayType(target)}'.`,
+          targetNode.span,
+          "E2909",
+        );
+      }
+      return {
+        kind: "Pointer",
+        mutable: node.name.name === "ptr",
+        target,
+      };
+    }
+
     if (primitiveNames.includes(node.name.name as PrimitiveName)) {
       return this.primitive(node.name.name as PrimitiveName);
     }
@@ -3329,15 +3623,21 @@ export class Checker {
     const returnType = node.returnType
       ? this.resolveType(node.returnType, typeScope)
       : this.unknownType();
+    const linkName = node.externName?.value ?? node.name.name;
+    const isUnsafe =
+      node.isUnsafe ||
+      (node.isExtern && !node.body && !linkName.startsWith("__vek_"));
 
     return {
       kind: "Function",
+      isUnsafe,
       typeParams,
       params,
       returnType,
       target: {
         kind: "function",
         name: node.name.name,
+        isUnsafe,
         typeParams,
         params,
         returnType,
@@ -3467,6 +3767,7 @@ export class Checker {
       name: method.name.name,
       node: method,
       receiver,
+      isUnsafe: method.kind === "MethodDeclaration" ? method.isUnsafe : false,
       typeParams,
       params,
       returnType,
@@ -3554,12 +3855,14 @@ export class Checker {
   private methodCallType(method: MethodInfo): FunctionRefType {
     return {
       kind: "Function",
+      isUnsafe: method.isUnsafe,
       typeParams: method.typeParams,
       params: method.params,
       returnType: method.returnType,
       target: {
         kind: "method",
         name: method.name,
+        isUnsafe: method.isUnsafe,
         typeParams: method.typeParams,
         params: method.params,
         returnType: method.returnType,
@@ -3792,6 +4095,13 @@ export class Checker {
       return {
         kind: "Nullable",
         base: this.substituteType(type.base, bindings),
+      };
+    }
+    if (type.kind === "Pointer") {
+      return {
+        kind: "Pointer",
+        mutable: type.mutable,
+        target: this.substituteType(type.target, bindings),
       };
     }
     if (type.kind === "Tuple") {
@@ -4215,10 +4525,73 @@ export class Checker {
     );
   }
 
+  private isRawPointerType(type: Type): boolean {
+    return (
+      type.kind === "Pointer" ||
+      (type.kind === "Primitive" && type.name === "cstr")
+    );
+  }
+
+  private isValidRawPointerTarget(type: Type): boolean {
+    if (type.kind === "Pointer")
+      return this.isValidRawPointerTarget(type.target);
+    return (
+      type.kind === "Primitive" &&
+      [
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "f32",
+        "f64",
+        "bool",
+        "void",
+        "cstr",
+      ].includes(type.name)
+    );
+  }
+
+  private inUnsafeContext(): boolean {
+    return this.unsafeDepth > 0;
+  }
+
+  private isCAbiSafeType(type: Type, allowVoid: boolean): boolean {
+    if (type.kind === "Primitive") {
+      if (type.name === "void") return allowVoid;
+      return [
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "f32",
+        "f64",
+        "bool",
+        "cstr",
+      ].includes(type.name);
+    }
+    if (type.kind === "Pointer")
+      return this.isValidRawPointerTarget(type.target);
+    if (type.kind === "Nullable") return this.isRawPointerType(type.base);
+    return false;
+  }
+
   private typeEquals(left: Type, right: Type): boolean {
     if (left.kind !== right.kind) return false;
     if (left.kind === "Primitive" && right.kind === "Primitive")
       return left.name === right.name;
+    if (left.kind === "Pointer" && right.kind === "Pointer")
+      return (
+        left.mutable === right.mutable &&
+        this.typeEquals(left.target, right.target)
+      );
     if (left.kind === "Named" && right.kind === "Named")
       return this.namedTypeEquals(left, right);
     if (left.kind === "Nullable" && right.kind === "Nullable")
@@ -4314,6 +4687,8 @@ export class Checker {
 
   private displayType(type: Type): string {
     if (type.kind === "Primitive") return type.name;
+    if (type.kind === "Pointer")
+      return `${type.mutable ? "ptr" : "const_ptr"}<${this.displayType(type.target)}>`;
     if (type.kind === "Named") {
       if (!type.typeArgs?.length) return type.name;
       return `${type.name}<${type.typeArgs.map((arg) => this.displayType(arg)).join(", ")}>`;

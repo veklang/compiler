@@ -321,6 +321,21 @@ function emitInstruction(
     }${emitOperand(instruction.argument, context)};`;
   }
 
+  if (instruction.kind === "pointer_load") {
+    const target = declareTemp(context, instruction.target);
+    return `${emitDeclaration(instruction.type, target)} = *${emitOperand(
+      instruction.pointer,
+      context,
+    )};`;
+  }
+
+  if (instruction.kind === "pointer_store") {
+    return `*${emitOperand(instruction.pointer, context)} = ${emitOperand(
+      instruction.value,
+      context,
+    )};`;
+  }
+
   if (instruction.kind === "call") {
     const isPanic =
       instruction.callee.kind === "function" &&
@@ -685,6 +700,14 @@ function emitMainWrapper(entry: IrFunction): string[] {
 }
 
 function emitOperand(operand: IrOperand, context: FunctionEmitContext): string {
+  if (
+    operand.kind === "const" &&
+    operand.value.kind === "string" &&
+    operand.type.kind === "primitive" &&
+    operand.type.name === "cstr"
+  ) {
+    return JSON.stringify(operand.value.value);
+  }
   if (operand.kind === "const")
     return emitConst(operand.value, context.stringLiteralNames);
   if (operand.kind === "local") return emitLocalValue(context, operand.id);
@@ -1043,6 +1066,10 @@ function emitAbstractDeclaration(type: IrType): string {
 
 function emitType(type: IrType): string {
   if (type.kind === "nullable") return cNullableName(type);
+  if (type.kind === "pointer") {
+    const target = emitType(type.target);
+    return type.mutable ? `${target} *` : `const ${target} *`;
+  }
   if (type.kind === "tuple") return cTupleName(type);
   if (type.kind === "named" && type.name === "Array") return "__vek_array *";
   if (type.kind === "named") {
@@ -1075,6 +1102,8 @@ function emitType(type: IrType): string {
       return "double";
     case "bool":
       return "bool";
+    case "cstr":
+      return "const char *";
     case "void":
     case "never":
       return "void";

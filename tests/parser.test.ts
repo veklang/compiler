@@ -340,11 +340,17 @@ let f: fn<T>(T, T) -> bool where T: Equal<T> = fn(a: i32, b: i32) -> bool {
 pub extern fn panic(message: string) -> void;
 extern fn add(a: i32, b: i32) -> i32;
 extern "abs" fn c_abs(value: i32) -> i32;
+unsafe extern "strlen" fn c_strlen(value: cstr) -> u64;
+unsafe fn read(ptr: const_ptr<i32>) -> i32 {
+  return unsafe { *ptr };
+}
 pub extern "vek_add" fn add_export(a: i32, b: i32) -> i32 {
   return a + b;
 }
 `);
     assert.deepEqual(getProgramBodyKinds(program), [
+      "FunctionDeclaration",
+      "FunctionDeclaration",
       "FunctionDeclaration",
       "FunctionDeclaration",
       "FunctionDeclaration",
@@ -356,7 +362,19 @@ pub extern "vek_add" fn add_export(a: i32, b: i32) -> i32 {
     assert.equal(imported.name.name, "c_abs");
     assert.equal(imported.body, undefined);
 
-    const exported = program.body[3];
+    const unsafeImported = program.body[3];
+    assert.ok(unsafeImported.kind === "FunctionDeclaration");
+    assert.equal(unsafeImported.isUnsafe, true);
+    assert.equal(unsafeImported.externName?.value, "strlen");
+
+    const unsafeFunction = program.body[4];
+    assert.ok(unsafeFunction.kind === "FunctionDeclaration");
+    assert.equal(unsafeFunction.isUnsafe, true);
+    const last = unsafeFunction.body?.body.at(-1);
+    assert.ok(last?.kind === "ReturnStatement");
+    assert.equal(last.value?.kind, "UnsafeBlockExpression");
+
+    const exported = program.body[5];
     assert.ok(exported.kind === "FunctionDeclaration");
     assert.equal(exported.externName?.value, "vek_add");
     assert.equal(exported.name.name, "add_export");

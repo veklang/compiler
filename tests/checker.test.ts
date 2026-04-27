@@ -607,24 +607,208 @@ fn main() -> void {
 `);
   });
 
-  test("extern fn is callable and return type is checked", () => {
+  test("unsafe extern fn is callable from unsafe blocks and return type is checked", () => {
     checkOk(`
-extern fn add(a: i32, b: i32) -> i32;
-extern "abs" fn c_abs(value: i32) -> i32;
+unsafe extern fn add(a: i32, b: i32) -> i32;
+unsafe extern "abs" fn c_abs(value: i32) -> i32;
 
 fn main() -> void {
-  let _x: i32 = add(1, 2);
-  let _y: i32 = c_abs(-1);
+  let _x: i32 = unsafe { add(1, 2) };
+  let _y: i32 = unsafe { c_abs(-1) };
 }
 `);
   });
 
+  test("E2901/E2902: imported extern functions are unsafe", () => {
+    const missingUnsafe = check(`
+extern fn add(a: i32, b: i32) -> i32;
+`);
+    expectDiagnostics(missingUnsafe.checkDiagnostics, ["E2902"]);
+
+    const unsafeCall = check(`
+unsafe extern fn add(a: i32, b: i32) -> i32;
+
+fn main() -> i32 {
+  return add(1, 2);
+}
+`);
+    expectDiagnostics(unsafeCall.checkDiagnostics, ["E2901"]);
+  });
+
   test("E2910: extern symbol names must be C identifiers", () => {
     const result = check(`
-extern "bad-name" fn bad(value: i32) -> i32;
+unsafe extern "bad-name" fn bad(value: i32) -> i32;
 `);
 
     expectDiagnostics(result.checkDiagnostics, ["E2910"]);
+  });
+
+  test("E2910: duplicate extern C symbol names are rejected", () => {
+    const result = check(`
+unsafe extern fn abs(value: i32) -> i32;
+unsafe extern "abs" fn c_abs(value: i32) -> i32;
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2910"]);
+  });
+
+  test("E2904: generic extern fn is rejected", () => {
+    const result = check(`
+unsafe extern fn identity<T>(value: T) -> T;
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2904", "E2903"]);
+  });
+
+  test("E2903: non-ABI-safe type in extern fn signature is rejected", () => {
+    const result = check(`
+unsafe extern fn bad(message: string) -> i32;
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2903"]);
+  });
+
+  test("E2903: interior NUL byte in cstr literal is rejected", () => {
+    const result = check(`
+unsafe extern fn puts(s: cstr) -> i32;
+
+fn main() -> void {
+  let _ = unsafe { puts("he\0llo") };
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2903"]);
+  });
+
+  test("E2901: dereferencing a pointer outside unsafe context is rejected", () => {
+    const result = check(`
+unsafe extern fn get_ptr() -> const_ptr<i32>;
+
+fn main() -> i32 {
+  let p = unsafe { get_ptr() };
+  return *p;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2901"]);
+  });
+
+  test("E2901: pointer.offset() outside unsafe context is rejected", () => {
+    const result = check(`
+unsafe extern fn get_ptr() -> const_ptr<i32>;
+
+fn test() -> void {
+  let p: const_ptr<i32> = unsafe { get_ptr() };
+  let _: const_ptr<i32> = p.offset(1);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2901", "E2901"]);
+  });
+
+  test("E2901: pointer index outside unsafe context is rejected", () => {
+    const result = check(`
+unsafe extern fn get_ptr() -> const_ptr<i32>;
+
+fn test() -> void {
+  let p: const_ptr<i32> = unsafe { get_ptr() };
+  let _: i32 = p[0];
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2901"]);
+  });
+
+  test("E2901: cast to raw pointer outside unsafe context is rejected", () => {
+    const result = check(`
+fn get() -> ptr<i32> {
+  return 0x1000 as ptr<i32>;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2901"]);
+  });
+
+  test("E2907: dereferencing a non-pointer is rejected", () => {
+    const result = check(`
+fn main() -> i32 {
+  let x: i32 = 42;
+  return unsafe { *x };
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2907"]);
+  });
+
+  test("E2908: writing through const_ptr is rejected", () => {
+    const result = check(`
+unsafe extern fn get_ptr() -> const_ptr<i32>;
+
+fn main() -> void {
+  let p = unsafe { get_ptr() };
+  unsafe { *p = 1; }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2908"]);
+  });
+
+  test("E2909: dereferencing ptr<void> is rejected", () => {
+    const result = check(`
+unsafe extern fn malloc(size: u64) -> ptr<void>?;
+
+fn main() -> void {
+  let p = unsafe { malloc(8) };
+  if p != null {
+    let _ = unsafe { *p };
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2909"]);
+  });
+
+  test("ptr<T> and const_ptr<T> read/write operations are accepted in unsafe context", () => {
+    checkOk(`
+unsafe extern fn get_mutable() -> ptr<i32>;
+unsafe extern fn get_readonly() -> const_ptr<i32>;
+
+fn main() -> i32 {
+  let mp: ptr<i32> = unsafe { get_mutable() };
+  unsafe { *mp = 99; }
+  let cp: const_ptr<i32> = unsafe { get_readonly() };
+  let a: i32 = unsafe { *mp };
+  let b: i32 = unsafe { *cp };
+  let c: i32 = unsafe { mp[0] };
+  let _d: ptr<i32> = unsafe { mp.offset(1) };
+  let _e: const_ptr<i32> = unsafe { cp.offset(2) };
+  return a + b + c;
+}
+`);
+  });
+
+  test("cstr parameter and string literal coercion are accepted", () => {
+    checkOk(`
+unsafe extern fn puts(s: cstr) -> i32;
+unsafe extern fn strlen(s: cstr) -> u64;
+
+fn main() -> void {
+  let _ = unsafe { puts("hello from C") };
+  let _n: u64 = unsafe { strlen("hi") };
+}
+`);
+  });
+
+  test("unsafe fn is safe to define but unsafe to call", () => {
+    const result = check(`
+unsafe fn danger() -> i32 {
+  return 0;
+}
+
+fn main() -> i32 {
+  return danger();
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2901"]);
+
+    checkOk(`
+unsafe fn danger() -> i32 {
+  return 0;
+}
+
+fn main() -> i32 {
+  return unsafe { danger() };
+}
+`);
   });
 
   test("inline function emits non-guarantee warning", () => {
@@ -642,7 +826,7 @@ inline fn add(a: i32, b: i32) -> i32 {
 
   test("inline extern function warns that inline has no effect", () => {
     const result = check(`
-inline extern fn add(a: i32, b: i32) -> i32;
+inline unsafe extern fn add(a: i32, b: i32) -> i32;
 `);
     expectDiagnostics(result.checkDiagnostics, ["W2904"]);
     assert.match(

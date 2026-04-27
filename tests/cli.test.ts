@@ -1649,4 +1649,68 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs unsafe extern fn with cstr and pointer arithmetic", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+unsafe extern "strlen" fn c_strlen(s: cstr) -> u64;
+
+fn main() -> i32 {
+  let n: u64 = unsafe { c_strlen("hello") };
+  return n as i32;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 5);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs unsafe fn wrapping pointer cast and offset", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+unsafe fn byte_stride(p: ptr<i32>) -> i64 {
+  let q: ptr<i32> = p.offset(2);
+  let pi: i64 = p as i64;
+  let qi: i64 = q as i64;
+  return qi - pi;
+}
+
+fn main() -> i32 {
+  let base: ptr<i32> = unsafe { 0x1000 as ptr<i32> };
+  let diff: i64 = unsafe { byte_stride(base) };
+  return diff as i32;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 8);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

@@ -175,6 +175,12 @@ type AssignablePlace =
       index: IrOperand;
       type: IrType;
       span?: IrLocal["span"];
+    }
+  | {
+      kind: "pointer";
+      pointer: IrOperand;
+      type: IrType;
+      span?: IrLocal["span"];
     };
 
 export function lowerProgramToIr(
@@ -910,7 +916,7 @@ function lowerMethod(
     linkName,
     abi: "vek",
     linkage: "internal",
-    safety: "safe",
+    safety: node.isUnsafe ? "unsafe" : "safe",
     isInline: node.isInline,
     signature: {
       params: params.map((param) => ({
@@ -1061,6 +1067,7 @@ function lowerFunction(
       ? node.externName.value
       : sourceLinkName;
   const body = node.isExtern && !node.body ? "extern" : "defined";
+  const isRuntimeExtern = linkName.startsWith("__vek_");
   return {
     kind: "function",
     id: `fn.${sourceLinkName}`,
@@ -1068,7 +1075,10 @@ function lowerFunction(
     linkName,
     abi: node.isExtern ? "c" : "vek",
     linkage: node.isExtern ? (node.body ? "exported" : "imported") : "internal",
-    safety: "safe",
+    safety:
+      node.isUnsafe || (node.isExtern && !node.body && !isRuntimeExtern)
+        ? "unsafe"
+        : "safe",
     isInline: node.isInline && !node.isExtern,
     signature: {
       params: params.map((param) => ({
@@ -1442,6 +1452,17 @@ function resolveAssignablePlace(
   }
 
   if (target.kind === "IndexExpression") {
+    const objectType = typeFromNodeInContext(context, target.object);
+    if (isRawPointerIrType(objectType)) {
+      const pointer = lowerPointerIndex(target, context);
+      return {
+        kind: "pointer",
+        pointer,
+        type: typeFromNodeInContext(context, target),
+        span: target.span,
+      };
+    }
+
     const array = detachArrayForIndexedMutation(
       target.object,
       context,
@@ -1461,6 +1482,15 @@ function resolveAssignablePlace(
       array,
       index: lowerExpression(target.index, context),
       type: elementType,
+      span: target.span,
+    };
+  }
+
+  if (target.kind === "UnaryExpression" && target.operator === "*") {
+    return {
+      kind: "pointer",
+      pointer: lowerExpression(target.argument, context),
+      type: typeFromNodeInContext(context, target),
       span: target.span,
     };
   }
@@ -1499,6 +1529,17 @@ function readAssignablePlace(
       span: place.span,
     });
     if (releaseBorrowedFieldOnUse) markOwnedTemp(target, place.type, context);
+    return { kind: "temp", id: target, type: place.type };
+  }
+
+  if (place.kind === "pointer") {
+    context.currentBlock.instructions.push({
+      kind: "pointer_load",
+      target,
+      pointer: place.pointer,
+      type: place.type,
+      span: place.span,
+    });
     return { kind: "temp", id: target, type: place.type };
   }
 
@@ -1567,6 +1608,17 @@ function writeAssignablePlace(
       span,
     });
     if (value.kind === "temp") context.ownedTemps.delete(value.id);
+    return;
+  }
+
+  if (place.kind === "pointer") {
+    context.currentBlock.instructions.push({
+      kind: "pointer_store",
+      pointer: place.pointer,
+      value,
+      span,
+    });
+    releaseIfOwnedTemp(value, context);
     return;
   }
 
@@ -2815,6 +2867,13 @@ function isStringType(type: IrType): boolean {
   return type.kind === "primitive" && type.name === "string";
 }
 
+function isRawPointerIrType(type: IrType): boolean {
+  return (
+    type.kind === "pointer" ||
+    (type.kind === "primitive" && type.name === "cstr")
+  );
+}
+
 function findUnitVariantInfo(
   variantInfos: Map<string, VariantInfo>,
   variantName: string,
@@ -2831,8 +2890,15 @@ function lowerExpression(
 ): IrOperand {
   switch (expression.kind) {
     case "LiteralExpression":
-      if (expression.literalType === "String") context.runtime.strings = true;
-      return lowerLiteral(expression);
+      if (
+        expression.literalType === "String" &&
+        typeFromNodeInContext(context, expression).kind === "primitive" &&
+        (typeFromNodeInContext(context, expression) as IrPrimitiveType).name !==
+          "cstr"
+      ) {
+        context.runtime.strings = true;
+      }
+      return lowerLiteral(expression, context);
     case "IdentifierExpression":
       return lowerIdentifier(expression, context);
     case "GroupingExpression":
@@ -2845,6 +2911,8 @@ function lowerExpression(
       return lowerCall(expression, context);
     case "CastExpression":
       return lowerCast(expression, context);
+    case "UnsafeBlockExpression":
+      return lowerBlockValue(expression.body, context);
     case "StructLiteralExpression":
       return lowerStructLiteral(expression, context);
     case "MemberExpression":
@@ -2967,9 +3035,19 @@ function lowerFunctionExpression(
   return { kind: "function", name: sourceName, type: functionType };
 }
 
-function lowerLiteral(expression: LiteralExpression): IrOperand {
+function lowerLiteral(
+  expression: LiteralExpression,
+  context?: LowerContext,
+): IrOperand {
   const value = constFromLiteral(expression);
-  return { kind: "const", value, type: typeFromConst(value) };
+  const checkedType = context
+    ? typeFromNodeInContext(context, expression)
+    : { kind: "unknown" as const };
+  return {
+    kind: "const",
+    value,
+    type: checkedType.kind === "unknown" ? typeFromConst(value) : checkedType,
+  };
 }
 
 function lowerIdentifier(
@@ -3693,6 +3771,16 @@ function lowerUnary(
   const target = nextTemp(context);
   const type = typeFromNodeInContext(context, expression);
   const argument = lowerExpression(expression.argument, context);
+  if (expression.operator === "*") {
+    context.currentBlock.instructions.push({
+      kind: "pointer_load",
+      target,
+      pointer: argument,
+      type,
+      span: expression.span,
+    });
+    return { kind: "temp", id: target, type };
+  }
   context.currentBlock.instructions.push({
     kind: "unary",
     target,
@@ -3704,10 +3792,61 @@ function lowerUnary(
   return { kind: "temp", id: target, type };
 }
 
+function lowerPointerOffsetCall(
+  expression: CallExpression,
+  context: LowerContext,
+): IrOperand | null {
+  if (
+    expression.callee.kind !== "MemberExpression" ||
+    expression.callee.property.name !== "offset"
+  ) {
+    return null;
+  }
+  const objectType = typeFromNodeInContext(context, expression.callee.object);
+  if (!isRawPointerIrType(objectType)) return null;
+
+  const target = nextTemp(context);
+  const pointer = lowerExpression(expression.callee.object, context);
+  const offset = lowerExpression(expression.args[0], context);
+  const type = typeFromNodeInContext(context, expression);
+  context.currentBlock.instructions.push({
+    kind: "binary",
+    target,
+    operator: "+",
+    left: pointer,
+    right: offset,
+    type,
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type };
+}
+
+function lowerPointerIndex(
+  expression: IndexExpression,
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  const pointer = lowerExpression(expression.object, context);
+  const index = lowerExpression(expression.index, context);
+  context.currentBlock.instructions.push({
+    kind: "binary",
+    target,
+    operator: "+",
+    left: pointer,
+    right: index,
+    type: pointer.type,
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type: pointer.type };
+}
+
 function lowerCall(
   expression: CallExpression,
   context: LowerContext,
 ): IrOperand {
+  const pointerOffset = lowerPointerOffsetCall(expression, context);
+  if (pointerOffset) return pointerOffset;
+
   const methodCall = lowerInstanceMethodCall(expression, context);
   if (methodCall) return methodCall;
 
@@ -4111,6 +4250,18 @@ function lowerIndexExpression(
 ): IrOperand {
   const type = typeFromNodeInContext(context, expression);
   const target = nextTemp(context);
+  const objectType = typeFromNodeInContext(context, expression.object);
+  if (isRawPointerIrType(objectType)) {
+    const pointer = lowerPointerIndex(expression, context);
+    context.currentBlock.instructions.push({
+      kind: "pointer_load",
+      target,
+      pointer,
+      type,
+      span: expression.span,
+    });
+    return { kind: "temp", id: target, type };
+  }
   const object = lowerExpression(expression.object, context);
   const index = lowerExpression(expression.index, context);
   if (object.type.kind === "primitive" && object.type.name === "string") {
@@ -4742,6 +4893,15 @@ function rawTypeFromTypeNode(node: TypeNode, enumNames?: Set<string>): IrType {
   if (node.kind === "NamedType") {
     const name = node.name.name;
     if (name === "never") return irPrimitive("never");
+    if (name === "ptr" || name === "const_ptr") {
+      return {
+        kind: "pointer",
+        mutable: name === "ptr",
+        target: node.typeArgs?.[0]
+          ? rawTypeFromTypeNode(node.typeArgs[0], enumNames)
+          : { kind: "unknown" },
+      };
+    }
     if (isPrimitiveName(name)) return irPrimitive(name);
     return {
       kind: "named",
@@ -4835,6 +4995,12 @@ function substituteTypeParams(
   if (type.kind === "nullable") {
     return { ...type, base: substituteTypeParams(type.base, substitutions) };
   }
+  if (type.kind === "pointer") {
+    return {
+      ...type,
+      target: substituteTypeParams(type.target, substitutions),
+    };
+  }
   if (type.kind === "tuple") {
     return {
       ...type,
@@ -4892,6 +5058,9 @@ function replaceSelfType(type: IrType, selfTypeName: string): IrType {
   if (type.kind === "nullable") {
     return { ...type, base: replaceSelfType(type.base, selfTypeName) };
   }
+  if (type.kind === "pointer") {
+    return { ...type, target: replaceSelfType(type.target, selfTypeName) };
+  }
   if (type.kind === "tuple") {
     return {
       ...type,
@@ -4946,6 +5115,14 @@ function typeFromCheckerType(type: unknown): IrType {
 
   if (type.kind === "Nullable") {
     return { kind: "nullable", base: typeFromCheckerType(type.base) };
+  }
+
+  if (type.kind === "Pointer") {
+    return {
+      kind: "pointer",
+      mutable: type.mutable === true,
+      target: typeFromCheckerType(type.target),
+    };
   }
 
   if (type.kind === "Tuple" && Array.isArray(type.elements)) {
@@ -5133,6 +5310,7 @@ function isPrimitiveName(name: string): name is IrPrimitiveType["name"] {
     "f32",
     "f64",
     "bool",
+    "cstr",
     "string",
     "void",
     "null",

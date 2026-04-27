@@ -378,14 +378,14 @@ fn main() -> void {
 
   test("lowers extern symbol aliases as C ABI link names", () => {
     const ir = irOk(`
-extern "abs" fn c_abs(value: i32) -> i32;
+unsafe extern "abs" fn c_abs(value: i32) -> i32;
 
 pub extern "vek_answer" fn answer() -> i32 {
   return 42;
 }
 
 fn main() -> i32 {
-  return c_abs(answer());
+  return unsafe { c_abs(answer()) };
 }
 `);
 

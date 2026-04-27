@@ -57,6 +57,7 @@ export interface FunctionDeclaration extends Node {
   body?: BlockStatement;
   externName?: StringLiteralExpression;
   isInline: boolean;
+  isUnsafe: boolean;
   isExtern: boolean;
   isPublic: boolean;
 }
@@ -70,6 +71,7 @@ export interface MethodDeclaration extends Node {
   whereClause?: WhereConstraint[];
   body: BlockStatement;
   isInline: boolean;
+  isUnsafe: boolean;
 }
 
 export interface TraitMethodSignature extends Node {
@@ -250,6 +252,7 @@ export type Expression =
   | GroupingExpression
   | FunctionExpression
   | CastExpression
+  | UnsafeBlockExpression
   | IfExpression
   | MatchExpression;
 
@@ -257,7 +260,8 @@ export type AssignableExpression =
   | IdentifierExpression
   | MemberExpression
   | TupleMemberExpression
-  | IndexExpression;
+  | IndexExpression
+  | UnaryExpression;
 
 export interface LiteralExpression extends Node {
   kind: "LiteralExpression";
@@ -350,6 +354,11 @@ export interface CastExpression extends Node {
   kind: "CastExpression";
   expression: Expression;
   type: TypeNode;
+}
+
+export interface UnsafeBlockExpression extends Node {
+  kind: "UnsafeBlockExpression";
+  body: BlockStatement;
 }
 
 export interface IfExpression extends Node {

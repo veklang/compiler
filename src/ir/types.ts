@@ -125,6 +125,7 @@ export interface IrLocal {
 
 export type IrType =
   | IrPrimitiveType
+  | IrPointerType
   | IrNamedType
   | IrNullableType
   | IrTupleType
@@ -146,10 +147,17 @@ export interface IrPrimitiveType {
     | "f32"
     | "f64"
     | "bool"
+    | "cstr"
     | "string"
     | "void"
     | "null"
     | "never";
+}
+
+export interface IrPointerType {
+  kind: "pointer";
+  mutable: boolean;
+  target: IrType;
 }
 
 export interface IrNamedType {
@@ -265,7 +273,9 @@ export type IrInstruction =
   | IrStringLenInstruction
   | IrStringAtInstruction
   | IrStringConcatInstruction
-  | IrStringEqInstruction;
+  | IrStringEqInstruction
+  | IrPointerLoadInstruction
+  | IrPointerStoreInstruction;
 
 export interface IrAssignInstruction {
   kind: "assign";
@@ -291,6 +301,21 @@ export interface IrDetachInstruction {
   target: IrTempId;
   value: IrOperand;
   type: IrType;
+  span?: Span;
+}
+
+export interface IrPointerLoadInstruction {
+  kind: "pointer_load";
+  target: IrTempId;
+  pointer: IrOperand;
+  type: IrType;
+  span?: Span;
+}
+
+export interface IrPointerStoreInstruction {
+  kind: "pointer_store";
+  pointer: IrOperand;
+  value: IrOperand;
   span?: Span;
 }
 

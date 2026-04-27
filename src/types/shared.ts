@@ -16,6 +16,7 @@ export const keywords = [
   "const",
   "fn",
   "inline",
+  "unsafe",
   "extern",
   "struct",
   "type",

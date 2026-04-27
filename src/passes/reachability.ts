@@ -308,6 +308,9 @@ function walkExpr(expr: Expression, refs: Set<string>): void {
       walkExpr(expr.expression, refs);
       walkTypeNode(expr.type, refs);
       break;
+    case "UnsafeBlockExpression":
+      for (const s of expr.body.body) walkStmt(s, refs);
+      break;
     case "IfExpression":
       walkExpr(expr.condition, refs);
       for (const s of expr.thenBranch.body) walkStmt(s, refs);
