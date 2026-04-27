@@ -115,15 +115,71 @@ function collectRefs(expr: Expression, names: Set<string>): Set<string> {
       case "CastExpression":
         walk(e.expression);
         break;
+      case "IfExpression":
+        walk(e.condition);
+        walkBlock(e.thenBranch);
+        if (e.elseBranch.kind === "BlockStatement") walkBlock(e.elseBranch);
+        else walk(e.elseBranch);
+        break;
       case "MatchExpression":
         walk(e.expression);
-        for (const arm of e.arms) walk(arm.expression);
+        for (const arm of e.arms) {
+          if (arm.expression.kind === "BlockStatement")
+            walkBlock(arm.expression);
+          else walk(arm.expression);
+        }
         break;
       case "FunctionExpression":
         // Don't walk closure bodies: captures are evaluated at call time, not init time.
         break;
       case "LiteralExpression":
         break;
+    }
+  }
+
+  function walkBlock(block: import("@/types/ast").BlockStatement): void {
+    for (const stmt of block.body) {
+      switch (stmt.kind) {
+        case "VariableDeclaration":
+          if (stmt.initializer) walk(stmt.initializer);
+          break;
+        case "ReturnStatement":
+          if (stmt.value) walk(stmt.value);
+          break;
+        case "ExpressionStatement":
+          walk(stmt.expression);
+          break;
+        case "IfStatement":
+          walk(stmt.condition);
+          walkBlock(stmt.thenBranch);
+          if (stmt.elseBranch) {
+            if (stmt.elseBranch.kind === "BlockStatement")
+              walkBlock(stmt.elseBranch);
+            else
+              walkBlock({
+                kind: "BlockStatement",
+                span: stmt.elseBranch.span,
+                body: [stmt.elseBranch],
+              });
+          }
+          break;
+        case "MatchStatement":
+          walk(stmt.expression);
+          for (const arm of stmt.arms) walkBlock(arm.body);
+          break;
+        case "AssignmentStatement":
+          walk(stmt.target);
+          walk(stmt.value);
+          break;
+        case "WhileStatement":
+          walk(stmt.condition);
+          walkBlock(stmt.body);
+          break;
+        case "ForStatement":
+          walk(stmt.iterable);
+          walkBlock(stmt.body);
+          break;
+      }
     }
   }
 }

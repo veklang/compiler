@@ -13,6 +13,7 @@ import type {
   FunctionTypeParameter,
   Identifier,
   IdentifierExpression,
+  IfExpression,
   IfStatement,
   ImportDeclaration,
   LiteralExpression,
@@ -472,11 +473,15 @@ export class Parser {
       };
     }
 
-    this.expectSemicolon();
+    const semicolon = this.matchPunctuator(";");
+    if (!semicolon && !this.checkPunctuator("}")) {
+      this.expectSemicolon();
+    }
     return {
       kind: "ExpressionStatement",
       span: expression.span,
       expression,
+      hasSemicolon: !!semicolon,
     };
   }
 
@@ -796,6 +801,7 @@ export class Parser {
   }
 
   private parsePrimary(): Expression | null {
+    if (this.checkKeyword("if")) return this.parseIfExpression();
     if (this.checkKeyword("match")) return this.parseMatchExpression();
     if (this.checkKeyword("fn")) return this.parseFunctionExpression();
     if (this.checkPunctuator("(")) return this.parseGroupingOrTuple();
@@ -850,9 +856,10 @@ export class Parser {
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
       const pattern = this.parsePattern();
       this.expectOperator("=>");
-      const armExpression =
-        this.parseExpression() ??
-        this.placeholderExpression(this.currentSpan());
+      const armExpression = this.checkPunctuator("{")
+        ? this.parseBlockStatement()
+        : (this.parseExpression() ??
+          this.placeholderExpression(this.currentSpan()));
       arms.push({
         kind: "MatchExpressionArm",
         span: this.spanFrom(pattern.span, armExpression.span),
@@ -867,6 +874,27 @@ export class Parser {
       span: this.spanFrom(start?.span, end?.span ?? expression.span),
       expression,
       arms,
+    };
+  }
+
+  private parseIfExpression(): IfExpression {
+    const start = this.expectKeyword("if");
+    const condition =
+      this.withStructLiteral(false, () => this.parseExpression()) ??
+      this.placeholderExpression(this.currentSpan());
+    const thenBranch = this.parseBlockStatement();
+
+    this.expectKeyword("else");
+    const elseBranch = this.checkKeyword("if")
+      ? this.parseIfExpression()
+      : this.parseBlockStatement();
+
+    return {
+      kind: "IfExpression",
+      span: this.spanFrom(start?.span, elseBranch.span),
+      condition,
+      thenBranch,
+      elseBranch,
     };
   }
 

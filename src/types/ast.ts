@@ -231,6 +231,7 @@ export interface ContinueStatement extends Node {
 export interface ExpressionStatement extends Node {
   kind: "ExpressionStatement";
   expression: Expression;
+  hasSemicolon: boolean;
 }
 
 export type Expression =
@@ -248,6 +249,7 @@ export type Expression =
   | GroupingExpression
   | FunctionExpression
   | CastExpression
+  | IfExpression
   | MatchExpression;
 
 export type AssignableExpression =
@@ -349,6 +351,13 @@ export interface CastExpression extends Node {
   type: TypeNode;
 }
 
+export interface IfExpression extends Node {
+  kind: "IfExpression";
+  condition: Expression;
+  thenBranch: BlockStatement;
+  elseBranch: BlockStatement | IfExpression;
+}
+
 export interface MatchExpression extends Node {
   kind: "MatchExpression";
   expression: Expression;
@@ -358,7 +367,7 @@ export interface MatchExpression extends Node {
 export interface MatchExpressionArm extends Node {
   kind: "MatchExpressionArm";
   pattern: Pattern;
-  expression: Expression;
+  expression: Expression | BlockStatement;
 }
 
 export type Pattern =

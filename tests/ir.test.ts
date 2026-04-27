@@ -67,6 +67,48 @@ fn main() {
     assert.ok(dump.includes("return local.0"));
   });
 
+  test("lowers trailing expressions as implicit returns", () => {
+    const ir = irOk(`
+fn main() {
+  42
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.main main() -> i32"));
+    assert.ok(dump.includes("return 42"));
+  });
+
+  test("lowers trailing if and match values", () => {
+    const ir = irOk(`
+enum Choice {
+  A;
+  B;
+}
+
+fn pick(flag: bool) -> i32 {
+  if flag {
+    1
+  } else {
+    2
+  }
+}
+
+fn label(choice: Choice) -> i32 {
+  match choice {
+    A => { 3 },
+    _ => { 4 },
+  }
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.pick pick(flag: bool) -> i32"));
+    assert.ok(dump.includes("fn fn.label label(choice: Choice) -> i32"));
+    assert.ok(dump.includes("__if_result"));
+    assert.ok(dump.includes("__match_result"));
+  });
+
   test("lowers short-circuit logical operators to blocks", () => {
     const ir = irOk(`
 let hits: i32 = 0;

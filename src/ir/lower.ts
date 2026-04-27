@@ -39,6 +39,7 @@ import type {
   FunctionExpression,
   GroupingExpression,
   IdentifierExpression,
+  IfExpression,
   IfStatement,
   IndexExpression,
   LiteralExpression,
@@ -1007,7 +1008,7 @@ function lowerFunction(
       };
     });
 
-  if (node.body) lowerBlock(node.body, context);
+  if (node.body) lowerFunctionBlock(node.body, context);
   if (!isTerminated(context)) {
     releaseOwnedLocals(context, node.body?.span);
     context.currentBlock.terminator = {
@@ -1043,6 +1044,120 @@ function lowerBlock(block: BlockStatement, context: LowerContext) {
     if (isTerminated(context)) return;
     lowerStatement(statement, context);
   }
+}
+
+function lowerBlockValue(
+  block: BlockStatement,
+  context: LowerContext,
+): IrOperand {
+  const finalIndex = block.body.length - 1;
+  if (finalIndex < 0) return voidOperand();
+
+  for (let index = 0; index < block.body.length; index++) {
+    if (isTerminated(context)) return voidOperand();
+    const statement = block.body[index];
+    if (index === finalIndex) {
+      const value = lowerBlockValueStatement(statement, context);
+      if (value) return value;
+    }
+    lowerStatement(statement, context);
+  }
+
+  return voidOperand();
+}
+
+function lowerBlockValueStatement(
+  statement: Statement,
+  context: LowerContext,
+): IrOperand | null {
+  if (!isBlockValueStatement(statement)) return null;
+  if (statement.kind === "ExpressionStatement" && !statement.hasSemicolon) {
+    return lowerExpression(statement.expression, context);
+  }
+  if (statement.kind === "IfStatement" && statement.elseBranch) {
+    return lowerIfLikeExpression(
+      statement.condition,
+      statement.thenBranch,
+      statement.elseBranch,
+      statement.span,
+      context,
+      typeFromNodeInContext(context, statement),
+    );
+  }
+  if (statement.kind === "MatchStatement") {
+    return lowerMatchLikeExpression(
+      statement.expression,
+      statement.arms.map((arm) => ({
+        pattern: arm.pattern,
+        expression: arm.body,
+        span: arm.span,
+      })),
+      statement.span,
+      context,
+      typeFromNodeInContext(context, statement),
+    );
+  }
+  return null;
+}
+
+function isBlockValueStatement(statement: Statement): boolean {
+  if (statement.kind === "ExpressionStatement" && !statement.hasSemicolon) {
+    return true;
+  }
+  if (statement.kind === "IfStatement" && statement.elseBranch) {
+    return (
+      blockHasValue(statement.thenBranch) &&
+      elseBranchHasValue(statement.elseBranch)
+    );
+  }
+  if (statement.kind === "MatchStatement") {
+    return (
+      statement.arms.some((arm) => arm.pattern.kind === "WildcardPattern") &&
+      statement.arms.every((arm) => blockHasValue(arm.body))
+    );
+  }
+  return false;
+}
+
+function blockHasValue(block: BlockStatement): boolean {
+  const finalStatement = block.body.at(-1);
+  return !!finalStatement && isBlockValueStatement(finalStatement);
+}
+
+function elseBranchHasValue(
+  branch: BlockStatement | IfStatement | IfExpression,
+): boolean {
+  if (branch.kind === "BlockStatement") return blockHasValue(branch);
+  if (branch.kind === "IfExpression") {
+    return (
+      blockHasValue(branch.thenBranch) && elseBranchHasValue(branch.elseBranch)
+    );
+  }
+  return (
+    !!branch.elseBranch &&
+    blockHasValue(branch.thenBranch) &&
+    elseBranchHasValue(branch.elseBranch)
+  );
+}
+
+function lowerFunctionBlock(block: BlockStatement, context: LowerContext) {
+  const finalIndex = block.body.length - 1;
+  for (let index = 0; index < block.body.length; index++) {
+    if (isTerminated(context)) return;
+    const statement = block.body[index];
+    if (index === finalIndex && lowerImplicitReturn(statement, context)) return;
+    lowerStatement(statement, context);
+  }
+}
+
+function lowerImplicitReturn(
+  statement: Statement,
+  context: LowerContext,
+): boolean {
+  const value = lowerBlockValueStatement(statement, context);
+  if (!value) return false;
+  lowerReturnValue(value, context, statement.span, true);
+  return true;
 }
 
 function lowerStatement(statement: Statement, context: LowerContext) {
@@ -1130,26 +1245,35 @@ function lowerReturn(statement: ReturnStatement, context: LowerContext) {
         statement.span,
       )
     : voidOperand();
-  retainIfBorrowedHeap(value, context, statement.span);
+  lowerReturnValue(value, context, statement.span, !!statement.value);
+}
+
+function lowerReturnValue(
+  value: IrOperand,
+  context: LowerContext,
+  span: ReturnStatement["span"],
+  hasValue: boolean,
+) {
+  retainIfBorrowedHeap(value, context, span);
 
   if (context.ownedLocals.size === 0) {
     if (value.kind === "temp") context.ownedTemps.delete(value.id);
     context.currentBlock.terminator = {
       kind: "return",
       value,
-      span: statement.span,
+      span,
     };
     return;
   }
 
-  if (statement.value) {
+  if (hasValue) {
     if (!context.returnValueLocalId) {
       const local = declareLocal(
         context,
         "__return",
         context.returnType,
         true,
-        statement.span,
+        span,
       );
       context.returnValueLocalId = local.id;
     }
@@ -1158,20 +1282,20 @@ function lowerReturn(statement: ReturnStatement, context: LowerContext) {
       kind: "assign",
       target: context.returnValueLocalId,
       value,
-      span: statement.span,
+      span,
     });
   }
 
   const cleanupBlock = getOrCreateCleanupBlock(
     context,
     context.ownedLocals,
-    statement.span,
+    span,
   );
   context.ownedLocals.clear();
   context.currentBlock.terminator = {
     kind: "branch",
     target: cleanupBlock.id,
-    span: statement.span,
+    span,
   };
 }
 
@@ -1533,6 +1657,103 @@ function lowerIfStatement(statement: IfStatement, context: LowerContext) {
   }
 
   switchBlock(context, joinBlock);
+}
+
+function lowerIfExpression(
+  expression: IfExpression,
+  context: LowerContext,
+): IrOperand {
+  return lowerIfLikeExpression(
+    expression.condition,
+    expression.thenBranch,
+    expression.elseBranch,
+    expression.span,
+    context,
+    typeFromNodeInContext(context, expression),
+  );
+}
+
+function lowerIfLikeExpression(
+  conditionExpression: Expression,
+  thenBranch: BlockStatement,
+  elseBranch: BlockStatement | IfStatement | IfExpression,
+  span: Node["span"],
+  context: LowerContext,
+  resultType: IrType,
+): IrOperand {
+  const condition = lowerExpression(conditionExpression, context);
+  const resultLocal = declareLocal(
+    context,
+    `__if_result_${context.nextLocal}`,
+    resultType,
+    true,
+    span,
+  );
+  const resultOperand: IrOperand = {
+    kind: "local",
+    id: resultLocal.id,
+    type: resultType,
+  };
+
+  const thenBlock = newBlock(context);
+  const elseBlock = newBlock(context);
+  const joinBlock = newBlock(context);
+
+  context.currentBlock.terminator = {
+    kind: "cond_branch",
+    condition,
+    thenTarget: thenBlock.id,
+    elseTarget: elseBlock.id,
+    span,
+  };
+
+  const savedLocals = saveLocals(context);
+
+  switchBlock(context, thenBlock);
+  const thenValue = lowerBlockValue(thenBranch, context);
+  if (!isTerminated(context)) {
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal.id,
+      value: coerceOperand(thenValue, resultType, context, thenBranch.span),
+      span: thenBranch.span,
+    });
+    context.currentBlock.terminator = { kind: "branch", target: joinBlock.id };
+  }
+  restoreLocals(context, savedLocals);
+
+  switchBlock(context, elseBlock);
+  const savedLocals2 = saveLocals(context);
+  const elseValue =
+    elseBranch.kind === "BlockStatement"
+      ? lowerBlockValue(elseBranch, context)
+      : elseBranch.kind === "IfExpression"
+        ? lowerIfExpression(elseBranch, context)
+        : lowerIfLikeExpression(
+            elseBranch.condition,
+            elseBranch.thenBranch,
+            elseBranch.elseBranch ?? {
+              kind: "BlockStatement",
+              span: elseBranch.span,
+              body: [],
+            },
+            elseBranch.span,
+            context,
+            typeFromNodeInContext(context, elseBranch),
+          );
+  if (!isTerminated(context)) {
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal.id,
+      value: coerceOperand(elseValue, resultType, context, elseBranch.span),
+      span: elseBranch.span,
+    });
+    context.currentBlock.terminator = { kind: "branch", target: joinBlock.id };
+  }
+  restoreLocals(context, savedLocals2);
+
+  switchBlock(context, joinBlock);
+  return resultOperand;
 }
 
 function lowerWhileStatement(statement: WhileStatement, context: LowerContext) {
@@ -1944,15 +2165,34 @@ function lowerMatchExpression(
   expression: MatchExpression,
   context: LowerContext,
 ): IrOperand {
-  const matchOperand = lowerExpression(expression.expression, context);
-  const resultType = typeFromNodeInContext(context, expression);
+  return lowerMatchLikeExpression(
+    expression.expression,
+    expression.arms,
+    expression.span,
+    context,
+    typeFromNodeInContext(context, expression),
+  );
+}
+
+function lowerMatchLikeExpression(
+  expression: Expression,
+  arms: {
+    pattern: Pattern;
+    expression: Expression | BlockStatement;
+    span: Node["span"];
+  }[],
+  span: Node["span"],
+  context: LowerContext,
+  resultType: IrType,
+): IrOperand {
+  const matchOperand = lowerExpression(expression, context);
   const resultLocalName = `__match_result_${context.nextLocal}`;
   const resultLocal = declareLocal(
     context,
     resultLocalName,
     resultType,
     true,
-    expression.span,
+    span,
   );
   const resultOperand: IrOperand = {
     kind: "local",
@@ -1961,18 +2201,16 @@ function lowerMatchExpression(
   };
 
   const joinBlock = newBlock(context);
-  const armBlocks = expression.arms.map(() => newBlock(context));
+  const armBlocks = arms.map(() => newBlock(context));
   const defaultBlock = newBlock(context);
 
-  const failureBlocks = expression.arms
-    .slice(0, -1)
-    .map(() => newBlock(context));
-  for (let i = 0; i < expression.arms.length; i++) {
+  const failureBlocks = arms.slice(0, -1).map(() => newBlock(context));
+  for (let i = 0; i < arms.length; i++) {
     if (i > 0) switchBlock(context, failureBlocks[i - 1]);
     const failureTarget =
-      i + 1 < expression.arms.length ? failureBlocks[i].id : defaultBlock.id;
+      i + 1 < arms.length ? failureBlocks[i].id : defaultBlock.id;
     lowerPatternBranch(
-      expression.arms[i].pattern,
+      arms[i].pattern,
       matchOperand,
       armBlocks[i].id,
       failureTarget,
@@ -1980,29 +2218,34 @@ function lowerMatchExpression(
     );
   }
 
-  for (let i = 0; i < expression.arms.length; i++) {
-    const arm = expression.arms[i];
+  for (let i = 0; i < arms.length; i++) {
+    const arm = arms[i];
     const armBlock = armBlocks[i];
     switchBlock(context, armBlock);
     lowerMatchExpressionArmBindings(arm, matchOperand, context);
-    const armValue = lowerExpression(arm.expression, context);
-    context.currentBlock.instructions.push({
-      kind: "assign",
-      target: resultLocal.id,
-      value: armValue,
-      span: arm.span,
-    });
-    context.currentBlock.terminator = {
-      kind: "branch",
-      target: joinBlock.id,
-    };
+    const armValue =
+      arm.expression.kind === "BlockStatement"
+        ? lowerBlockValue(arm.expression, context)
+        : lowerExpression(arm.expression, context);
+    if (!isTerminated(context)) {
+      context.currentBlock.instructions.push({
+        kind: "assign",
+        target: resultLocal.id,
+        value: coerceOperand(armValue, resultType, context, arm.span),
+        span: arm.span,
+      });
+      context.currentBlock.terminator = {
+        kind: "branch",
+        target: joinBlock.id,
+      };
+    }
   }
 
   switchBlock(context, defaultBlock);
   if (!isTerminated(context)) {
     context.currentBlock.terminator = {
       kind: "unreachable",
-      span: expression.span,
+      span,
     };
   }
 
@@ -2011,7 +2254,7 @@ function lowerMatchExpression(
 }
 
 function lowerMatchExpressionArmBindings(
-  arm: MatchExpressionArm,
+  arm: Pick<MatchExpressionArm, "pattern">,
   matchOperand: IrOperand,
   context: LowerContext,
 ) {
@@ -2566,6 +2809,8 @@ function lowerExpression(
       return lowerTupleMemberExpression(expression, context);
     case "FunctionExpression":
       return lowerFunctionExpression(expression, context);
+    case "IfExpression":
+      return lowerIfExpression(expression, context);
     case "ArrayLiteralExpression":
       return lowerArrayLiteral(expression, context);
     case "IndexExpression":
@@ -2639,7 +2884,7 @@ function lowerFunctionExpression(
       };
     });
 
-  lowerBlock(expression.body, context);
+  lowerFunctionBlock(expression.body, context);
   if (!isTerminated(context)) {
     releaseOwnedLocals(context, expression.body.span);
     context.currentBlock.terminator = {

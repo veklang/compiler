@@ -125,6 +125,33 @@ fn main() -> void {
     );
   });
 
+  test("compiles and runs implicit main return", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() {
+  let base = 39;
+  base + 3
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs panic through the runtime", () => {
     if (!hasMuslGcc()) return;
 

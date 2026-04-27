@@ -308,11 +308,20 @@ function walkExpr(expr: Expression, refs: Set<string>): void {
       walkExpr(expr.expression, refs);
       walkTypeNode(expr.type, refs);
       break;
+    case "IfExpression":
+      walkExpr(expr.condition, refs);
+      for (const s of expr.thenBranch.body) walkStmt(s, refs);
+      if (expr.elseBranch.kind === "BlockStatement")
+        for (const s of expr.elseBranch.body) walkStmt(s, refs);
+      else walkExpr(expr.elseBranch, refs);
+      break;
     case "MatchExpression":
       walkExpr(expr.expression, refs);
       for (const arm of expr.arms) {
         walkPattern(arm.pattern, refs);
-        walkExpr(arm.expression, refs);
+        if (arm.expression.kind === "BlockStatement")
+          for (const s of arm.expression.body) walkStmt(s, refs);
+        else walkExpr(arm.expression, refs);
       }
       break;
     case "LiteralExpression":

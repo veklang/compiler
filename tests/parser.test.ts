@@ -228,6 +228,30 @@ fn main() -> void {
     assert.equal(program.body[1].kind, "FunctionDeclaration");
   });
 
+  test("trailing expression statements omit semicolon", () => {
+    const program = parseOk(`
+fn value() -> i32 {
+  let x = 41;
+  x + 1
+}
+
+fn unit() -> void {
+  value();
+}
+`);
+    const valueFn = program.body[0];
+    assert.ok(valueFn.kind === "FunctionDeclaration" && valueFn.body);
+    const valueLast = valueFn.body.body.at(-1);
+    assert.ok(valueLast?.kind === "ExpressionStatement");
+    assert.equal(valueLast.hasSemicolon, false);
+
+    const unitFn = program.body[1];
+    assert.ok(unitFn.kind === "FunctionDeclaration" && unitFn.body);
+    const unitLast = unitFn.body.body.at(-1);
+    assert.ok(unitLast?.kind === "ExpressionStatement");
+    assert.equal(unitLast.hasSemicolon, true);
+  });
+
   test("generic call type arguments and tuple member access", () => {
     const program = parseOk(`
 fn id<T>(value: T) -> T {

@@ -17,6 +17,7 @@ import type {
   FunctionDeclaration,
   FunctionExpression,
   IdentifierExpression,
+  IfExpression,
   IfStatement,
   ImportDeclaration,
   IndexExpression,
@@ -75,6 +76,7 @@ type Type =
   | FunctionRefType
   | TypeParamRefType
   | UnknownType
+  | NeverType
   | ErrorType;
 
 interface BaseType {
@@ -142,6 +144,10 @@ interface TypeParamRefType extends BaseType {
 
 interface UnknownType extends BaseType {
   kind: "Unknown";
+}
+
+interface NeverType extends BaseType {
+  kind: "Never";
 }
 
 interface ErrorType extends BaseType {
@@ -798,7 +804,7 @@ export class Checker {
       ? functionType.returnType
       : this.unknownType();
     this.currentFunctionDepth++;
-    this.checkBlockStatement(node.body!, bodyScope);
+    this.checkFunctionBlockStatement(node.body!, bodyScope);
     if (this.currentFunctionInferReturn) {
       const inferred =
         this.currentFunctionInferredReturn ?? this.primitive("void");
@@ -991,7 +997,7 @@ export class Checker {
       ? resolved.returnType
       : this.unknownType();
     this.currentFunctionDepth++;
-    this.checkBlockStatement(method.body, bodyScope);
+    this.checkFunctionBlockStatement(method.body, bodyScope);
     if (this.currentFunctionInferReturn) {
       resolved.returnType =
         this.currentFunctionInferredReturn ?? this.primitive("void");
@@ -1047,11 +1053,104 @@ export class Checker {
       this.checkStatement(statement, blockScope);
   }
 
+  private checkFunctionBlockStatement(block: BlockStatement, scope: Scope) {
+    const blockScope = this.createScope(scope, scope.selfType);
+    blockScope.typeParams = new Map(scope.typeParams);
+    const finalIndex = block.body.length - 1;
+    for (let index = 0; index < block.body.length; index++) {
+      const statement = block.body[index];
+      if (index === finalIndex) {
+        const finalType = this.checkBlockValueStatement(
+          statement,
+          blockScope,
+          this.currentFunctionReturnType ?? undefined,
+        );
+        if (finalType) this.recordFunctionReturn(finalType, statement.span);
+        else this.checkStatement(statement, blockScope);
+        continue;
+      }
+      this.checkStatement(statement, blockScope);
+    }
+  }
+
+  private checkBlockValue(
+    block: BlockStatement,
+    scope: Scope,
+    expected?: Type,
+  ): Type {
+    const blockScope = this.createScope(scope, scope.selfType);
+    blockScope.typeParams = new Map(scope.typeParams);
+    const finalIndex = block.body.length - 1;
+    if (finalIndex < 0) return this.primitive("void");
+
+    for (let index = 0; index < block.body.length; index++) {
+      const statement = block.body[index];
+      if (index === finalIndex) {
+        const valueType = this.checkBlockValueStatement(
+          statement,
+          blockScope,
+          expected,
+        );
+        if (valueType) return valueType;
+        this.checkStatement(statement, blockScope);
+        if (this.statementTerminates(statement)) return this.neverType();
+        return this.primitive("void");
+      }
+      this.checkStatement(statement, blockScope);
+    }
+
+    return this.primitive("void");
+  }
+
+  private checkBlockValueStatement(
+    statement: Statement,
+    scope: Scope,
+    expected?: Type,
+  ): Type | null {
+    if (!this.isBlockValueStatement(statement)) return null;
+    if (statement.kind === "ExpressionStatement" && !statement.hasSemicolon) {
+      return this.checkExpression(statement.expression, scope, expected);
+    }
+    if (statement.kind === "IfStatement" && statement.elseBranch) {
+      const type = this.checkIfLikeExpression(
+        statement.condition,
+        statement.thenBranch,
+        statement.elseBranch,
+        statement.span,
+        scope,
+        expected,
+      );
+      this.types.set(statement, type);
+      return type;
+    }
+    if (statement.kind === "MatchStatement") {
+      const type = this.checkMatchLikeExpression(
+        statement.expression,
+        statement.arms.map((arm) => ({
+          pattern: arm.pattern,
+          expression: arm.body,
+          span: arm.span,
+        })),
+        statement.span,
+        scope,
+        expected,
+      );
+      this.types.set(statement, type);
+      return type;
+    }
+    return null;
+  }
+
   private checkReturnStatement(node: ReturnStatement, scope: Scope) {
     if (!this.currentFunctionReturnType) return;
     const valueType = node.value
       ? this.checkExpression(node.value, scope, this.currentFunctionReturnType)
       : this.primitive("void");
+    this.recordFunctionReturn(valueType, node.span);
+  }
+
+  private recordFunctionReturn(valueType: Type, span: Span) {
+    if (!this.currentFunctionReturnType) return;
     if (this.currentFunctionInferReturn) {
       if (!this.currentFunctionInferredReturn) {
         this.currentFunctionInferredReturn = valueType;
@@ -1061,15 +1160,12 @@ export class Checker {
         this.currentFunctionInferredReturn,
         valueType,
       );
-      if (!merged) {
-        this.report("Return type mismatch.", node.span, "E2302");
-      } else {
-        this.currentFunctionInferredReturn = merged;
-      }
+      if (!merged) this.report("Return type mismatch.", span, "E2302");
+      else this.currentFunctionInferredReturn = merged;
       return;
     }
     if (!this.isAssignable(valueType, this.currentFunctionReturnType)) {
-      this.report("Return type mismatch.", node.span, "E2302");
+      this.report("Return type mismatch.", span, "E2302");
     }
   }
 
@@ -1383,6 +1479,9 @@ export class Checker {
         break;
       case "CastExpression":
         type = this.checkCast(node, scope);
+        break;
+      case "IfExpression":
+        type = this.checkIfExpression(node, scope, expected);
         break;
       case "MatchExpression":
         type = this.checkMatchExpression(node, scope, expected);
@@ -2420,7 +2519,7 @@ export class Checker {
     this.currentFunctionInferredReturn = null;
     this.currentFunctionReturnType = functionType.returnType;
     this.currentFunctionDepth++;
-    this.checkBlockStatement(node.body, bodyScope);
+    this.checkFunctionBlockStatement(node.body, bodyScope);
 
     let result: FunctionRefType = functionType;
     if (shouldInfer) {
@@ -2454,18 +2553,212 @@ export class Checker {
     return this.isNumericType(from) && this.isNumericType(to);
   }
 
+  private checkIfExpression(
+    node: IfExpression,
+    scope: Scope,
+    expected?: Type,
+  ): Type {
+    return this.checkIfLikeExpression(
+      node.condition,
+      node.thenBranch,
+      node.elseBranch,
+      node.span,
+      scope,
+      expected,
+    );
+  }
+
+  private checkIfLikeExpression(
+    condition: Expression,
+    thenBranch: BlockStatement,
+    elseBranch: BlockStatement | IfStatement | IfExpression,
+    span: Span,
+    scope: Scope,
+    expected?: Type,
+  ): Type {
+    const conditionType = this.checkExpression(condition, scope);
+    if (!this.isBooleanType(conditionType)) {
+      this.report("Condition must be bool.", condition.span, "E2101");
+    }
+
+    const thenScope = this.createScope(scope, scope.selfType);
+    thenScope.typeParams = new Map(scope.typeParams);
+    const elseScope = this.createScope(scope, scope.selfType);
+    elseScope.typeParams = new Map(scope.typeParams);
+
+    const thenNarrow = this.narrowNullComparison(condition, true, scope);
+    const elseNarrow = this.narrowNullComparison(condition, false, scope);
+    for (const [name, type] of thenNarrow) thenScope.overrides.set(name, type);
+    for (const [name, type] of elseNarrow) elseScope.overrides.set(name, type);
+
+    const thenType = this.checkBlockValue(thenBranch, thenScope, expected);
+    let elseType: Type;
+    if (elseBranch.kind === "BlockStatement") {
+      elseType = this.checkBlockValue(elseBranch, elseScope, expected);
+    } else if (elseBranch.kind === "IfExpression") {
+      elseType = this.checkIfExpression(elseBranch, elseScope, expected);
+    } else {
+      elseType = this.checkIfLikeExpression(
+        elseBranch.condition,
+        elseBranch.thenBranch,
+        elseBranch.elseBranch ?? {
+          kind: "BlockStatement",
+          span: elseBranch.span,
+          body: [],
+        },
+        elseBranch.span,
+        elseScope,
+        expected,
+      );
+      this.types.set(elseBranch, elseType);
+    }
+
+    if (expected) {
+      if (!this.isAssignable(thenType, expected)) {
+        this.report(
+          "If expression branches must have a single type.",
+          span,
+          "E2101",
+        );
+      }
+      if (!this.isAssignable(elseType, expected)) {
+        this.report(
+          "If expression branches must have a single type.",
+          span,
+          "E2101",
+        );
+      }
+      return expected;
+    }
+
+    const merged = this.mergeBranchTypes(thenType, elseType);
+    if (!merged) {
+      this.report(
+        "If expression branches must have a single type.",
+        span,
+        "E2101",
+      );
+      return this.errorType();
+    }
+    return merged;
+  }
+
   private checkMatchExpression(
     node: MatchExpression,
     scope: Scope,
     expected?: Type,
   ): Type {
-    const matchedType = this.checkExpression(node.expression, scope);
+    return this.checkMatchLikeExpression(
+      node.expression,
+      node.arms,
+      node.span,
+      scope,
+      expected,
+    );
+  }
+
+  private isBlockValueStatement(statement: Statement): boolean {
+    if (statement.kind === "ExpressionStatement" && !statement.hasSemicolon) {
+      return true;
+    }
+    if (statement.kind === "IfStatement" && statement.elseBranch) {
+      return (
+        this.blockHasValue(statement.thenBranch) &&
+        this.elseBranchHasValue(statement.elseBranch)
+      );
+    }
+    if (statement.kind === "MatchStatement") {
+      return (
+        statement.arms.some((arm) => arm.pattern.kind === "WildcardPattern") &&
+        statement.arms.every((arm) => this.blockHasValue(arm.body))
+      );
+    }
+    return false;
+  }
+
+  private blockHasValue(block: BlockStatement): boolean {
+    const finalStatement = block.body.at(-1);
+    return (
+      !!finalStatement &&
+      (this.isBlockValueStatement(finalStatement) ||
+        this.statementTerminates(finalStatement))
+    );
+  }
+
+  private elseBranchHasValue(
+    branch: BlockStatement | IfStatement | IfExpression,
+  ): boolean {
+    if (branch.kind === "BlockStatement") return this.blockHasValue(branch);
+    if (branch.kind === "IfExpression") {
+      return (
+        this.blockHasValue(branch.thenBranch) &&
+        this.elseBranchHasValue(branch.elseBranch)
+      );
+    }
+    return (
+      !!branch.elseBranch &&
+      this.blockHasValue(branch.thenBranch) &&
+      this.elseBranchHasValue(branch.elseBranch)
+    );
+  }
+
+  private blockTerminates(block: BlockStatement): boolean {
+    return block.body.some((statement) => this.statementTerminates(statement));
+  }
+
+  private statementTerminates(statement: Statement): boolean {
+    if (statement.kind === "ReturnStatement") return true;
+    if (statement.kind === "ExpressionStatement")
+      return this.expressionTerminates(statement.expression);
+    if (statement.kind === "BlockStatement")
+      return this.blockTerminates(statement);
+    if (statement.kind === "IfStatement") {
+      return (
+        !!statement.elseBranch &&
+        this.blockTerminates(statement.thenBranch) &&
+        this.elseBranchTerminates(statement.elseBranch)
+      );
+    }
+    if (statement.kind === "MatchStatement") {
+      return (
+        statement.arms.length > 0 &&
+        statement.arms.every((arm) => this.blockTerminates(arm.body))
+      );
+    }
+    return false;
+  }
+
+  private elseBranchTerminates(branch: BlockStatement | IfStatement): boolean {
+    if (branch.kind === "BlockStatement") return this.blockTerminates(branch);
+    return this.statementTerminates(branch);
+  }
+
+  private expressionTerminates(expression: Expression): boolean {
+    return (
+      expression.kind === "CallExpression" &&
+      expression.callee.kind === "IdentifierExpression" &&
+      expression.callee.name === "panic"
+    );
+  }
+
+  private checkMatchLikeExpression(
+    expression: Expression,
+    arms: {
+      pattern: Pattern;
+      expression: Expression | BlockStatement;
+      span: Span;
+    }[],
+    span: Span,
+    scope: Scope,
+    expected?: Type,
+  ): Type {
+    const matchedType = this.checkExpression(expression, scope);
     const coverage = this.createCoverageTracker(matchedType);
     const priorPatterns: Pattern[] = [];
     let resultType: Type | null = expected ?? null;
     let hasWildcard = false;
 
-    for (const arm of node.arms) {
+    for (const arm of arms) {
       if (arm.pattern.kind === "WildcardPattern") hasWildcard = true;
 
       if (
@@ -2483,7 +2776,10 @@ export class Checker {
       const armScope = this.createScope(scope, scope.selfType);
       armScope.typeParams = new Map(scope.typeParams);
       this.bindPattern(arm.pattern, matchedType, armScope, scope, coverage);
-      const armType = this.checkExpression(arm.expression, armScope, expected);
+      const armType =
+        arm.expression.kind === "BlockStatement"
+          ? this.checkBlockValue(arm.expression, armScope, expected)
+          : this.checkExpression(arm.expression, armScope, expected);
       priorPatterns.push(arm.pattern);
 
       if (expected) {
@@ -2515,7 +2811,7 @@ export class Checker {
     if (missing.length > 0 || (coverage.kind === "other" && !hasWildcard)) {
       this.report(
         "Match expressions require a catch-all '_' arm.",
-        node.span,
+        span,
         "E2606",
       );
     }
@@ -3820,6 +4116,10 @@ export class Checker {
     return { kind: "Unknown" };
   }
 
+  private neverType(): NeverType {
+    return { kind: "Never" };
+  }
+
   private errorType(): ErrorType {
     return { kind: "Error" };
   }
@@ -3923,6 +4223,7 @@ export class Checker {
     if (left.kind === "TypeParam" && right.kind === "TypeParam")
       return left.name === right.name;
     if (left.kind === "Unknown" && right.kind === "Unknown") return true;
+    if (left.kind === "Never" && right.kind === "Never") return true;
     if (left.kind === "Error" && right.kind === "Error") return true;
     return false;
   }
@@ -3946,6 +4247,7 @@ export class Checker {
     ) {
       return true;
     }
+    if (from.kind === "Never") return true;
     if (this.typeEquals(from, to)) return true;
     if (to.kind === "Nullable") {
       return (
@@ -3975,6 +4277,7 @@ export class Checker {
       return `fn(${params}) -> ${this.displayType(type.returnType)}`;
     }
     if (type.kind === "TypeParam") return type.name;
+    if (type.kind === "Never") return "never";
     return type.kind.toLowerCase();
   }
 

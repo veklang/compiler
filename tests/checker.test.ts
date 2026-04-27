@@ -108,6 +108,67 @@ fn main() -> void {
 `);
   });
 
+  test("trailing expressions infer and satisfy function return types", () => {
+    checkOk(`
+fn add(x: i32, y: i32) {
+  x + y
+}
+
+fn explicit() -> i32 {
+  add(20, 22)
+}
+
+fn main() -> void {
+  let _value: i32 = explicit();
+}
+`);
+  });
+
+  test("trailing if and match statements can produce function values", () => {
+    checkOk(`
+enum Choice {
+  A;
+  B;
+}
+
+fn pick(flag: bool) -> i32 {
+  if flag {
+    1
+  } else {
+    2
+  }
+}
+
+fn label(choice: Choice) -> string {
+  match choice {
+    A => { "a" },
+    _ => { "b" },
+  }
+}
+
+fn main() -> void {
+  let _picked: i32 = pick(true);
+  let _label: string = label(A);
+}
+`);
+  });
+
+  test("terminating match expression arms satisfy the other arm type", () => {
+    checkOk(`
+enum MaybeI32 {
+  Some(i32);
+  None;
+}
+
+fn unwrap(value: MaybeI32) -> i32 {
+  return match value {
+    Some(inner) => inner,
+    _ => { panic("none"); },
+  };
+}
+`);
+  });
+
   test("main may infer i32 return type", () => {
     checkOk(`
 fn main() {
@@ -1065,6 +1126,19 @@ fn main() -> void {
   let _label: string = match value {
     Ok(v) => v.format(),
     _ => 42,
+  };
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
+  test("E2101: non-terminating void match arms do not satisfy value arms", () => {
+    const result = check(`
+fn main() -> void {
+  let value = true;
+  let _number: i32 = match value {
+    true => 1,
+    _ => { let _x = 0; },
   };
 }
 `);

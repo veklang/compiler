@@ -67,6 +67,17 @@ fn main() {
     assert.ok(c.includes("  return __vek_fn_main();"));
   });
 
+  test("emits trailing expression implicit returns", () => {
+    const c = emitOk(`
+fn main() {
+  42
+}
+`);
+
+    assert.ok(c.includes("static int32_t __vek_fn_main(void) {"));
+    assert.ok(c.includes("return 42;"));
+  });
+
   test("emits static inline for inline functions with bodies", () => {
     const result = check(`
 inline fn add(a: i32, b: i32) -> i32 {
