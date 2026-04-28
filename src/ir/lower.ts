@@ -4462,6 +4462,29 @@ function lowerMemberExpression(
     if (linkName) return { kind: "function", name: linkName, type };
   }
 
+  // Module namespace member access — resolve directly to the global declaration
+  const rawObjectType = context.checkResult.types.get(expression.object) as
+    | { kind?: string }
+    | undefined;
+  if (rawObjectType?.kind === "Module") {
+    const memberName = expression.property.name;
+    const linkInfo = context.functionLinks.get(memberName);
+    if (linkInfo) return { kind: "function", name: linkInfo.linkName, type };
+    const globalId = context.globals.get(memberName);
+    if (globalId) {
+      const globalType = context.globalTypes.get(globalId) ?? type;
+      if (context.lazyGlobals.has(globalId)) {
+        context.currentBlock.instructions.push({
+          kind: "ensure_global_initialized",
+          globalId,
+          span: expression.span,
+        });
+      }
+      return { kind: "global", id: globalId, type: globalType };
+    }
+    return { kind: "function", name: memberName, type };
+  }
+
   const target = nextTemp(context);
   const object = lowerExpression(expression.object, context);
 
@@ -5218,6 +5241,7 @@ function typeFromCheckerType(type: unknown): IrType {
 
   if (type.kind === "Never") return irPrimitive("never");
   if (type.kind === "Error") return { kind: "error" };
+  if (type.kind === "Module") return irPrimitive("void");
   return { kind: "unknown" };
 }
 

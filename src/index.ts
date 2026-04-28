@@ -5,8 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Checker } from "@/core/checker";
-import { Lexer } from "@/core/lexer";
-import { Parser } from "@/core/parser";
+import { buildMergedProgram, loadModuleGraph } from "@/core/modules";
 import { emitC } from "@/emit/c";
 import { lowerProgramToIr } from "@/ir/lower";
 import { analyzeInitializers } from "@/passes/initializers";
@@ -85,23 +84,22 @@ export function parseCliArgs(argv: string[]): CliOptions {
 }
 
 export function compileFile(options: CliOptions): CompileResult {
-  const source = fs.readFileSync(options.sourcePath, "utf8");
-  const lexed = new Lexer(source).lex();
-  const parsed = new Parser(lexed.tokens).parseProgram();
-  const checked = new Checker(parsed.program).checkProgram();
-  const initialized = analyzeInitializers(parsed.program);
-  const diagnostics = [
-    ...lexed.diagnostics,
-    ...parsed.diagnostics,
-    ...checked.diagnostics,
-    ...initialized.diagnostics,
-  ];
+  const graph = loadModuleGraph(options.sourcePath);
+
+  if (graph.diagnostics.length > 0) {
+    throw new Error(formatDiagnostics(graph.diagnostics));
+  }
+
+  const { program, namespaceImportExports } = buildMergedProgram(graph);
+  const checked = new Checker(program, namespaceImportExports).checkProgram();
+  const initialized = analyzeInitializers(program);
+  const diagnostics = [...checked.diagnostics, ...initialized.diagnostics];
 
   if (diagnostics.length > 0) {
     throw new Error(formatDiagnostics(diagnostics));
   }
 
-  const ir = lowerProgramToIr(parsed.program, checked, {
+  const ir = lowerProgramToIr(program, checked, {
     sourcePath: options.sourcePath,
   });
   const c = emitC(ir, { runtimeHeader: options.runtimeHeaderPath });

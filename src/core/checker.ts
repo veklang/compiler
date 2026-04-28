@@ -80,7 +80,8 @@ type Type =
   | TypeParamRefType
   | UnknownType
   | NeverType
-  | ErrorType;
+  | ErrorType
+  | ModuleType;
 
 interface BaseType {
   kind: string;
@@ -163,6 +164,11 @@ interface NeverType extends BaseType {
 
 interface ErrorType extends BaseType {
   kind: "Error";
+}
+
+interface ModuleType extends BaseType {
+  kind: "Module";
+  exportedNames: Set<string>;
 }
 
 interface Scope {
@@ -278,7 +284,13 @@ export class Checker {
   private instantiations: GenericInstantiation[] = [];
   private externLinkNames = new Map<string, FunctionDeclaration>();
 
-  constructor(private program: Program) {
+  constructor(
+    private program: Program,
+    private namespaceImportExports: Map<
+      ImportDeclaration,
+      Set<string>
+    > = new Map(),
+  ) {
     this.globalScope = this.createScope();
     this.installBuiltins();
   }
@@ -713,25 +725,18 @@ export class Checker {
 
   private checkImport(statement: ImportDeclaration, scope: Scope) {
     if (statement.namespace) {
+      const exportedNames =
+        this.namespaceImportExports.get(statement) ?? new Set<string>();
       this.declareValue(scope, {
         kind: "Value",
         name: statement.namespace.name,
         node: statement.namespace,
-        type: this.unknownType(),
+        type: { kind: "Module", exportedNames },
         functionDepth: this.currentFunctionDepth,
         isGlobal: this.currentFunctionDepth === 0,
       });
     }
-    for (const imported of statement.namedImports ?? []) {
-      this.declareValue(scope, {
-        kind: "Value",
-        name: imported.name,
-        node: imported,
-        type: this.unknownType(),
-        functionDepth: this.currentFunctionDepth,
-        isGlobal: this.currentFunctionDepth === 0,
-      });
-    }
+    // Named imports: no-op — names are already in the merged global scope
   }
 
   private checkVariableDeclaration(node: VariableDeclaration, scope: Scope) {
@@ -2356,6 +2361,22 @@ export class Checker {
         params: [],
         returnType: this.primitive("cstr"),
       };
+    }
+
+    if (objectType.kind === "Module") {
+      if (!objectType.exportedNames.has(node.property.name)) {
+        this.report(
+          `Module has no exported member '${node.property.name}'.`,
+          node.property.span,
+          "E2104",
+        );
+        return this.errorType();
+      }
+      const valueSym = this.lookupValue(node.property.name, scope);
+      if (valueSym) return valueSym.type;
+      const typeSym = this.lookupType(node.property.name, scope);
+      if (typeSym) return this.namedType(node.property.name, typeSym, []);
+      return this.errorType();
     }
 
     if (objectType.kind !== "Named" || !objectType.symbol) {
@@ -4717,6 +4738,7 @@ export class Checker {
     }
     if (type.kind === "TypeParam") return type.name;
     if (type.kind === "Never") return "never";
+    if (type.kind === "Module") return "module";
     return type.kind.toLowerCase();
   }
 
