@@ -874,15 +874,14 @@ export class Checker {
     }
 
     const linkName = node.externName?.value ?? node.name.name;
-    const isRuntimeExtern = linkName.startsWith("__vek_");
     const previous = this.externLinkNames.get(linkName);
-    if (previous && previous !== node && !isRuntimeExtern) {
+    if (previous && previous !== node) {
       this.report(
         `Duplicate extern C symbol name '${linkName}'.`,
         node.externName?.span ?? node.name.span,
         "E2910",
       );
-    } else if (!isRuntimeExtern) {
+    } else {
       this.externLinkNames.set(linkName, node);
     }
 
@@ -894,7 +893,7 @@ export class Checker {
       );
     }
 
-    if (!isRuntimeExtern && !node.body && !node.isUnsafe) {
+    if (!node.body && !node.isUnsafe) {
       this.report(
         "Imported extern fn declarations must be marked unsafe.",
         node.span,
@@ -909,8 +908,6 @@ export class Checker {
         "E2904",
       );
     }
-
-    if (isRuntimeExtern) return;
 
     for (const param of functionType.params) {
       if (param.isMutable || !this.isCAbiSafeType(param.type, false)) {
@@ -3655,9 +3652,7 @@ export class Checker {
       ? this.resolveType(node.returnType, typeScope)
       : this.unknownType();
     const linkName = node.externName?.value ?? node.name.name;
-    const isUnsafe =
-      node.isUnsafe ||
-      (node.isExtern && !node.body && !linkName.startsWith("__vek_"));
+    const isUnsafe = node.isUnsafe || (node.isExtern && !node.body);
 
     return {
       kind: "Function",
@@ -4591,6 +4586,7 @@ export class Checker {
   }
 
   private isCAbiSafeType(type: Type, allowVoid: boolean): boolean {
+    if (type.kind === "Never") return allowVoid;
     if (type.kind === "Primitive") {
       if (type.name === "void") return allowVoid;
       return [

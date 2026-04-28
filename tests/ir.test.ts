@@ -35,8 +35,8 @@ fn main() -> void {
         (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "main",
       ),
     );
-    assert.equal(ir.runtime.panic, false);
-    assert.equal(ir.runtime.strings, false);
+    assert.equal(ir.runtime.panic, true);
+    assert.equal(ir.runtime.strings, true);
   });
 
   test("lowers locals, binary expressions, and typed returns", () => {

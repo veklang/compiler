@@ -1,2 +1,5 @@
-// Backed by the native runtime; terminates the process with the given message.
-pub extern "__vek_panic_cstr" fn panic(message: string) -> never;
+unsafe extern "__vek_panic_cstr" fn panic_cstr(message: cstr) -> never;
+
+pub fn panic(message: string) -> never {
+  unsafe { panic_cstr(message.to_cstr()); }
+}

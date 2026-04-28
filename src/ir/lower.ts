@@ -1095,7 +1095,6 @@ function lowerFunction(
       ? node.externName.value
       : sourceLinkName;
   const body = node.isExtern && !node.body ? "extern" : "defined";
-  const isRuntimeExtern = linkName.startsWith("__vek_");
   return {
     kind: "function",
     id: `fn.${sourceLinkName}`,
@@ -1104,9 +1103,7 @@ function lowerFunction(
     abi: node.isExtern ? "c" : "vek",
     linkage: node.isExtern ? (node.body ? "exported" : "imported") : "internal",
     safety:
-      node.isUnsafe || (node.isExtern && !node.body && !isRuntimeExtern)
-        ? "unsafe"
-        : "safe",
+      node.isUnsafe || (node.isExtern && !node.body) ? "unsafe" : "safe",
     isInline: node.isInline && !node.isExtern,
     signature: {
       params: params.map((param) => ({
