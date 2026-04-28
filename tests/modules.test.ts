@@ -7,6 +7,7 @@ import {
   buildMergedProgram,
   checkModuleGraph,
   loadModuleGraph,
+  makeNodeHost,
 } from "@/core/modules";
 import { compileFile, parseCliArgs } from "@/index";
 import { assert } from "./helpers";
@@ -33,6 +34,44 @@ const withProject = (
     run(path.join(root, "main.vek"));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+};
+
+const withPackageProject = (
+  projectFiles: Record<string, string>,
+  packages: Record<string, Record<string, string>>,
+  run: (entry: string, pkgDirs: Record<string, string>) => void,
+) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vek-modules-"));
+  const pkgDirs: Record<string, string> = {};
+  try {
+    for (const [relPath, source] of Object.entries(projectFiles)) {
+      const fullPath = path.join(root, relPath);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, source, "utf8");
+    }
+    for (const [pkgName, files] of Object.entries(packages)) {
+      const pkgDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), `vek-pkg-${pkgName}-`),
+      );
+      pkgDirs[pkgName] = pkgDir;
+      fs.writeFileSync(
+        path.join(pkgDir, "package.toml"),
+        `name = "${pkgName}"\nversion = "0.1.0"\n`,
+        "utf8",
+      );
+      for (const [relPath, source] of Object.entries(files)) {
+        const fullPath = path.join(pkgDir, relPath);
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, source, "utf8");
+      }
+    }
+    run(path.join(root, "main.vek"), pkgDirs);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    for (const dir of Object.values(pkgDirs)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 };
 
@@ -430,6 +469,199 @@ pub struct Point {
           entry,
           "--toolchain-prefix",
           "musl-gcc -static -std=c99 -O2",
+        ]);
+        compileFile(options);
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+});
+
+describe("package imports", () => {
+  test("named import from registered package resolves correctly", () => {
+    withPackageProject(
+      {
+        "main.vek": `
+import add from "mylib:math";
+fn main() -> void { return; }
+`,
+      },
+      {
+        mylib: {
+          "math.vek": `
+pub fn add(a: i32, b: i32) -> i32 { return a + b; }
+`,
+        },
+      },
+      (entry, pkgDirs) => {
+        const host = makeNodeHost(new Map([["mylib", pkgDirs["mylib"]]]));
+        const graph = loadModuleGraph(entry, host);
+        assert.deepEqual(
+          graph.diagnostics.map((d) => d.code ?? ""),
+          [],
+        );
+      },
+    );
+  });
+
+  test("namespace import from registered package resolves correctly", () => {
+    withPackageProject(
+      {
+        "main.vek": `
+import "mylib:math" as math;
+fn main() -> void { return; }
+`,
+      },
+      {
+        mylib: {
+          "math.vek": `
+pub fn add(a: i32, b: i32) -> i32 { return a + b; }
+`,
+        },
+      },
+      (entry, pkgDirs) => {
+        const host = makeNodeHost(new Map([["mylib", pkgDirs["mylib"]]]));
+        const graph = loadModuleGraph(entry, host);
+        assert.deepEqual(
+          graph.diagnostics.map((d) => d.code ?? ""),
+          [],
+        );
+      },
+    );
+  });
+
+  test("checker resolves function type through package namespace import", () => {
+    withPackageProject(
+      {
+        "main.vek": `
+import "mylib:math" as math;
+fn main() -> i32 { return math.add(1, 2); }
+`,
+      },
+      {
+        mylib: {
+          "math.vek": `
+pub fn add(a: i32, b: i32) -> i32 { return a + b; }
+`,
+        },
+      },
+      (entry, pkgDirs) => {
+        const host = makeNodeHost(new Map([["mylib", pkgDirs["mylib"]]]));
+        const graph = loadModuleGraph(entry, host);
+        assert.deepEqual(
+          graph.diagnostics.map((d) => d.code ?? ""),
+          [],
+        );
+        const { program, namespaceImportExports } = buildMergedProgram(
+          graph,
+          host,
+        );
+        const checked = new Checker(
+          program,
+          namespaceImportExports,
+        ).checkProgram();
+        assert.deepEqual(
+          checked.diagnostics.map((d) => d.code ?? ""),
+          [],
+        );
+      },
+    );
+  });
+
+  test("package resolves through index.vek when path is a folder", () => {
+    withPackageProject(
+      {
+        "main.vek": `
+import add from "mylib:utils";
+fn main() -> void { return; }
+`,
+      },
+      {
+        mylib: {
+          "utils/index.vek": `
+pub fn add(a: i32, b: i32) -> i32 { return a + b; }
+`,
+        },
+      },
+      (entry, pkgDirs) => {
+        const host = makeNodeHost(new Map([["mylib", pkgDirs["mylib"]]]));
+        const graph = loadModuleGraph(entry, host);
+        assert.deepEqual(
+          graph.diagnostics.map((d) => d.code ?? ""),
+          [],
+        );
+      },
+    );
+  });
+
+  test("E2706: unknown package name gives error with hint", () => {
+    withProject(
+      {
+        "main.vek": `
+import "unknown:thing" as x;
+fn main() -> void { return; }
+`,
+      },
+      (entry) => {
+        assert.deepEqual(
+          checkModuleGraph(entry).diagnostics.map((d) => d.code ?? ""),
+          ["E2706"],
+        );
+      },
+    );
+  });
+
+  test("E2706: std:* remains blocked regardless of registered packages", () => {
+    withPackageProject(
+      {
+        "main.vek": `
+import "std:io" as io;
+fn main() -> void { return; }
+`,
+      },
+      { mylib: { "io.vek": `pub fn write() -> void { return; }` } },
+      (entry, pkgDirs) => {
+        const host = makeNodeHost(new Map([["mylib", pkgDirs["mylib"]]]));
+        assert.deepEqual(
+          checkModuleGraph(entry, host).diagnostics.map((d) => d.code ?? ""),
+          ["E2706"],
+        );
+      },
+    );
+  });
+
+  test("compiles and runs named import from package", () => {
+    if (!hasMuslGcc()) return;
+
+    withPackageProject(
+      {
+        "main.vek": `
+import add from "mylib:math";
+fn main() -> i32 { return add(20, 22); }
+`,
+      },
+      {
+        mylib: {
+          "math.vek": `
+pub fn add(a: i32, b: i32) -> i32 { return a + b; }
+`,
+        },
+      },
+      (entry, pkgDirs) => {
+        const options = parseCliArgs([
+          entry,
+          "--toolchain-prefix",
+          "musl-gcc -static -std=c99 -O2",
+          "--package",
+          pkgDirs["mylib"],
         ]);
         compileFile(options);
         try {

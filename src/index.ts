@@ -5,7 +5,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Checker } from "@/core/checker";
-import { buildMergedProgram, loadModuleGraph } from "@/core/modules";
+import {
+  buildMergedProgram,
+  loadModuleGraph,
+  makeNodeHost,
+} from "@/core/modules";
 import { emitC } from "@/emit/c";
 import { lowerProgramToIr } from "@/ir/lower";
 import { analyzeInitializers } from "@/passes/initializers";
@@ -25,6 +29,7 @@ interface CliOptions {
   toolchainPrefix: string;
   preserveTemps: boolean;
   outputPath: string;
+  packages: Map<string, string>;
 }
 
 interface CompileResult {
@@ -38,6 +43,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   let runtimeHeaderPath = defaultRuntimeHeaderPath;
   let toolchainPrefix = defaultToolchainPrefix;
   let preserveTemps = false;
+  const packages = new Map<string, string>();
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -61,6 +67,13 @@ export function parseCliArgs(argv: string[]): CliOptions {
       continue;
     }
 
+    if (arg === "--package") {
+      const value = requireFlagValue(argv, ++i, arg);
+      const { name, rootPath } = loadPackageDir(path.resolve(value));
+      packages.set(name, rootPath);
+      continue;
+    }
+
     if (arg.startsWith("-")) {
       throw new CliUsage(`Unknown flag: ${arg}\n\n${usage()}`, 1);
     }
@@ -80,11 +93,13 @@ export function parseCliArgs(argv: string[]): CliOptions {
     toolchainPrefix,
     preserveTemps,
     outputPath: defaultOutputPath(absoluteSource),
+    packages,
   };
 }
 
 export function compileFile(options: CliOptions): CompileResult {
-  const graph = loadModuleGraph(options.sourcePath);
+  const host = makeNodeHost(options.packages);
+  const graph = loadModuleGraph(options.sourcePath, host);
 
   if (graph.diagnostics.length > 0) {
     throw new Error(formatDiagnostics(graph.diagnostics));
@@ -159,6 +174,43 @@ function requireFlagValue(argv: string[], index: number, flag: string): string {
   return value;
 }
 
+function loadPackageDir(rootPath: string): { name: string; rootPath: string } {
+  let stat: ReturnType<typeof fs.statSync> | undefined;
+  try {
+    stat = fs.statSync(rootPath);
+  } catch {
+    throw new CliUsage(`--package: path '${rootPath}' does not exist`, 1);
+  }
+  if (!stat.isDirectory())
+    throw new CliUsage(`--package: path '${rootPath}' is not a directory`, 1);
+
+  const manifestPath = path.join(rootPath, "package.toml");
+  let source: string;
+  try {
+    source = fs.readFileSync(manifestPath, "utf8");
+  } catch {
+    throw new CliUsage(`--package: no package.toml found in '${rootPath}'`, 1);
+  }
+
+  const name = parseTomlString(source)["name"];
+  if (!name)
+    throw new CliUsage(
+      `--package: package.toml in '${rootPath}' has no 'name' field`,
+      1,
+    );
+
+  return { name, rootPath };
+}
+
+function parseTomlString(source: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const line of source.split("\n")) {
+    const m = line.match(/^\s*(\w+)\s*=\s*"([^"]*)"\s*(?:#.*)?$/);
+    if (m) result[m[1]] = m[2];
+  }
+  return result;
+}
+
 function defaultOutputPath(sourcePath: string): string {
   const ext = path.extname(sourcePath);
   return path.join(path.dirname(sourcePath), path.basename(sourcePath, ext));
@@ -179,6 +231,7 @@ function usage(): string {
     "Flags:",
     "  --runtime-header <path>       Runtime header path. Defaults to ../runtime/dist/vek_runtime.h from this compiler.",
     "  --toolchain-prefix <command>  C toolchain command before source path, -o, and output path.",
+    "  --package <path>              Register a package from its directory (reads name from package.toml). May be repeated.",
     "  --preserve-temp              Keep temporary emitted C files under /tmp.",
     "  -h, --help                   Show this help.",
   ].join("\n");

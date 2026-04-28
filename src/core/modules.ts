@@ -50,15 +50,19 @@ type ResolveResult =
 
 type ResolveFailure =
   | { kind: "unsupported_package" }
+  | { kind: "unknown_package"; name: string }
   | { kind: "not_found"; attempted: string[] };
 
 export interface ModuleHost {
   readFileSync(filePath: string): string;
   isFile(filePath: string): boolean;
   realpathSync(filePath: string): string;
+  packages: Map<string, string>;
 }
 
-const nodeHost: ModuleHost = {
+export const makeNodeHost = (
+  packages: Map<string, string> = new Map(),
+): ModuleHost => ({
   readFileSync: (filePath) => fs.readFileSync(filePath, "utf8"),
   isFile: (filePath) => {
     try {
@@ -74,7 +78,10 @@ const nodeHost: ModuleHost = {
       return path.resolve(filePath);
     }
   },
-};
+  packages,
+});
+
+const nodeHost: ModuleHost = makeNodeHost();
 
 const emptySpan = (): Diagnostic["span"] => ({
   start: { index: 0, line: 1, column: 1 },
@@ -171,8 +178,21 @@ export const resolveImport = (
   const colon = specifier.indexOf(":");
   if (colon > 0) {
     const pkg = specifier.slice(0, colon);
-    if (pkg !== "std") return { kind: "unsupported_package" };
-    return { kind: "std", id: specifier };
+    if (pkg === "std") return { kind: "unsupported_package" };
+    const pkgRoot = host.packages.get(pkg);
+    if (!pkgRoot) return { kind: "unknown_package", name: pkg };
+    const remainder = specifier.slice(colon + 1);
+    const raw = path.resolve(pkgRoot, remainder);
+    const attempted = [
+      raw,
+      `${raw}.vek`,
+      path.join(raw, "index"),
+      path.join(raw, "index.vek"),
+    ];
+    const match = attempted.find((c) => host.isFile(c));
+    if (!match) return { kind: "not_found", attempted };
+    const resolved = host.realpathSync(match);
+    return { kind: "local", id: resolved, filePath: resolved };
   }
 
   const base = path.dirname(fromPath);
@@ -210,6 +230,16 @@ const validateImports = (
       module.resolutionDiagnostics.push(
         unsupportedPackage(specifier, sourceNode.span),
       );
+      continue;
+    }
+
+    if (resolved.kind === "unknown_package") {
+      module.resolutionDiagnostics.push({
+        severity: "error",
+        message: `Unknown package '${resolved.name}'. Pass --package ${resolved.name}=<path> to register it.`,
+        span: sourceNode.span,
+        code: "E2706",
+      });
       continue;
     }
 
