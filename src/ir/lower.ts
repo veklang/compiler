@@ -67,6 +67,7 @@ import type {
   VariableDeclaration,
   WhileStatement,
 } from "@/types/ast";
+import type { Diagnostic } from "@/types/diagnostic";
 import type { Operator } from "@/types/shared";
 
 interface LowerOptions {
@@ -141,6 +142,12 @@ interface FunctionLinkInfo {
 interface LowerSession {
   generatedFunctions: IrFunction[];
   nextAnonymousFunction: number;
+  diagnostics: Diagnostic[];
+}
+
+export interface LowerResult {
+  program: IrProgram;
+  diagnostics: Diagnostic[];
 }
 
 interface LocalSnapshot {
@@ -187,7 +194,7 @@ export function lowerProgramToIr(
   program: Program,
   checkResult: IrTypeSource,
   options: LowerOptions = {},
-): IrProgram {
+): LowerResult {
   const statements = [...(checkResult.coreStatements ?? []), ...program.body];
   const runtime = emptyRuntimeRequirements();
   const declarations: IrDeclaration[] = [];
@@ -197,6 +204,7 @@ export function lowerProgramToIr(
   const session: LowerSession = {
     generatedFunctions: [],
     nextAnonymousFunction: 0,
+    diagnostics: [],
   };
   const functionsByName = new Map<string, FunctionDeclaration>();
   const functionLinks = new Map<string, FunctionLinkInfo>();
@@ -564,11 +572,31 @@ export function lowerProgramToIr(
   declarations.push(...session.generatedFunctions);
 
   return {
-    version: 1,
-    sourceFiles: [{ id: "source.0", path: options.sourcePath }],
-    declarations,
-    entry,
-    runtime,
+    program: {
+      version: 1,
+      sourceFiles: [{ id: "source.0", path: options.sourcePath }],
+      declarations,
+      entry,
+      runtime,
+    },
+    diagnostics: session.diagnostics,
+  };
+}
+
+function emitLowerDiag(
+  context: LowerContext,
+  code: string,
+  message: string,
+  span: Diagnostic["span"],
+): void {
+  context.session.diagnostics.push({ severity: "error", message, span, code });
+}
+
+function placeholderBool(): IrOperand {
+  return {
+    kind: "const",
+    value: { kind: "bool", value: false },
+    type: irPrimitive("bool"),
   };
 }
 
@@ -1255,7 +1283,13 @@ function lowerStatement(statement: Statement, context: LowerContext) {
       lowerMatchStatement(statement, context);
       return;
     default:
-      throw new Error(`IR lowering does not support ${statement.kind} yet.`);
+      emitLowerDiag(
+        context,
+        "E3001",
+        `'${(statement as { kind: string }).kind}' is not yet supported.`,
+        statement.span,
+      );
+      return;
   }
 }
 
@@ -1495,7 +1529,14 @@ function resolveAssignablePlace(
     };
   }
 
-  throw new Error("IR lowering only supports assignable targets.");
+  emitLowerDiag(
+    context,
+    "E3003",
+    "This expression cannot be assigned to.",
+    target.span,
+  );
+  const dummy = declareLocal(context, `__vek_err_${context.nextLocal}`, irPrimitive("void"), false, target.span);
+  return { kind: "local", target: dummy.id, type: irPrimitive("void"), span: target.span };
 }
 
 function readAssignablePlace(
@@ -1702,9 +1743,14 @@ function resolveLocalFromMember(
   context: LowerContext,
 ): IrLocalId {
   if (expr.object.kind !== "IdentifierExpression") {
-    throw new Error(
-      "IR lowering only supports single-level field assignment so far.",
+    emitLowerDiag(
+      context,
+      "E3003",
+      "Nested field assignment is not yet supported.",
+      expr.span,
     );
+    const dummy = declareLocal(context, `__vek_err_${context.nextLocal}`, irPrimitive("void"), false, expr.span);
+    return dummy.id;
   }
   const localId = context.locals.get(expr.object.name);
   if (!localId) {
@@ -2086,9 +2132,13 @@ function lowerCustomIterableForStatement(
     methodKey(iteratorType.name, "next"),
   );
   if (!nextLinkName) {
-    throw new Error(
-      `IR lowering: iterable type '${displayIrType(iteratorType)}' has no emitted next method.`,
+    emitLowerDiag(
+      context,
+      "E3004",
+      `Type '${displayIrType(iteratorType)}' has no emitted 'next' method and cannot be used as an iterator.`,
+      statement.span,
     );
+    return;
   }
 
   const itemType = typeFromCheckedNode(context, statement.iterator);
@@ -2932,9 +2982,13 @@ function lowerExpression(
     case "MatchExpression":
       return lowerMatchExpression(expression, context);
     default:
-      throw new Error(
-        `IR lowering does not support ${(expression as { kind: string }).kind} yet.`,
+      emitLowerDiag(
+        context,
+        "E3002",
+        `'${(expression as { kind: string }).kind}' is not yet supported here.`,
+        (expression as Node).span,
       );
+      return placeholderBool();
   }
 }
 
@@ -3345,9 +3399,13 @@ function lowerOperandEqualityNoCleanup(
     return lowerBinaryEquality(left, right, span, context);
   }
 
-  throw new Error(
-    `IR lowering: unsupported equality for '${displayIrType(left.type)}'.`,
+  emitLowerDiag(
+    context,
+    "E3005",
+    `Equality is not supported for type '${displayIrType(left.type)}'. Implement the 'Equal' trait to enable '==' and '!='.`,
+    span,
   );
+  return placeholderBool();
 }
 
 function lowerBinaryEquality(

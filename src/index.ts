@@ -114,9 +114,14 @@ export function compileFile(options: CliOptions): CompileResult {
     throw new Error(formatDiagnostics(diagnostics));
   }
 
-  const ir = lowerProgramToIr(program, checked, {
-    sourcePath: options.sourcePath,
-  });
+  const { program: ir, diagnostics: lowerDiagnostics } = lowerProgramToIr(
+    program,
+    checked,
+    { sourcePath: options.sourcePath },
+  );
+  if (lowerDiagnostics.length > 0) {
+    throw new Error(formatDiagnostics(lowerDiagnostics));
+  }
   const c = emitC(ir, { runtimeHeader: options.runtimeHeaderPath });
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vek-"));
   const cPath = path.join(

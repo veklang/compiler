@@ -7,6 +7,7 @@ import "./mono.test";
 import "./initializers.test";
 import "./ir.test";
 import "./emit-c.test";
+import "./guardrails.test";
 import "./cli.test";
 import { run } from "./tester";
 

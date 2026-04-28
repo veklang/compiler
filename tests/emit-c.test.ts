@@ -12,7 +12,9 @@ const emitOk = (source: string) => {
   const result = check(source);
   expectNoDiagnostics(result.lexDiagnostics, result.parseDiagnostics);
   expectNoCheckDiagnostics(result.checkDiagnostics);
-  return emitC(lowerProgramToIr(result.program, result));
+  const { program: ir, diagnostics: lowerDiagnostics } = lowerProgramToIr(result.program, result);
+  assert.deepEqual(lowerDiagnostics, []);
+  return emitC(ir);
 };
 
 describe("C emitter", () => {
@@ -90,7 +92,8 @@ inline fn add(a: i32, b: i32) -> i32 {
       ["W2903"],
     );
 
-    const c = emitC(lowerProgramToIr(result.program, result));
+    const { program: ir2 } = lowerProgramToIr(result.program, result);
+    const c = emitC(ir2);
     assert.ok(
       c.includes("static inline int32_t __vek_fn_add(int32_t v0, int32_t v1);"),
     );
