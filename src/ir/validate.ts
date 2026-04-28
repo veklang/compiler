@@ -494,7 +494,7 @@ function validateOperand(
 
   if (
     operand.kind === "function" &&
-    operand.name !== "panic" &&
+    operand.abi !== "c" &&
     !functionNames.has(operand.name)
   ) {
     diagnostics.push({

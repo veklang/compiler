@@ -373,7 +373,9 @@ fn main() -> void {
 
     assert.equal(ir.runtime.panic, true);
     assert.equal(ir.runtime.strings, true);
-    assert.ok(dumpIr(ir).includes('call @__vek_panic_cstr("boom")'));
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("call @__vek_string_to_cstr"));
+    assert.ok(dump.includes("call @__vek_panic_cstr"));
   });
 
   test("lowers extern symbol aliases as C ABI link names", () => {

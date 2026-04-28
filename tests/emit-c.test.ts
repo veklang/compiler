@@ -279,7 +279,10 @@ fn main() -> void {
 }
 `);
 
-    assert.ok(c.includes("__vek_panic_cstr(") && c.includes("->data"));
+    assert.ok(
+      c.includes("__vek_string_to_cstr(") && c.includes("__vek_panic_cstr("),
+    );
+    assert.ok(!c.includes("->data"));
     assert.ok(!c.includes("void __vek_panic_cstr(__vek_string *"));
   });
 

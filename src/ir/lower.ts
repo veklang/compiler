@@ -3840,10 +3840,50 @@ function lowerPointerIndex(
   return { kind: "temp", id: target, type: pointer.type };
 }
 
+function lowerStringToCstrCall(
+  expression: CallExpression,
+  context: LowerContext,
+): IrOperand | null {
+  if (
+    expression.callee.kind !== "MemberExpression" ||
+    expression.callee.property.name !== "to_cstr"
+  )
+    return null;
+  const objectType = typeFromNodeInContext(context, expression.callee.object);
+  if (objectType.kind !== "primitive" || objectType.name !== "string")
+    return null;
+
+  const target = nextTemp(context);
+  const object = lowerExpression(expression.callee.object, context);
+  const type = irPrimitive("cstr");
+  context.currentBlock.instructions.push({
+    kind: "call",
+    target,
+    callee: {
+      kind: "function",
+      name: "__vek_string_to_cstr",
+      abi: "c",
+      type: {
+        kind: "function",
+        params: [{ type: irPrimitive("string"), mutable: false }],
+        returnType: type,
+      },
+    },
+    args: [object],
+    type,
+    span: expression.span,
+  });
+  context.runtime.strings = true;
+  return { kind: "temp", id: target, type };
+}
+
 function lowerCall(
   expression: CallExpression,
   context: LowerContext,
 ): IrOperand {
+  const toCstr = lowerStringToCstrCall(expression, context);
+  if (toCstr) return toCstr;
+
   const pointerOffset = lowerPointerOffsetCall(expression, context);
   if (pointerOffset) return pointerOffset;
 
@@ -3903,13 +3943,44 @@ function lowerCall(
   }
 
   if (type.kind === "primitive" && type.name === "never") {
-    if (
-      callee.kind === "function" &&
-      (callee.name === "panic" || callee.name === "__vek_panic_cstr")
-    ) {
+    if (callee.kind === "function" && callee.name === "__vek_panic_cstr") {
       context.runtime.panic = true;
     }
-    const args = expression.args.map((arg) => lowerExpression(arg, context));
+    const args = expression.args.map((arg) => {
+      const lowered = lowerExpression(arg, context);
+      if (
+        callee.kind === "function" &&
+        callee.name === "__vek_panic_cstr" &&
+        lowered.type.kind === "primitive" &&
+        lowered.type.name === "string"
+      ) {
+        const cstrTarget = nextTemp(context);
+        context.currentBlock.instructions.push({
+          kind: "call",
+          target: cstrTarget,
+          callee: {
+            kind: "function",
+            name: "__vek_string_to_cstr",
+            abi: "c",
+            type: {
+              kind: "function",
+              params: [{ type: irPrimitive("string"), mutable: false }],
+              returnType: irPrimitive("cstr"),
+            },
+          },
+          args: [lowered],
+          type: irPrimitive("cstr"),
+          span: arg.span,
+        });
+        context.runtime.strings = true;
+        return {
+          kind: "temp" as const,
+          id: cstrTarget,
+          type: irPrimitive("cstr"),
+        };
+      }
+      return lowered;
+    });
     context.currentBlock.instructions.push({
       kind: "call",
       target: undefined,
@@ -4064,11 +4135,12 @@ function lowerNullableMethodCall(
       target: undefined,
       callee: {
         kind: "function",
-        name: "panic",
+        name: "__vek_panic_cstr",
+        abi: "c",
         type: {
           kind: "function",
-          params: [{ type: irPrimitive("string"), mutable: false }],
-          returnType: irPrimitive("void"),
+          params: [{ type: irPrimitive("cstr"), mutable: false }],
+          returnType: irPrimitive("never"),
         },
       },
       args: [
@@ -4078,10 +4150,10 @@ function lowerNullableMethodCall(
             kind: "string",
             value: "called unwrap on a null value",
           },
-          type: irPrimitive("string"),
+          type: irPrimitive("cstr"),
         },
       ],
-      type: irPrimitive("void"),
+      type: irPrimitive("never"),
       span: expression.span,
     });
     context.currentBlock.terminator = {

@@ -2348,6 +2348,16 @@ export class Checker {
       return this.primitive("i32");
     }
 
+    if (node.property.name === "to_cstr" && this.isStringType(objectType)) {
+      return {
+        kind: "Function",
+        isUnsafe: false,
+        typeParams: [],
+        params: [],
+        returnType: this.primitive("cstr"),
+      };
+    }
+
     if (objectType.kind !== "Named" || !objectType.symbol) {
       const traitMethod = this.lookupTraitMethodOnType(
         objectType,

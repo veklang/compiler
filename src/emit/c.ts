@@ -337,10 +337,6 @@ function emitInstruction(
   }
 
   if (instruction.kind === "call") {
-    const isPanic =
-      instruction.callee.kind === "function" &&
-      (instruction.callee.name === "panic" ||
-        instruction.callee.name === "__vek_panic_cstr");
     const calleeType =
       instruction.callee.type.kind === "function"
         ? instruction.callee.type
@@ -348,11 +344,7 @@ function emitInstruction(
     const args = instruction.args.map((arg, index) => {
       const s = emitOperand(arg, context);
       if (calleeType?.params[index]?.mutable) return `&${s}`;
-      return isPanic &&
-        arg.type.kind === "primitive" &&
-        arg.type.name === "string"
-        ? `(${s})->data`
-        : s;
+      return s;
     });
     const call = `${emitOperand(instruction.callee, context)}(${args.join(", ")})`;
     if (!instruction.target) return `${call};`;
@@ -714,7 +706,6 @@ function emitOperand(operand: IrOperand, context: FunctionEmitContext): string {
   if (operand.kind === "temp") return requireTemp(context, operand.id);
   if (operand.kind === "global")
     return requireGlobal(context.globalNames, operand.id);
-  if (operand.name === "panic") return "__vek_panic_cstr";
   if (operand.abi === "c") return sanitizeName(operand.name);
   return cFunctionName(operand.name);
 }

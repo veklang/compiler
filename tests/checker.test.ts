@@ -776,6 +776,19 @@ fn main() -> i32 {
 `);
   });
 
+  test("string.to_cstr() returns cstr and is accepted as a cstr argument", () => {
+    checkOk(`
+unsafe extern fn puts(s: cstr) -> i32;
+
+fn main() -> void {
+  let message: string = "hello";
+  let c: cstr = message.to_cstr();
+  let _a = unsafe { puts(c) };
+  let _b = unsafe { puts(message.to_cstr()) };
+}
+`);
+  });
+
   test("cstr parameter and string literal coercion are accepted", () => {
     checkOk(`
 unsafe extern fn puts(s: cstr) -> i32;

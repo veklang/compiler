@@ -1650,6 +1650,38 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs string.to_cstr() passed to an extern cstr fn", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+unsafe extern "strlen" fn c_strlen(s: cstr) -> u64;
+
+fn count(s: string) -> u64 {
+  return unsafe { c_strlen(s.to_cstr()) };
+}
+
+fn main() -> i32 {
+  return count("hello") as i32;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 5);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs unsafe extern fn with cstr and pointer arithmetic", () => {
     if (!hasMuslGcc()) return;
 
