@@ -1102,8 +1102,7 @@ function lowerFunction(
     linkName,
     abi: node.isExtern ? "c" : "vek",
     linkage: node.isExtern ? (node.body ? "exported" : "imported") : "internal",
-    safety:
-      node.isUnsafe || (node.isExtern && !node.body) ? "unsafe" : "safe",
+    safety: node.isUnsafe || (node.isExtern && !node.body) ? "unsafe" : "safe",
     isInline: node.isInline && !node.isExtern,
     signature: {
       params: params.map((param) => ({
@@ -1532,8 +1531,19 @@ function resolveAssignablePlace(
     "This expression cannot be assigned to.",
     target.span,
   );
-  const dummy = declareLocal(context, `__vek_err_${context.nextLocal}`, irPrimitive("void"), false, target.span);
-  return { kind: "local", target: dummy.id, type: irPrimitive("void"), span: target.span };
+  const dummy = declareLocal(
+    context,
+    `__vek_err_${context.nextLocal}`,
+    irPrimitive("void"),
+    false,
+    target.span,
+  );
+  return {
+    kind: "local",
+    target: dummy.id,
+    type: irPrimitive("void"),
+    span: target.span,
+  };
 }
 
 function readAssignablePlace(
@@ -1746,7 +1756,13 @@ function resolveLocalFromMember(
       "Nested field assignment is not yet supported.",
       expr.span,
     );
-    const dummy = declareLocal(context, `__vek_err_${context.nextLocal}`, irPrimitive("void"), false, expr.span);
+    const dummy = declareLocal(
+      context,
+      `__vek_err_${context.nextLocal}`,
+      irPrimitive("void"),
+      false,
+      expr.span,
+    );
     return dummy.id;
   }
   const localId = context.locals.get(expr.object.name);
@@ -1980,14 +1996,14 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
     kind: "array_len",
     target: lenTarget,
     array: arrayOperand,
-    type: irPrimitive("i32"),
+    type: irPrimitive("usize"),
     span: statement.span,
   });
 
   const idxLocal = declareLocal(
     context,
     "__vek_for_idx",
-    irPrimitive("i32"),
+    irPrimitive("usize"),
     true,
     statement.span,
   );
@@ -1997,7 +2013,7 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
     value: {
       kind: "const",
       value: { kind: "int", value: "0" },
-      type: irPrimitive("i32"),
+      type: irPrimitive("usize"),
     },
     span: statement.span,
   });
@@ -2019,8 +2035,8 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
     kind: "binary",
     target: condTarget,
     operator: "<",
-    left: { kind: "local", id: idxLocal.id, type: irPrimitive("i32") },
-    right: { kind: "temp", id: lenTarget, type: irPrimitive("i32") },
+    left: { kind: "local", id: idxLocal.id, type: irPrimitive("usize") },
+    right: { kind: "temp", id: lenTarget, type: irPrimitive("usize") },
     type: irPrimitive("bool"),
     span: statement.span,
   });
@@ -2038,7 +2054,7 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
     kind: "array_get",
     target: elemTarget,
     array: arrayOperand,
-    index: { kind: "local", id: idxLocal.id, type: irPrimitive("i32") },
+    index: { kind: "local", id: idxLocal.id, type: irPrimitive("usize") },
     elementType,
     type: elementType,
     span: statement.span,
@@ -2092,19 +2108,19 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
     kind: "binary",
     target: incTarget,
     operator: "+",
-    left: { kind: "local", id: idxLocal.id, type: irPrimitive("i32") },
+    left: { kind: "local", id: idxLocal.id, type: irPrimitive("usize") },
     right: {
       kind: "const",
       value: { kind: "int", value: "1" },
-      type: irPrimitive("i32"),
+      type: irPrimitive("usize"),
     },
-    type: irPrimitive("i32"),
+    type: irPrimitive("usize"),
     span: statement.span,
   });
   context.currentBlock.instructions.push({
     kind: "assign",
     target: idxLocal.id,
-    value: { kind: "temp", id: incTarget, type: irPrimitive("i32") },
+    value: { kind: "temp", id: incTarget, type: irPrimitive("usize") },
     span: statement.span,
   });
   context.currentBlock.terminator = {
@@ -4549,23 +4565,23 @@ function lowerMemberExpression(
         kind: "array_len",
         target,
         array: object,
-        type: irPrimitive("i32"),
+        type: irPrimitive("usize"),
         span: expression.span,
       });
       releaseIfOwnedTemp(object, context);
-      return { kind: "temp", id: target, type: irPrimitive("i32") };
+      return { kind: "temp", id: target, type: irPrimitive("usize") };
     }
     if (object.type.kind === "primitive" && object.type.name === "string") {
       context.currentBlock.instructions.push({
         kind: "string_len",
         target,
         string: object,
-        type: irPrimitive("i32"),
+        type: irPrimitive("usize"),
         span: expression.span,
       });
       releaseIfOwnedTemp(object, context);
       context.runtime.strings = true;
-      return { kind: "temp", id: target, type: irPrimitive("i32") };
+      return { kind: "temp", id: target, type: irPrimitive("usize") };
     }
   }
 
@@ -5458,6 +5474,7 @@ function isPrimitiveName(name: string): name is IrPrimitiveType["name"] {
     "u16",
     "u32",
     "u64",
+    "usize",
     "f32",
     "f64",
     "bool",

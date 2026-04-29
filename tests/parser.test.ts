@@ -340,7 +340,7 @@ let f: fn<T>(T, T) -> bool where T: Equal<T> = fn(a: i32, b: i32) -> bool {
 pub extern fn panic(message: string) -> void;
 extern fn add(a: i32, b: i32) -> i32;
 extern "abs" fn c_abs(value: i32) -> i32;
-unsafe extern "strlen" fn c_strlen(value: cstr) -> u64;
+unsafe extern "strlen" fn c_strlen(value: cstr) -> usize;
 unsafe fn read(ptr: const_ptr<i32>) -> i32 {
   return unsafe { *ptr };
 }

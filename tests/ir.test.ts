@@ -14,7 +14,10 @@ const irOk = (source: string) => {
   const result = check(source);
   expectNoDiagnostics(result.lexDiagnostics, result.parseDiagnostics);
   expectNoCheckDiagnostics(result.checkDiagnostics);
-  const { program: ir, diagnostics: lowerDiagnostics } = lowerProgramToIr(result.program, result);
+  const { program: ir, diagnostics: lowerDiagnostics } = lowerProgramToIr(
+    result.program,
+    result,
+  );
   assert.deepEqual(lowerDiagnostics, []);
   const validation = validateIr(ir);
   assert.deepEqual(validation.diagnostics, []);
@@ -32,7 +35,8 @@ fn main() -> void {
     assert.equal(ir.entry, "fn.main");
     assert.ok(
       ir.declarations.some(
-        (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "main",
+        (decl): decl is IrFunction =>
+          decl.kind === "function" && decl.linkName === "main",
       ),
     );
     assert.equal(ir.runtime.panic, true);
@@ -394,7 +398,8 @@ fn main() -> i32 {
 `);
 
     const imported = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.sourceName === "c_abs",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.sourceName === "c_abs",
     );
     assert.ok(imported?.kind === "function");
     assert.equal(imported.linkName, "abs");
@@ -403,7 +408,8 @@ fn main() -> i32 {
     assert.equal(imported.body, "extern");
 
     const exported = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.sourceName === "answer",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.sourceName === "answer",
     );
     assert.ok(exported?.kind === "function");
     assert.equal(exported.linkName, "vek_answer");
@@ -623,7 +629,8 @@ fn main() -> void {
 `);
 
     const fn = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "main",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.linkName === "main",
     );
     assert.ok(fn);
     assert.equal(fn.blocks.length, 3);
@@ -649,7 +656,8 @@ fn max(a: i32, b: i32) -> i32 {
 `);
 
     const fn = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "max",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.linkName === "max",
     );
     assert.ok(fn);
     assert.equal(fn.blocks.length, 4);
@@ -672,7 +680,8 @@ fn count() -> void {
 `);
 
     const fn = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "count",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.linkName === "count",
     );
     assert.ok(fn);
     assert.equal(fn.blocks.length, 4);
@@ -697,7 +706,8 @@ fn find() -> void {
 `);
 
     const fn = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "find",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.linkName === "find",
     );
     assert.ok(fn);
     const dump = dumpIr(ir);
@@ -736,7 +746,8 @@ fn skip() -> void {
 `);
 
     const fn = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "skip",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.linkName === "skip",
     );
     assert.ok(fn);
     const dump = dumpIr(ir);
@@ -770,7 +781,8 @@ fn main() -> void {
 `);
 
     const fn = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "main",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.linkName === "main",
     );
     assert.ok(fn);
     const hasUnreachable = fn!.blocks.some(
@@ -989,7 +1001,7 @@ fn main() -> i32 {
   }
 
   match pair {
-    (1, value) => { return value.len; }
+    (1, value) => { return value.len as i32; }
     _ => { return 4; }
   }
 }
@@ -1211,7 +1223,8 @@ fn sum(xs: i32[]) -> i32 {
     assert.ok(dump.includes("array_len"));
     assert.ok(dump.includes("array_get"));
     const fn_ = ir.declarations.find(
-      (decl): decl is IrFunction => decl.kind === "function" && decl.linkName === "sum",
+      (decl): decl is IrFunction =>
+        decl.kind === "function" && decl.linkName === "sum",
     );
     assert.ok(fn_);
     assert.ok(fn_.blocks.length > 1);

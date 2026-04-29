@@ -62,6 +62,7 @@ type PrimitiveName =
   | "u16"
   | "u32"
   | "u64"
+  | "usize"
   | "f32"
   | "f64"
   | "bool"
@@ -254,6 +255,7 @@ const primitiveNames: PrimitiveName[] = [
   "u16",
   "u32",
   "u64",
+  "usize",
   "f32",
   "f64",
   "bool",
@@ -1706,6 +1708,10 @@ export class Checker {
   }
 
   private intRange(name: PrimitiveName): [bigint, bigint] {
+    if (name === "usize") {
+      const bits = this.usizeBitWidth();
+      return [BigInt(0), (BigInt(1) << bits) - BigInt(1)];
+    }
     const bits = Number(name.slice(1));
     if (name.startsWith("u")) {
       return [BigInt(0), (BigInt(1) << BigInt(bits)) - BigInt(1)];
@@ -1716,7 +1722,12 @@ export class Checker {
   }
 
   private intBitWidth(name: PrimitiveName): bigint {
+    if (name === "usize") return this.usizeBitWidth();
     return BigInt(Number(name.slice(1)));
+  }
+
+  private usizeBitWidth(): bigint {
+    return BigInt(64);
   }
 
   private checkIdentifier(
@@ -1782,7 +1793,7 @@ export class Checker {
 
     if (node.operator === "==" || node.operator === "!=") {
       const left = this.checkExpression(node.left, scope);
-      const right = this.checkExpression(node.right, scope);
+      const right = this.checkExpression(node.right, scope, left);
       if (!this.canCompareForEquality(left, right, scope)) {
         this.report("Incompatible operands for equality.", node.span, "E2101");
       }
@@ -1791,7 +1802,7 @@ export class Checker {
 
     if (["<", "<=", ">", ">="].includes(node.operator)) {
       const left = this.checkExpression(node.left, scope);
-      const right = this.checkExpression(node.right, scope);
+      const right = this.checkExpression(node.right, scope, left);
       if (
         !this.isNumericType(left) ||
         !this.isNumericType(right) ||
@@ -1809,7 +1820,11 @@ export class Checker {
     const numericExpected =
       expected?.kind === "Nullable" ? expected.base : expected;
     const left = this.checkExpression(node.left, scope, numericExpected);
-    const right = this.checkExpression(node.right, scope, numericExpected);
+    const right = this.checkExpression(
+      node.right,
+      scope,
+      numericExpected ?? left,
+    );
 
     if (node.operator === "+") {
       if (this.isStringType(left) || this.isStringType(right)) {
@@ -2343,11 +2358,11 @@ export class Checker {
       objectType.kind === "Named" &&
       objectType.name === "Array"
     ) {
-      return this.primitive("i32");
+      return this.primitive("usize");
     }
 
     if (node.property.name === "len" && this.isStringType(objectType)) {
-      return this.primitive("i32");
+      return this.primitive("usize");
     }
 
     if (node.property.name === "to_cstr" && this.isStringType(objectType)) {
@@ -2524,13 +2539,20 @@ export class Checker {
 
   private checkIndex(node: IndexExpression, scope: Scope): Type {
     const objectType = this.checkExpression(node.object, scope);
+    const expectedIndexType = this.isRawPointerType(objectType)
+      ? this.primitive("i32")
+      : this.primitive("usize");
     const indexType = this.checkExpression(
       node.index,
       scope,
-      this.primitive("i32"),
+      expectedIndexType,
     );
-    if (!this.typeEquals(indexType, this.primitive("i32"))) {
-      this.report("Index must be i32.", node.index.span, "E2101");
+    if (!this.typeEquals(indexType, expectedIndexType)) {
+      this.report(
+        `Index must be ${this.displayType(expectedIndexType)}.`,
+        node.index.span,
+        "E2101",
+      );
     }
     if (objectType.kind === "Named" && objectType.name === "Array") {
       return objectType.typeArgs?.[0] ?? this.unknownType();
@@ -3651,7 +3673,6 @@ export class Checker {
     const returnType = node.returnType
       ? this.resolveType(node.returnType, typeScope)
       : this.unknownType();
-    const linkName = node.externName?.value ?? node.name.name;
     const isUnsafe = node.isUnsafe || (node.isExtern && !node.body);
 
     return {
@@ -4454,6 +4475,7 @@ export class Checker {
           "u16",
           "u32",
           "u64",
+          "usize",
           "f32",
           "f64",
           "bool",
@@ -4521,7 +4543,9 @@ export class Checker {
   private isIntegerType(type: Type): type is PrimitiveType {
     return (
       type.kind === "Primitive" &&
-      ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].includes(type.name)
+      ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize"].includes(
+        type.name,
+      )
     );
   }
 
@@ -4572,6 +4596,7 @@ export class Checker {
         "u16",
         "u32",
         "u64",
+        "usize",
         "f32",
         "f64",
         "bool",
@@ -4598,6 +4623,7 @@ export class Checker {
         "u16",
         "u32",
         "u64",
+        "usize",
         "f32",
         "f64",
         "bool",

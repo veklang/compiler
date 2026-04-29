@@ -1130,7 +1130,7 @@ fn main() -> i32 {
   }
 
   match pair {
-    (1, value) => { return value.len; }
+    (1, value) => { return value.len as i32; }
     _ => { return 3; }
   }
 }
@@ -1655,9 +1655,9 @@ fn main() -> i32 {
 
     withTempFile(
       `
-unsafe extern "strlen" fn c_strlen(s: cstr) -> u64;
+unsafe extern "strlen" fn c_strlen(s: cstr) -> usize;
 
-fn count(s: string) -> u64 {
+fn count(s: string) -> usize {
   return unsafe { c_strlen(s.to_cstr()) };
 }
 
@@ -1687,10 +1687,10 @@ fn main() -> i32 {
 
     withTempFile(
       `
-unsafe extern "strlen" fn c_strlen(s: cstr) -> u64;
+unsafe extern "strlen" fn c_strlen(s: cstr) -> usize;
 
 fn main() -> i32 {
-  let n: u64 = unsafe { c_strlen("hello") };
+  let n: usize = unsafe { c_strlen("hello") };
   return n as i32;
 }
 `,

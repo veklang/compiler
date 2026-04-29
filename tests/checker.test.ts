@@ -54,6 +54,34 @@ fn main() -> void {
 `);
   });
 
+  test("usize is used for built-in lengths and indexes", () => {
+    checkOk(`
+fn main() -> void {
+  let xs: i32[] = [1, 2, 3];
+  let i: usize = 0;
+  let _first: i32 = xs[i];
+  let _len: usize = xs.len;
+  let s: string = "cat";
+  let _c: string = s[i];
+  let _s_len: usize = s.len;
+}
+`);
+  });
+
+  test("E2101: built-in array and string indexes require usize", () => {
+    const result = check(`
+fn main() -> void {
+  let xs: i32[] = [1, 2, 3];
+  let i: i32 = 0;
+  let _first: i32 = xs[i];
+  let s: string = "cat";
+  let _c: string = s[i];
+}
+`);
+
+    expectDiagnostics(result.checkDiagnostics, ["E2101", "E2101"]);
+  });
+
   test("integer literals in expressions use the expected integer type", () => {
     checkOk(`
 fn main() -> void {
@@ -745,7 +773,7 @@ fn main() -> void {
 
   test("E2909: dereferencing ptr<void> is rejected", () => {
     const result = check(`
-unsafe extern fn malloc(size: u64) -> ptr<void>?;
+unsafe extern fn malloc(size: usize) -> ptr<void>?;
 
 fn main() -> void {
   let p = unsafe { malloc(8) };
@@ -792,11 +820,11 @@ fn main() -> void {
   test("cstr parameter and string literal coercion are accepted", () => {
     checkOk(`
 unsafe extern fn puts(s: cstr) -> i32;
-unsafe extern fn strlen(s: cstr) -> u64;
+unsafe extern fn strlen(s: cstr) -> usize;
 
 fn main() -> void {
   let _ = unsafe { puts("hello from C") };
-  let _n: u64 = unsafe { strlen("hi") };
+  let _n: usize = unsafe { strlen("hi") };
 }
 `);
   });

@@ -12,7 +12,10 @@ const emitOk = (source: string) => {
   const result = check(source);
   expectNoDiagnostics(result.lexDiagnostics, result.parseDiagnostics);
   expectNoCheckDiagnostics(result.checkDiagnostics);
-  const { program: ir, diagnostics: lowerDiagnostics } = lowerProgramToIr(result.program, result);
+  const { program: ir, diagnostics: lowerDiagnostics } = lowerProgramToIr(
+    result.program,
+    result,
+  );
   assert.deepEqual(lowerDiagnostics, []);
   return emitC(ir);
 };
@@ -51,6 +54,20 @@ fn add(a: i32, b: i32) -> i32 {
     assert.ok(c.includes("int32_t t0 = __vek_i32_add(v0, v1);"));
     assert.ok(c.includes("v2 = t0;"));
     assert.ok(c.includes("return v2;"));
+  });
+
+  test("emits usize as size_t", () => {
+    const c = emitOk(`
+fn add_len(a: usize, b: usize) -> usize {
+  return a + b;
+}
+`);
+
+    assert.ok(c.includes("#include <stddef.h>"));
+    assert.ok(
+      c.includes("static size_t __vek_fn_add_len(size_t v0, size_t v1);"),
+    );
+    assert.ok(c.includes("size_t t0 = __vek_usize_add(v0, v1);"));
   });
 
   test("emits inferred i32 main return type", () => {
@@ -992,7 +1009,7 @@ fn greet() -> string {
 
   test("emits string_len as __vek_string_len", () => {
     const c = emitOk(`
-fn length(s: string) -> i32 {
+fn length(s: string) -> usize {
   return s.len;
 }
 `);
@@ -1015,7 +1032,7 @@ fn first(s: string) -> string {
 fn main() -> i32 {
   let a: string = "hi";
   let b: string = a;
-  return b.len;
+  return b.len as i32;
 }
 `);
 
@@ -1098,7 +1115,7 @@ fn main() -> void {
 
   test("emits array .len as __vek_array_len", () => {
     const c = emitOk(`
-fn length(xs: i32[]) -> i32 {
+fn length(xs: i32[]) -> usize {
   return xs.len;
 }
 `);
