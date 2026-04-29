@@ -70,6 +70,22 @@ fn add_len(a: usize, b: usize) -> usize {
     assert.ok(c.includes("size_t t0 = __vek_usize_add(v0, v1);"));
   });
 
+  test("emits isize as ptrdiff_t", () => {
+    const c = emitOk(`
+fn add_off(a: isize, b: isize) -> isize {
+  return a + b;
+}
+`);
+
+    assert.ok(c.includes("#include <stddef.h>"));
+    assert.ok(
+      c.includes(
+        "static ptrdiff_t __vek_fn_add_off(ptrdiff_t v0, ptrdiff_t v1);",
+      ),
+    );
+    assert.ok(c.includes("ptrdiff_t t0 = __vek_isize_add(v0, v1);"));
+  });
+
   test("emits inferred i32 main return type", () => {
     const c = emitOk(`
 fn main() {

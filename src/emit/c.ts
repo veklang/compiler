@@ -968,14 +968,23 @@ function shiftGuards(
 function isIntegerPrimitiveType(type: IrType): type is IrPrimitiveType {
   return (
     type.kind === "primitive" &&
-    ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize"].includes(
-      type.name,
-    )
+    [
+      "i8",
+      "i16",
+      "i32",
+      "i64",
+      "u8",
+      "u16",
+      "u32",
+      "u64",
+      "usize",
+      "isize",
+    ].includes(type.name)
   );
 }
 
 function isSignedIntegerTypeName(typeName: IrPrimitiveType["name"]): boolean {
-  return ["i8", "i16", "i32", "i64"].includes(typeName);
+  return ["i8", "i16", "i32", "i64", "isize"].includes(typeName);
 }
 
 function unsignedIntegerTypeName(typeName: IrPrimitiveType["name"]): string {
@@ -983,6 +992,7 @@ function unsignedIntegerTypeName(typeName: IrPrimitiveType["name"]): string {
   if (typeName === "i16" || typeName === "u16") return "uint16_t";
   if (typeName === "i32" || typeName === "u32") return "uint32_t";
   if (typeName === "usize") return "size_t";
+  if (typeName === "isize") return "size_t";
   return "uint64_t";
 }
 
@@ -991,6 +1001,7 @@ function integerBitWidth(typeName: IrPrimitiveType["name"]): string {
   if (typeName.endsWith("16")) return "16";
   if (typeName.endsWith("32")) return "32";
   if (typeName === "usize") return "(sizeof(size_t) * CHAR_BIT)";
+  if (typeName === "isize") return "(sizeof(ptrdiff_t) * CHAR_BIT)";
   return "64";
 }
 
@@ -998,6 +1009,7 @@ function signedMinMacro(typeName: IrPrimitiveType["name"]): string {
   if (typeName === "i8") return "INT8_MIN";
   if (typeName === "i16") return "INT16_MIN";
   if (typeName === "i32") return "INT32_MIN";
+  if (typeName === "isize") return "PTRDIFF_MIN";
   return "INT64_MIN";
 }
 
@@ -1095,6 +1107,8 @@ function emitType(type: IrType): string {
       return "uint64_t";
     case "usize":
       return "size_t";
+    case "isize":
+      return "ptrdiff_t";
     case "f32":
       return "float";
     case "f64":

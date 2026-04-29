@@ -82,6 +82,25 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2101", "E2101"]);
   });
 
+  test("isize is a valid signed pointer-width integer type", () => {
+    checkOk(`
+fn main() -> void {
+  let _a: isize = 0;
+  let _b: isize = -1;
+  let _c: isize = 9223372036854775807;
+}
+`);
+  });
+
+  test("isize rejects out-of-range literals", () => {
+    const result = check(`
+fn main() -> void {
+  let _x: isize = 9223372036854775808;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2401"]);
+  });
+
   test("integer literals in expressions use the expected integer type", () => {
     checkOk(`
 fn main() -> void {
@@ -804,6 +823,33 @@ fn main() -> i32 {
 `);
   });
 
+  test("pointer offset and index require isize, not i32", () => {
+    const result = check(`
+unsafe extern fn get_ptr() -> ptr<i32>;
+
+fn test() -> void {
+  let p: ptr<i32> = unsafe { get_ptr() };
+  let n: i32 = 1;
+  let _a: ptr<i32> = unsafe { p.offset(n) };
+  let _b: i32 = unsafe { p[n] };
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2207", "E2101"]);
+  });
+
+  test("pointer offset and index accept isize", () => {
+    checkOk(`
+unsafe extern fn get_ptr() -> ptr<i32>;
+
+fn test() -> void {
+  let p: ptr<i32> = unsafe { get_ptr() };
+  let n: isize = -1;
+  let _a: ptr<i32> = unsafe { p.offset(n) };
+  let _b: i32 = unsafe { p[n] };
+}
+`);
+  });
+
   test("string.to_cstr() returns cstr and is accepted as a cstr argument", () => {
     checkOk(`
 unsafe extern fn puts(s: cstr) -> i32;
@@ -825,6 +871,16 @@ unsafe extern fn strlen(s: cstr) -> usize;
 fn main() -> void {
   let _ = unsafe { puts("hello from C") };
   let _n: usize = unsafe { strlen("hi") };
+}
+`);
+  });
+
+  test("isize is accepted in C ABI extern fn signatures", () => {
+    checkOk(`
+unsafe extern fn ptrdiff_example(a: isize, b: isize) -> isize;
+
+fn main() -> void {
+  let _: isize = unsafe { ptrdiff_example(1, -2) };
 }
 `);
   });

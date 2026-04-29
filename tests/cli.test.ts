@@ -744,6 +744,43 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs isize wrapping arithmetic", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let a: isize = 9223372036854775807;
+  let b: isize = a + 1;
+  let c: isize = b - 1;
+  let min: isize = -9223372036854775808;
+  let d: isize = -min;
+  let expected_b: isize = -9223372036854775808;
+  let expected_c: isize = 9223372036854775807;
+  let expected_d: isize = -9223372036854775808;
+  if b != expected_b { return 1; }
+  if c != expected_c { return 2; }
+  if d != expected_d { return 3; }
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("panics on invalid runtime integer shift", () => {
     if (!hasMuslGcc()) return;
 

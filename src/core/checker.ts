@@ -63,6 +63,7 @@ type PrimitiveName =
   | "u32"
   | "u64"
   | "usize"
+  | "isize"
   | "f32"
   | "f64"
   | "bool"
@@ -256,6 +257,7 @@ const primitiveNames: PrimitiveName[] = [
   "u32",
   "u64",
   "usize",
+  "isize",
   "f32",
   "f64",
   "bool",
@@ -1533,7 +1535,7 @@ export class Checker {
         if (objectType.kind !== "Pointer" || !objectType.mutable) {
           this.report("Cannot write through const_ptr<T>.", node.span, "E2908");
         }
-        this.checkExpression(node.index, scope, this.primitive("i32"));
+        this.checkExpression(node.index, scope, this.primitive("isize"));
         return objectType.kind === "Pointer"
           ? objectType.target
           : this.primitive("u8");
@@ -1712,6 +1714,12 @@ export class Checker {
       const bits = this.usizeBitWidth();
       return [BigInt(0), (BigInt(1) << bits) - BigInt(1)];
     }
+    if (name === "isize") {
+      const bits = this.isizeBitWidth();
+      const max = (BigInt(1) << (bits - BigInt(1))) - BigInt(1);
+      const min = -(BigInt(1) << (bits - BigInt(1)));
+      return [min, max];
+    }
     const bits = Number(name.slice(1));
     if (name.startsWith("u")) {
       return [BigInt(0), (BigInt(1) << BigInt(bits)) - BigInt(1)];
@@ -1723,10 +1731,15 @@ export class Checker {
 
   private intBitWidth(name: PrimitiveName): bigint {
     if (name === "usize") return this.usizeBitWidth();
+    if (name === "isize") return this.isizeBitWidth();
     return BigInt(Number(name.slice(1)));
   }
 
   private usizeBitWidth(): bigint {
+    return BigInt(64);
+  }
+
+  private isizeBitWidth(): bigint {
     return BigInt(64);
   }
 
@@ -2348,7 +2361,7 @@ export class Checker {
         kind: "Function",
         isUnsafe: true,
         typeParams: [],
-        params: [{ type: this.primitive("i32"), isMutable: false }],
+        params: [{ type: this.primitive("isize"), isMutable: false }],
         returnType: objectType,
       };
     }
@@ -2540,7 +2553,7 @@ export class Checker {
   private checkIndex(node: IndexExpression, scope: Scope): Type {
     const objectType = this.checkExpression(node.object, scope);
     const expectedIndexType = this.isRawPointerType(objectType)
-      ? this.primitive("i32")
+      ? this.primitive("isize")
       : this.primitive("usize");
     const indexType = this.checkExpression(
       node.index,
@@ -4476,6 +4489,7 @@ export class Checker {
           "u32",
           "u64",
           "usize",
+          "isize",
           "f32",
           "f64",
           "bool",
@@ -4543,16 +4557,25 @@ export class Checker {
   private isIntegerType(type: Type): type is PrimitiveType {
     return (
       type.kind === "Primitive" &&
-      ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize"].includes(
-        type.name,
-      )
+      [
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "usize",
+        "isize",
+      ].includes(type.name)
     );
   }
 
   private isSignedIntegerType(type: Type): type is PrimitiveType {
     return (
       type.kind === "Primitive" &&
-      ["i8", "i16", "i32", "i64"].includes(type.name)
+      ["i8", "i16", "i32", "i64", "isize"].includes(type.name)
     );
   }
 
@@ -4597,6 +4620,7 @@ export class Checker {
         "u32",
         "u64",
         "usize",
+        "isize",
         "f32",
         "f64",
         "bool",
@@ -4624,6 +4648,7 @@ export class Checker {
         "u32",
         "u64",
         "usize",
+        "isize",
         "f32",
         "f64",
         "bool",
