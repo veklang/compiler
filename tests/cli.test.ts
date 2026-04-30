@@ -1783,6 +1783,59 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs custom Neg/Not/BitAnd/BitOr/BitXor/ShiftLeft/ShiftRight trait satisfactions", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct Bits {
+  v: i32;
+  satisfies Neg<Bits>          { fn neg(self) -> Bits    { return Bits { v: -self.v }; } }
+  satisfies Not<Bits>          { fn not(self) -> Bits    { return Bits { v: self.v ^ -1 }; } }
+  satisfies BitAnd<Bits, Bits> { fn bitand(self, rhs: Bits) -> Bits { return Bits { v: self.v & rhs.v }; } }
+  satisfies BitOr<Bits, Bits>  { fn bitor(self, rhs: Bits)  -> Bits { return Bits { v: self.v | rhs.v }; } }
+  satisfies BitXor<Bits, Bits> { fn bitxor(self, rhs: Bits) -> Bits { return Bits { v: self.v ^ rhs.v }; } }
+  satisfies ShiftLeft<Bits, Bits>  { fn shl(self, rhs: Bits) -> Bits { return Bits { v: self.v << rhs.v }; } }
+  satisfies ShiftRight<Bits, Bits> { fn shr(self, rhs: Bits) -> Bits { return Bits { v: self.v >> rhs.v }; } }
+}
+
+fn main() -> i32 {
+  let a = Bits { v: 12 };
+  let b = Bits { v: 2 };
+  let neg_a = -a;
+  let not_a = !a;
+  let and_ab = a & b;
+  let or_ab  = a | b;
+  let xor_ab = a ^ b;
+  let shl_ab = a << b;
+  let shr_ab = a >> b;
+  if neg_a.v != -12 { return 1; }
+  if not_a.v != (12 ^ -1) { return 2; }
+  if and_ab.v != (12 & 2) { return 3; }
+  if or_ab.v  != (12 | 2) { return 4; }
+  if xor_ab.v != (12 ^ 2) { return 5; }
+  if shl_ab.v != (12 << 2) { return 6; }
+  if shr_ab.v != (12 >> 2) { return 7; }
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs custom Add/Sub/Mul/Div/Rem trait satisfactions", () => {
     if (!hasMuslGcc()) return;
 

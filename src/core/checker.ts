@@ -1433,6 +1433,12 @@ export class Checker {
     }
 
     if (["&", "|", "^"].includes(operator)) {
+      const customOutput = this.lookupBitwiseOutputType(
+        targetType,
+        valueType,
+        operator,
+      );
+      if (customOutput) return customOutput;
       if (!this.isIntegerType(targetType) || !this.isIntegerType(valueType)) {
         this.report(
           "Bitwise operators require integer operands.",
@@ -1452,6 +1458,12 @@ export class Checker {
     }
 
     if (operator === "<<" || operator === ">>") {
+      const customOutput = this.lookupBitwiseOutputType(
+        targetType,
+        valueType,
+        operator,
+      );
+      if (customOutput) return customOutput;
       if (!this.isIntegerType(targetType) || !this.isIntegerType(valueType)) {
         this.report(
           "Shift operators require integer operands.",
@@ -1859,6 +1871,12 @@ export class Checker {
     }
 
     if (["&", "|", "^"].includes(node.operator)) {
+      const customOutput = this.lookupBitwiseOutputType(
+        left,
+        right,
+        node.operator,
+      );
+      if (customOutput) return customOutput;
       if (!this.isIntegerType(left) || !this.isIntegerType(right)) {
         this.report(
           "Bitwise operators require integer operands.",
@@ -1880,6 +1898,12 @@ export class Checker {
     }
 
     if (["<<", ">>"].includes(node.operator)) {
+      const customOutput = this.lookupBitwiseOutputType(
+        left,
+        right,
+        node.operator,
+      );
+      if (customOutput) return customOutput;
       if (!this.isIntegerType(left) || !this.isIntegerType(right)) {
         this.report(
           "Shift operators require integer operands.",
@@ -1940,6 +1964,10 @@ export class Checker {
       this.evaluateIntegerConstant(node.argument) !== null
         ? numericExpected
         : this.checkExpression(node.argument, scope, numericExpected);
+    if (node.operator === "!" || node.operator === "-") {
+      const customOutput = this.lookupUnaryOutputType(argument, node.operator);
+      if (customOutput) return customOutput;
+    }
     if (node.operator === "!") {
       if (!this.isBooleanType(argument)) {
         this.report("Unary '!' requires a bool operand.", node.span, "E2101");
@@ -4305,6 +4333,82 @@ export class Checker {
     return null;
   }
 
+  private bitwiseTraitName(
+    operator: string,
+  ): "BitAnd" | "BitOr" | "BitXor" | "ShiftLeft" | "ShiftRight" | null {
+    if (operator === "&") return "BitAnd";
+    if (operator === "|") return "BitOr";
+    if (operator === "^") return "BitXor";
+    if (operator === "<<") return "ShiftLeft";
+    if (operator === ">>") return "ShiftRight";
+    return null;
+  }
+
+  private lookupUnaryOutputType(operand: Type, operator: string): Type | null {
+    const traitName =
+      operator === "-" ? "Neg" : operator === "!" ? "Not" : null;
+    if (!traitName) return null;
+
+    if (operand.kind === "Named") {
+      const satisfaction = operand.symbol?.satisfactions?.find((s) => {
+        const substituted = this.substituteOwnerTypeArgs(s.trait, operand);
+        return substituted.name === traitName;
+      });
+      if (!satisfaction) return null;
+      const substituted = this.substituteOwnerTypeArgs(
+        satisfaction.trait,
+        operand,
+      );
+      return substituted.typeArgs?.[0] ?? null;
+    }
+
+    if (operand.kind === "TypeParam") {
+      const bound = operand.bounds.find((b) => b.name === traitName);
+      if (!bound) return null;
+      return bound.typeArgs?.[0] ?? null;
+    }
+
+    return null;
+  }
+
+  private lookupBitwiseOutputType(
+    left: Type,
+    right: Type,
+    operator: string,
+  ): Type | null {
+    const traitName = this.bitwiseTraitName(operator);
+    if (!traitName) return null;
+
+    if (left.kind === "Named") {
+      const satisfaction = left.symbol?.satisfactions?.find((s) => {
+        const substituted = this.substituteOwnerTypeArgs(s.trait, left);
+        return substituted.name === traitName;
+      });
+      if (!satisfaction) return null;
+      const substituted = this.substituteOwnerTypeArgs(
+        satisfaction.trait,
+        left,
+      );
+      const rhs = substituted.typeArgs?.[0];
+      const output = substituted.typeArgs?.[1];
+      if (!rhs || !output) return null;
+      if (!this.typeEquals(rhs, right)) return null;
+      return output;
+    }
+
+    if (left.kind === "TypeParam") {
+      const bound = left.bounds.find((b) => b.name === traitName);
+      if (!bound) return null;
+      const rhs = bound.typeArgs?.[0];
+      const output = bound.typeArgs?.[1];
+      if (!rhs || !output) return null;
+      if (!this.typeEquals(rhs, right)) return null;
+      return output;
+    }
+
+    return null;
+  }
+
   private lookupArithmeticOutputType(
     left: Type,
     right: Type,
@@ -4466,6 +4570,29 @@ export class Checker {
       if (trait.name === "Defaultable") return true;
       if (["Add", "Sub", "Mul", "Div", "Rem"].includes(trait.name)) {
         if (!this.isNumericType(type)) return false;
+        const rhs = trait.typeArgs?.[0];
+        const out = trait.typeArgs?.[1];
+        if (!rhs || !out) return true;
+        return this.typeEquals(type, rhs) && this.typeEquals(type, out);
+      }
+      if (trait.name === "Neg" || trait.name === "Not") {
+        if (trait.name === "Neg" && !this.isNumericType(type)) return false;
+        if (
+          trait.name === "Not" &&
+          !this.isBooleanType(type) &&
+          !this.isIntegerType(type)
+        )
+          return false;
+        const out = trait.typeArgs?.[0];
+        if (!out) return true;
+        return this.typeEquals(type, out);
+      }
+      if (
+        ["BitAnd", "BitOr", "BitXor", "ShiftLeft", "ShiftRight"].includes(
+          trait.name,
+        )
+      ) {
+        if (!this.isIntegerType(type)) return false;
         const rhs = trait.typeArgs?.[0];
         const out = trait.typeArgs?.[1];
         if (!rhs || !out) return true;

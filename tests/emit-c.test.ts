@@ -1164,4 +1164,31 @@ fn sum(a: Vec2, b: Vec2) -> Vec2 {
     );
     assert.ok(c.includes("__vek_fn_Vec2_add(v0, v1)"));
   });
+
+  test("emits Neg satisfaction as a method call on unary -", () => {
+    const c = emitOk(`
+struct Vec2 {
+  x: i32;
+  y: i32;
+  satisfies Neg<Vec2> {
+    fn neg(self) -> Vec2 { return Vec2 { x: -self.x, y: -self.y }; }
+  }
+}
+fn negate(a: Vec2) -> Vec2 { return -a; }
+`);
+    assert.ok(c.includes("__vek_fn_Vec2_neg(v0)"));
+  });
+
+  test("emits BitAnd satisfaction as a method call on &", () => {
+    const c = emitOk(`
+struct Bits {
+  v: i32;
+  satisfies BitAnd<Bits, Bits> {
+    fn bitand(self, rhs: Bits) -> Bits { return Bits { v: self.v & rhs.v }; }
+  }
+}
+fn mask(a: Bits, b: Bits) -> Bits { return a & b; }
+`);
+    assert.ok(c.includes("__vek_fn_Bits_bitand(v0, v1)"));
+  });
 });

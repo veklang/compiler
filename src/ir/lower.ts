@@ -1733,9 +1733,11 @@ function lowerCompoundOperation(
 
   if (left.type.kind === "named") {
     const arithMethod = arithmeticMethodName(operator);
-    if (arithMethod) {
+    const bitMethod = bitwiseMethodName(operator);
+    const dispatchMethod = arithMethod ?? bitMethod;
+    if (dispatchMethod) {
       const linkName = context.methodLinks.get(
-        methodKey(left.type.name, arithMethod),
+        methodKey(left.type.name, dispatchMethod),
       );
       if (linkName) {
         const target = nextTemp(context);
@@ -3276,11 +3278,13 @@ function lowerBinary(
 
   if (type.kind !== "primitive" && type.kind !== "pointer") {
     const arithMethod = arithmeticMethodName(expression.operator);
-    if (arithMethod) {
+    const bitMethod = bitwiseMethodName(expression.operator);
+    const dispatchMethod = arithMethod ?? bitMethod;
+    if (dispatchMethod) {
       const leftType = typeFromNodeInContext(context, expression.left);
       if (leftType.kind === "named") {
         const linkName = context.methodLinks.get(
-          methodKey(leftType.name, arithMethod),
+          methodKey(leftType.name, dispatchMethod),
         );
         if (linkName) {
           return lowerCustomArithmetic(
@@ -3546,6 +3550,23 @@ function arithmeticMethodName(
   if (operator === "*") return "mul";
   if (operator === "/") return "div";
   if (operator === "%") return "rem";
+  return null;
+}
+
+function bitwiseMethodName(
+  operator: string,
+): "bitand" | "bitor" | "bitxor" | "shl" | "shr" | null {
+  if (operator === "&") return "bitand";
+  if (operator === "|") return "bitor";
+  if (operator === "^") return "bitxor";
+  if (operator === "<<") return "shl";
+  if (operator === ">>") return "shr";
+  return null;
+}
+
+function unaryMethodName(operator: string): "neg" | "not" | null {
+  if (operator === "-") return "neg";
+  if (operator === "!") return "not";
   return null;
 }
 
@@ -3932,10 +3953,11 @@ function lowerUnary(
   expression: UnaryExpression,
   context: LowerContext,
 ): IrOperand {
-  const target = nextTemp(context);
   const type = typeFromNodeInContext(context, expression);
   const argument = lowerExpression(expression.argument, context);
+
   if (expression.operator === "*") {
+    const target = nextTemp(context);
     context.currentBlock.instructions.push({
       kind: "pointer_load",
       target,
@@ -3945,6 +3967,34 @@ function lowerUnary(
     });
     return { kind: "temp", id: target, type };
   }
+
+  if (type.kind !== "primitive" && type.kind !== "pointer") {
+    const methodName = unaryMethodName(expression.operator);
+    if (methodName && argument.type.kind === "named") {
+      const linkName = context.methodLinks.get(
+        methodKey(argument.type.name, methodName),
+      );
+      if (linkName) {
+        const target = nextTemp(context);
+        const calleeType: IrType = {
+          kind: "function",
+          params: [{ type: argument.type, mutable: false }],
+          returnType: type,
+        };
+        context.currentBlock.instructions.push({
+          kind: "call",
+          target,
+          callee: { kind: "function", name: linkName, type: calleeType },
+          args: [argument],
+          type,
+          span: expression.span,
+        });
+        return { kind: "temp", id: target, type };
+      }
+    }
+  }
+
+  const target = nextTemp(context);
   context.currentBlock.instructions.push({
     kind: "unary",
     target,

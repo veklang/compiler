@@ -2144,6 +2144,86 @@ fn main() -> void {
 `);
   });
 
+  test("struct satisfying Neg allows unary -", () => {
+    checkOk(`
+struct Vec2 {
+  x: i32;
+  y: i32;
+  satisfies Neg<Vec2> {
+    fn neg(self) -> Vec2 { return Vec2 { x: -self.x, y: -self.y }; }
+  }
+}
+fn main() -> void {
+  let a = Vec2 { x: 1, y: 2 };
+  let _b: Vec2 = -a;
+}
+`);
+  });
+
+  test("struct satisfying Not allows unary !", () => {
+    checkOk(`
+struct Flags {
+  bits: i32;
+  satisfies Not<Flags> {
+    fn not(self) -> Flags { return Flags { bits: self.bits }; }
+  }
+}
+fn main() -> void {
+  let f = Flags { bits: 0 };
+  let _g: Flags = !f;
+}
+`);
+  });
+
+  test("unary - on named type without Neg is rejected", () => {
+    const result = check(`
+struct Nope { x: i32; }
+fn main() -> void { let _a = -Nope { x: 1 }; }
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
+  test("unary ! on named type without Not is rejected", () => {
+    const result = check(`
+struct Nope { x: i32; }
+fn main() -> void { let _a = !Nope { x: 1 }; }
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
+  test("struct satisfying BitAnd, BitOr, BitXor, ShiftLeft, ShiftRight allows those operators", () => {
+    checkOk(`
+struct Bits {
+  v: i32;
+  satisfies BitAnd<Bits, Bits> { fn bitand(self, rhs: Bits) -> Bits { return Bits { v: self.v & rhs.v }; } }
+  satisfies BitOr<Bits, Bits>  { fn bitor(self, rhs: Bits)  -> Bits { return Bits { v: self.v | rhs.v }; } }
+  satisfies BitXor<Bits, Bits> { fn bitxor(self, rhs: Bits) -> Bits { return Bits { v: self.v ^ rhs.v }; } }
+  satisfies ShiftLeft<Bits, Bits>  { fn shl(self, rhs: Bits) -> Bits { return Bits { v: self.v << rhs.v }; } }
+  satisfies ShiftRight<Bits, Bits> { fn shr(self, rhs: Bits) -> Bits { return Bits { v: self.v >> rhs.v }; } }
+}
+fn main() -> void {
+  let a = Bits { v: 12 };
+  let b = Bits { v: 2 };
+  let _and: Bits = a & b;
+  let _or:  Bits = a | b;
+  let _xor: Bits = a ^ b;
+  let _shl: Bits = a << b;
+  let _shr: Bits = a >> b;
+}
+`);
+  });
+
+  test("& on named type without BitAnd is rejected", () => {
+    const result = check(`
+struct Nope { x: i32; }
+fn main() -> void {
+  let a = Nope { x: 1 };
+  let _b = a & a;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
   test("primitives implicitly satisfy Add<T, T>", () => {
     checkOk(`
 fn needs_add<T: Add<T, T>>(a: T, b: T) -> T { return a + b; }
