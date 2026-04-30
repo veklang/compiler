@@ -15,8 +15,7 @@ import { lowerProgramToIr } from "@/ir/lower";
 import { analyzeInitializers } from "@/passes/initializers";
 import type { Diagnostic } from "@/types/diagnostic";
 
-export const defaultToolchainPrefix =
-  "musl-gcc -std=c99 -Wall -Wextra -O3 -s -flto -ffunction-sections -fdata-sections -Wl,--gc-sections -D_FORTIFY_SOURCE=2 -fstack-protector-strong -static";
+export const defaultToolchainCommand = "cc -std=c99 -Wall -Wextra";
 
 export const defaultRuntimeHeaderPath = path.resolve(
   __dirname,
@@ -25,8 +24,15 @@ export const defaultRuntimeHeaderPath = path.resolve(
 
 interface CliOptions {
   sourcePath: string;
+  nativeInputs: string[];
   runtimeHeaderPath: string;
-  toolchainPrefix: string;
+  optimizationLevel: "0" | "1" | "2" | "3" | "s";
+  staticLink: boolean;
+  stripSymbols: boolean;
+  lto: boolean;
+  libraryPaths: string[];
+  libraries: string[];
+  rawFlags: string[];
   preserveTemps: boolean;
   outputPath: string;
   packages: Map<string, string>;
@@ -41,7 +47,14 @@ interface CompileResult {
 export function parseCliArgs(argv: string[]): CliOptions {
   let sourcePath: string | undefined;
   let runtimeHeaderPath = defaultRuntimeHeaderPath;
-  let toolchainPrefix = defaultToolchainPrefix;
+  const nativeInputs: string[] = [];
+  let optimizationLevel: CliOptions["optimizationLevel"] = "2";
+  let staticLink = false;
+  let stripSymbols = false;
+  let lto = false;
+  const libraryPaths: string[] = [];
+  const libraries: string[] = [];
+  const rawFlags: string[] = [];
   let preserveTemps = false;
   const packages = new Map<string, string>();
 
@@ -57,8 +70,56 @@ export function parseCliArgs(argv: string[]): CliOptions {
       continue;
     }
 
-    if (arg === "--toolchain-prefix") {
-      toolchainPrefix = requireFlagValue(argv, ++i, arg);
+    if (arg === "--optimization-level") {
+      optimizationLevel = parseOptimizationLevel(
+        requireFlagValue(argv, ++i, arg),
+        arg,
+      );
+      continue;
+    }
+
+    if (/^-O[0123s]$/.test(arg)) {
+      optimizationLevel = arg.slice(2) as CliOptions["optimizationLevel"];
+      continue;
+    }
+
+    if (arg === "--static") {
+      staticLink = true;
+      continue;
+    }
+
+    if (arg === "--strip") {
+      stripSymbols = true;
+      continue;
+    }
+
+    if (arg === "--lto") {
+      lto = true;
+      continue;
+    }
+
+    if (arg === "--library-path" || arg === "-L") {
+      libraryPaths.push(validateLibraryPath(requireFlagValue(argv, ++i, arg)));
+      continue;
+    }
+
+    if (arg.startsWith("-L") && arg.length > 2) {
+      libraryPaths.push(validateLibraryPath(arg.slice(2)));
+      continue;
+    }
+
+    if (arg === "--library" || arg === "-l") {
+      libraries.push(validateLibraryName(requireFlagValue(argv, ++i, arg)));
+      continue;
+    }
+
+    if (arg.startsWith("-l") && arg.length > 2) {
+      libraries.push(validateLibraryName(arg.slice(2)));
+      continue;
+    }
+
+    if (arg === "--raw-flags") {
+      rawFlags.push(requireRawFlagValue(argv, ++i, arg));
       continue;
     }
 
@@ -78,10 +139,26 @@ export function parseCliArgs(argv: string[]): CliOptions {
       throw new CliUsage(`Unknown flag: ${arg}\n\n${usage()}`, 1);
     }
 
-    if (sourcePath) {
-      throw new CliUsage(`Unexpected extra path: ${arg}\n\n${usage()}`, 1);
+    const inputPath = resolveExistingInput(arg);
+    const ext = path.extname(inputPath);
+    if (ext === ".vek") {
+      if (sourcePath) {
+        throw new CliUsage(
+          `Multiple Vek entry files are not supported: ${arg}\n\n${usage()}`,
+          1,
+        );
+      }
+      sourcePath = inputPath;
+      continue;
     }
-    sourcePath = arg;
+    if (ext === ".c" || ext === ".o" || ext === ".a") {
+      nativeInputs.push(inputPath);
+      continue;
+    }
+    throw new CliUsage(
+      `Unsupported input extension '${ext || "<none>"}' for ${arg}\n\n${usage()}`,
+      1,
+    );
   }
 
   if (!sourcePath) throw new CliUsage(usage(), 1);
@@ -89,8 +166,15 @@ export function parseCliArgs(argv: string[]): CliOptions {
   const absoluteSource = path.resolve(sourcePath);
   return {
     sourcePath: absoluteSource,
+    nativeInputs,
     runtimeHeaderPath: path.resolve(runtimeHeaderPath),
-    toolchainPrefix,
+    optimizationLevel,
+    staticLink,
+    stripSymbols,
+    lto,
+    libraryPaths,
+    libraries,
+    rawFlags,
     preserveTemps,
     outputPath: defaultOutputPath(absoluteSource),
     packages,
@@ -131,7 +215,7 @@ export function compileFile(options: CliOptions): CompileResult {
   fs.writeFileSync(cPath, c, "utf8");
 
   try {
-    runToolchain(options.toolchainPrefix, cPath, options.outputPath);
+    runToolchain(options, cPath);
   } finally {
     if (!options.preserveTemps) {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -142,19 +226,39 @@ export function compileFile(options: CliOptions): CompileResult {
 }
 
 export function buildToolchainCommand(
-  toolchainPrefix: string,
+  options: Pick<
+    CliOptions,
+    | "nativeInputs"
+    | "optimizationLevel"
+    | "staticLink"
+    | "stripSymbols"
+    | "lto"
+    | "libraryPaths"
+    | "libraries"
+    | "rawFlags"
+    | "outputPath"
+  >,
   cPath: string,
-  outputPath: string,
 ): string {
-  return `${toolchainPrefix} ${shellQuote(cPath)} -o ${shellQuote(outputPath)}`;
+  const parts = [
+    defaultToolchainCommand,
+    `-O${options.optimizationLevel}`,
+    ...(options.lto ? ["-flto"] : []),
+    ...(options.staticLink ? ["-static"] : []),
+    ...(options.stripSymbols ? ["-s"] : []),
+    shellQuote(cPath),
+    ...options.nativeInputs.map(shellQuote),
+    ...options.libraryPaths.flatMap((p) => ["-L", shellQuote(p)]),
+    ...options.libraries.map((name) => `-l${shellQuote(name)}`),
+    ...options.rawFlags.map(shellQuote),
+    "-o",
+    shellQuote(options.outputPath),
+  ];
+  return parts.join(" ");
 }
 
-function runToolchain(
-  toolchainPrefix: string,
-  cPath: string,
-  outputPath: string,
-) {
-  const command = buildToolchainCommand(toolchainPrefix, cPath, outputPath);
+function runToolchain(options: CliOptions, cPath: string) {
+  const command = buildToolchainCommand(options, cPath);
   const result = spawnSync(command, {
     shell: true,
     encoding: "utf8",
@@ -177,6 +281,66 @@ function requireFlagValue(argv: string[], index: number, flag: string): string {
     throw new CliUsage(`Missing value for ${flag}\n\n${usage()}`, 1);
   }
   return value;
+}
+
+function requireRawFlagValue(
+  argv: string[],
+  index: number,
+  flag: string,
+): string {
+  const value = argv[index];
+  if (!value) throw new CliUsage(`Missing value for ${flag}\n\n${usage()}`, 1);
+  return value;
+}
+
+function parseOptimizationLevel(
+  value: string,
+  flag: string,
+): CliOptions["optimizationLevel"] {
+  if (value === "0" || value === "1" || value === "2" || value === "3")
+    return value;
+  if (value === "s" || value === "S") return "s";
+  throw new CliUsage(
+    `Invalid value for ${flag}: ${value}. Expected 0, 1, 2, 3, or s.\n\n${usage()}`,
+    1,
+  );
+}
+
+function resolveExistingInput(inputPath: string): string {
+  const resolved = path.resolve(inputPath);
+  let stat: ReturnType<typeof fs.statSync>;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    throw new CliUsage(`Input path '${inputPath}' does not exist`, 1);
+  }
+  if (!stat.isFile())
+    throw new CliUsage(`Input path '${inputPath}' is not a file`, 1);
+  return resolved;
+}
+
+function validateLibraryPath(libraryPath: string): string {
+  const resolved = path.resolve(libraryPath);
+  let stat: ReturnType<typeof fs.statSync>;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    throw new CliUsage(`Library path '${libraryPath}' does not exist`, 1);
+  }
+  if (!stat.isDirectory()) {
+    throw new CliUsage(`Library path '${libraryPath}' is not a directory`, 1);
+  }
+  return resolved;
+}
+
+function validateLibraryName(name: string): string {
+  if (!/^[A-Za-z0-9_+.:=-]+$/.test(name)) {
+    throw new CliUsage(
+      `Invalid library name '${name}'. Library names may contain letters, numbers, '_', '+', '.', ':', '=', and '-'.`,
+      1,
+    );
+  }
+  return name;
 }
 
 function loadPackageDir(rootPath: string): { name: string; rootPath: string } {
@@ -231,11 +395,18 @@ function shellQuote(value: string): string {
 
 function usage(): string {
   return [
-    "Usage: vekc <path-to-file.vek> [flags]",
+    "Usage: vekc [flags] <path-to-file.vek> [native.c native.o lib.a ...]",
     "",
     "Flags:",
     "  --runtime-header <path>       Runtime header path. Defaults to ../runtime/dist/vek_runtime.h from this compiler.",
-    "  --toolchain-prefix <command>  C toolchain command before source path, -o, and output path.",
+    "  --optimization-level <level>  Set C optimization level: 0, 1, 2, 3, or s. Defaults to 2.",
+    "  -O0|-O1|-O2|-O3|-Os          Shorthand for --optimization-level.",
+    "  --static                     Request static linking.",
+    "  --strip                      Strip symbols from the output binary.",
+    "  --lto                        Enable C compiler link-time optimization.",
+    "  --library-path <path>, -L    Add a native library search path. May be repeated.",
+    "  --library <name>, -l         Link a native library by name. May be repeated.",
+    "  --raw-flags <arg>            Append one raw toolchain flag. May be repeated.",
     "  --package <path>              Register a package from its directory (reads name from package.toml). May be repeated.",
     "  --preserve-temp              Keep temporary emitted C files under /tmp.",
     "  -h, --help                   Show this help.",

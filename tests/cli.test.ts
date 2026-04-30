@@ -5,7 +5,7 @@ import * as path from "node:path";
 import {
   buildToolchainCommand,
   compileFile,
-  defaultToolchainPrefix,
+  defaultToolchainCommand,
   parseCliArgs,
 } from "@/index";
 import { assert } from "./helpers";
@@ -22,8 +22,8 @@ const withTempFile = (source: string, run: (filePath: string) => void) => {
   }
 };
 
-const hasMuslGcc = () =>
-  spawnSync("command -v musl-gcc", {
+const hasCc = () =>
+  spawnSync("command -v cc", {
     shell: true,
     encoding: "utf8",
     stdio: "pipe",
@@ -31,44 +31,145 @@ const hasMuslGcc = () =>
 
 describe("cli", () => {
   test("parses source path and optional backend flags", () => {
-    const options = parseCliArgs([
-      "main.vek",
-      "--runtime-header",
-      "../runtime/dist/vek_runtime.h",
-      "--toolchain-prefix",
-      "cc -O2",
-      "--preserve-temp",
-    ]);
+    withTempFile("", (filePath) => {
+      const root = path.dirname(filePath);
+      const cPath = path.join(root, "native.c");
+      const oPath = path.join(root, "native.o");
+      const aPath = path.join(root, "libnative.a");
+      fs.writeFileSync(cPath, "", "utf8");
+      fs.writeFileSync(oPath, "", "utf8");
+      fs.writeFileSync(aPath, "", "utf8");
 
-    assert.equal(options.sourcePath, path.resolve("main.vek"));
-    assert.equal(
-      options.runtimeHeaderPath,
-      path.resolve("../runtime/dist/vek_runtime.h"),
-    );
-    assert.equal(options.toolchainPrefix, "cc -O2");
-    assert.equal(options.preserveTemps, true);
-    assert.equal(options.outputPath, path.resolve("main"));
+      const options = parseCliArgs([
+        filePath,
+        cPath,
+        oPath,
+        aPath,
+        "--runtime-header",
+        "../runtime/dist/vek_runtime.h",
+        "--preserve-temp",
+        "--static",
+        "--strip",
+        "--lto",
+        "-Os",
+      ]);
+
+      assert.equal(options.sourcePath, filePath);
+      assert.deepEqual(options.nativeInputs, [cPath, oPath, aPath]);
+      assert.equal(
+        options.runtimeHeaderPath,
+        path.resolve("../runtime/dist/vek_runtime.h"),
+      );
+      assert.equal(options.preserveTemps, true);
+      assert.equal(options.staticLink, true);
+      assert.equal(options.stripSymbols, true);
+      assert.equal(options.lto, true);
+      assert.equal(options.optimizationLevel, "s");
+      assert.equal(options.outputPath, path.join(root, "main"));
+    });
   });
 
-  test("uses the default musl-oriented toolchain prefix", () => {
-    const options = parseCliArgs(["main.vek"]);
+  test("uses the default portable-ish C toolchain command and O2", () => {
+    withTempFile("", (filePath) => {
+      const options = parseCliArgs([filePath]);
 
-    assert.equal(options.toolchainPrefix, defaultToolchainPrefix);
-    assert.ok(options.toolchainPrefix.startsWith("musl-gcc "));
-    assert.ok(options.toolchainPrefix.includes("-static"));
+      assert.equal(defaultToolchainCommand, "cc -std=c99 -Wall -Wextra");
+      assert.equal(options.optimizationLevel, "2");
+      assert.equal(options.staticLink, false);
+      assert.equal(options.stripSymbols, false);
+      assert.equal(options.lto, false);
+    });
   });
 
-  test("appends emitted C path and output path to the toolchain prefix", () => {
+  test("builds toolchain command with native inputs and linker flags", () => {
     const command = buildToolchainCommand(
-      "musl-gcc -O3",
+      {
+        nativeInputs: ["/tmp/native file.c", "/tmp/native.o", "/tmp/libx.a"],
+        optimizationLevel: "3",
+        staticLink: true,
+        stripSymbols: true,
+        lto: true,
+        libraryPaths: ["/tmp/lib dir"],
+        libraries: ["m", "stdc++"],
+        rawFlags: ["-pthread", "-Wl,--as-needed"],
+        outputPath: "/tmp/a file",
+      },
       "/tmp/a file.c",
-      "/tmp/a file",
     );
 
-    assert.equal(command, "musl-gcc -O3 '/tmp/a file.c' -o '/tmp/a file'");
+    assert.equal(
+      command,
+      "cc -std=c99 -Wall -Wextra -O3 -flto -static -s '/tmp/a file.c' '/tmp/native file.c' '/tmp/native.o' '/tmp/libx.a' -L '/tmp/lib dir' -l'm' -l'stdc++' '-pthread' '-Wl,--as-needed' -o '/tmp/a file'",
+    );
   });
 
-  test("can preserve emitted C while using a fake successful toolchain", () => {
+  test("parses library flags and validates their paths and names", () => {
+    withTempFile("", (filePath) => {
+      const root = path.dirname(filePath);
+      const libDir = path.join(root, "lib dir");
+      fs.mkdirSync(libDir);
+
+      const options = parseCliArgs([
+        filePath,
+        "--library-path",
+        libDir,
+        "-L",
+        libDir,
+        `-L${libDir}`,
+        "--library",
+        "m",
+        "-l",
+        "stdc++",
+        "-l:liblocal.a",
+        "--raw-flags",
+        "-pthread",
+      ]);
+
+      assert.deepEqual(options.libraryPaths, [libDir, libDir, libDir]);
+      assert.deepEqual(options.libraries, ["m", "stdc++", ":liblocal.a"]);
+      assert.deepEqual(options.rawFlags, ["-pthread"]);
+    });
+  });
+
+  test("rejects invalid CLI inputs", () => {
+    withTempFile("", (filePath) => {
+      const root = path.dirname(filePath);
+      const otherVek = path.join(root, "other.vek");
+      const textFile = path.join(root, "notes.txt");
+      fs.writeFileSync(otherVek, "", "utf8");
+      fs.writeFileSync(textFile, "", "utf8");
+
+      assert.throws(() => parseCliArgs([filePath, otherVek]), /Multiple Vek/);
+      assert.throws(
+        () => parseCliArgs([filePath, textFile]),
+        /Unsupported input extension/,
+      );
+      assert.throws(
+        () => parseCliArgs([filePath, "--optimization-level", "fast"]),
+        /Invalid value/,
+      );
+      assert.throws(
+        () => parseCliArgs([filePath, "--library", "bad name"]),
+        /Invalid library name/,
+      );
+      assert.throws(
+        () => parseCliArgs([filePath, "--library-path", textFile]),
+        /not a directory/,
+      );
+      assert.throws(
+        () => parseCliArgs([path.join(root, "missing.vek")]),
+        /does not exist/,
+      );
+      assert.throws(
+        () => parseCliArgs([filePath, "--toolchain-prefix", "cc"]),
+        /Unknown flag/,
+      );
+    });
+  });
+
+  test("can preserve emitted C", () => {
+    if (!hasCc()) return;
+
     withTempFile(
       `
 fn main() -> void {
@@ -77,12 +178,7 @@ fn main() -> void {
 `,
       (filePath) => {
         const options = {
-          ...parseCliArgs([
-            filePath,
-            "--toolchain-prefix",
-            "true",
-            "--preserve-temp",
-          ]),
+          ...parseCliArgs([filePath, "--preserve-temp"]),
         };
         const result = compileFile(options);
 
@@ -94,13 +190,48 @@ fn main() -> void {
           );
         } finally {
           fs.rmSync(result.tempDir, { recursive: true, force: true });
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs with an extra native C input", () => {
+    if (!hasCc()) return;
+
+    withTempFile(
+      `
+unsafe extern "native_answer" fn native_answer() -> i32;
+
+fn main() -> i32 {
+  return unsafe { native_answer() };
+}
+`,
+      (filePath) => {
+        const cPath = path.join(path.dirname(filePath), "native.c");
+        fs.writeFileSync(
+          cPath,
+          "#include <stdint.h>\nint32_t native_answer(void) { return 42; }\n",
+          "utf8",
+        );
+        const options = parseCliArgs([filePath, cPath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
         }
       },
     );
   });
 
   test("compiles and runs a void main with the default toolchain", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -126,7 +257,7 @@ fn main() -> void {
   });
 
   test("compiles and runs implicit main return", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -153,7 +284,7 @@ fn main() {
   });
 
   test("compiles and runs panic through the runtime", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -180,7 +311,7 @@ fn main() -> void {
   });
 
   test("compiles and runs user-defined -> never wrapper", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -218,7 +349,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs global reads and writes", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -247,7 +378,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs lazy global initialization once", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -283,7 +414,7 @@ fn main() -> i32 {
   });
 
   test("panics on re-entrant lazy global initialization", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -324,7 +455,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs tuple construction and field access", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -355,7 +486,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs nullable narrowing", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -385,7 +516,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs function values", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -427,7 +558,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs type-qualified method references", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -468,7 +599,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs array creation, index read, and for loop", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -499,7 +630,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs custom iterable for loop", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -556,7 +687,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs short-circuit logical operators", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -597,7 +728,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs direct instance method calls", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -632,7 +763,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs an exported extern symbol alias", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -662,7 +793,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs compound assignments", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -705,7 +836,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs signed wrapping arithmetic", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -745,7 +876,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs isize wrapping arithmetic", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -782,7 +913,7 @@ fn main() -> i32 {
   });
 
   test("panics on invalid runtime integer shift", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -813,7 +944,7 @@ fn main() -> void {
   });
 
   test("panics on runtime integer division by zero", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -845,7 +976,7 @@ fn main() -> void {
   });
 
   test("compiles and runs compound assignment places", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -886,7 +1017,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs generic function specialization for struct types", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -922,7 +1053,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs generic method specialization for struct types", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -963,7 +1094,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs generic struct specialization for aggregate fields", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1004,7 +1135,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs trait satisfaction methods on generic struct owners", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1051,7 +1182,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs generic method specialization on generic struct owner", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1092,7 +1223,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs generic enum specializations and methods", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1147,7 +1278,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs string, nullable, and tuple match patterns", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1190,7 +1321,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs core Result, Ordering, and nullable unwrap helpers", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1240,7 +1371,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs custom trait satisfaction through a generic bound", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1285,7 +1416,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs string len, concat, and eq", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1319,7 +1450,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs aggregate and custom equality", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1393,7 +1524,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs UTF-8 scalar string len and indexing", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1429,7 +1560,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs retained string aliases", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1460,7 +1591,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs retained aggregate string fields", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1500,7 +1631,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs CoW array alias mutation", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1529,7 +1660,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs CoW string array element mutation", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1563,7 +1694,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs CoW struct field array mutation", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1596,7 +1727,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs mut self method calls by reference", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1632,7 +1763,7 @@ fn main() -> i32 {
   });
 
   test("compiled array indexing panics out of bounds", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1663,7 +1794,7 @@ fn main() -> i32 {
   });
 
   test("compiled string indexing panics out of bounds", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1695,7 +1826,7 @@ fn main() -> i32 {
   });
 
   test("compiled Result unwrap panics on Err", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1726,7 +1857,7 @@ fn main() -> i32 {
   });
 
   test("compiled nullable unwrap panics on null", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1757,7 +1888,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs string.to_cstr() passed to an extern cstr fn", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1789,7 +1920,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs unsafe extern fn with cstr and pointer arithmetic", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1818,7 +1949,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs unsafe fn wrapping pointer cast and offset", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1853,7 +1984,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs custom Neg/Not/BitAnd/BitOr/BitXor/ShiftLeft/ShiftRight trait satisfactions", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1906,7 +2037,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs custom Ordered trait comparisons", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -1958,7 +2089,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs custom Add/Sub/Mul/Div/Rem trait satisfactions", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `
@@ -2036,7 +2167,7 @@ fn main() -> i32 {
   });
 
   test("compiles and runs custom IndexGet and IndexSet trait satisfactions", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withTempFile(
       `

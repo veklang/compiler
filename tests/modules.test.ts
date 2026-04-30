@@ -13,8 +13,8 @@ import { compileFile, parseCliArgs } from "@/index";
 import { assert } from "./helpers";
 import { describe, test } from "./tester";
 
-const hasMuslGcc = () =>
-  spawnSync("command -v musl-gcc", {
+const hasCc = () =>
+  spawnSync("command -v cc", {
     shell: true,
     encoding: "utf8",
     stdio: "pipe",
@@ -343,7 +343,7 @@ pub struct Point {
   });
 
   test("compiles and runs named import across two files", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withProject(
       {
@@ -356,11 +356,7 @@ pub fn add(a: i32, b: i32) -> i32 { return a + b; }
 `,
       },
       (entry) => {
-        const options = parseCliArgs([
-          entry,
-          "--toolchain-prefix",
-          "musl-gcc -static -std=c99 -O2",
-        ]);
+        const options = parseCliArgs([entry]);
         compileFile(options);
         try {
           const result = spawnSync(options.outputPath, {
@@ -376,7 +372,7 @@ pub fn add(a: i32, b: i32) -> i32 { return a + b; }
   });
 
   test("compiles and runs namespace import across two files", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withProject(
       {
@@ -389,11 +385,7 @@ pub fn add(a: i32, b: i32) -> i32 { return a + b; }
 `,
       },
       (entry) => {
-        const options = parseCliArgs([
-          entry,
-          "--toolchain-prefix",
-          "musl-gcc -static -std=c99 -O2",
-        ]);
+        const options = parseCliArgs([entry]);
         compileFile(options);
         try {
           const result = spawnSync(options.outputPath, {
@@ -409,7 +401,7 @@ pub fn add(a: i32, b: i32) -> i32 { return a + b; }
   });
 
   test("compiles and runs three-module chain", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withProject(
       {
@@ -426,11 +418,7 @@ pub fn base() -> i32 { return 40; }
 `,
       },
       (entry) => {
-        const options = parseCliArgs([
-          entry,
-          "--toolchain-prefix",
-          "musl-gcc -static -std=c99 -O2",
-        ]);
+        const options = parseCliArgs([entry]);
         compileFile(options);
         try {
           const result = spawnSync(options.outputPath, {
@@ -446,7 +434,7 @@ pub fn base() -> i32 { return 40; }
   });
 
   test("compiles and runs cross-module struct usage", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withProject(
       {
@@ -465,11 +453,7 @@ pub struct Point {
 `,
       },
       (entry) => {
-        const options = parseCliArgs([
-          entry,
-          "--toolchain-prefix",
-          "musl-gcc -static -std=c99 -O2",
-        ]);
+        const options = parseCliArgs([entry]);
         compileFile(options);
         try {
           const result = spawnSync(options.outputPath, {
@@ -639,7 +623,7 @@ fn main() -> void { return; }
   });
 
   test("compiles and runs named import from package", () => {
-    if (!hasMuslGcc()) return;
+    if (!hasCc()) return;
 
     withPackageProject(
       {
@@ -656,13 +640,7 @@ pub fn add(a: i32, b: i32) -> i32 { return a + b; }
         },
       },
       (entry, pkgDirs) => {
-        const options = parseCliArgs([
-          entry,
-          "--toolchain-prefix",
-          "musl-gcc -static -std=c99 -O2",
-          "--package",
-          pkgDirs["mylib"],
-        ]);
+        const options = parseCliArgs([entry, "--package", pkgDirs["mylib"]]);
         compileFile(options);
         try {
           const result = spawnSync(options.outputPath, {
