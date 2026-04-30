@@ -1562,6 +1562,75 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs CoW struct field array mutation", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct Buf {
+  data: i32[];
+}
+
+fn main() -> i32 {
+  let a = Buf { data: [1, 2] };
+  let b = a;
+  a.data[0] = 9;
+  return b.data[0] * 10 + a.data[0];
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 19);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs mut self method calls by reference", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct Counter {
+  value: i32;
+
+  fn increment(mut self) -> void {
+    self.value = self.value + 1;
+  }
+}
+
+fn main() -> i32 {
+  let c = Counter { value: 41 };
+  c.increment();
+  return c.value;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiled array indexing panics out of bounds", () => {
     if (!hasMuslGcc()) return;
 

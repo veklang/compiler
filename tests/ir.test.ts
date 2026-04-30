@@ -1297,4 +1297,54 @@ fn sum() -> i32 {
     assert.ok(!dump.includes("array_len"));
     assert.ok(!dump.includes("array_get"));
   });
+
+  test("lowers struct field indexed assignment with CoW detach", () => {
+    const ir = irOk(`
+struct Buf {
+  data: i32[];
+}
+
+fn set_first(mut buf: Buf) -> void {
+  buf.data[0] = 99;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("get_field"));
+    assert.ok(dump.includes("detach"));
+    assert.ok(dump.includes("set_field"));
+    assert.ok(dump.includes("array_set"));
+    assert.equal(ir.runtime.copyOnWrite, true);
+  });
+
+  test("lowers mut self method call with mutable receiver", () => {
+    const ir = irOk(`
+struct Counter {
+  value: i32;
+
+  fn increment(mut self) -> void {
+    self.value = self.value + 1;
+  }
+}
+
+fn test() -> void {
+  let c = Counter { value: 0 };
+  c.increment();
+}
+`);
+
+    const fn = ir.declarations.find(
+      (decl) => decl.kind === "function" && decl.sourceName === "test",
+    );
+    assert.ok(fn && fn.kind === "function");
+    const call = fn.blocks
+      .flatMap((block) => block.instructions)
+      .find((instruction) => instruction.kind === "call");
+    assert.ok(call && call.kind === "call");
+    assert.equal(
+      call.callee.type.kind === "function" &&
+        call.callee.type.params[0]?.mutable,
+      true,
+    );
+  });
 });

@@ -923,6 +923,47 @@ fn set_first(mut xs: i32[]) -> void {
     assert.ok(c.includes("&(int32_t){"));
   });
 
+  test("emits struct field indexed assignment with CoW detach", () => {
+    const c = emitOk(`
+struct Buf {
+  data: i32[];
+}
+
+fn set_first(mut buf: Buf) -> void {
+  buf.data[0] = 42;
+}
+`);
+
+    assert.ok(c.includes("= (*v0).data;"));
+    assert.ok(c.includes("__vek_array_detach("));
+    assert.ok(c.includes("(*v0).data = "));
+    assert.ok(c.includes("__vek_array_set("));
+  });
+
+  test("emits direct mut self method calls by reference", () => {
+    const c = emitOk(`
+struct Counter {
+  value: i32;
+
+  fn increment(mut self) -> void {
+    self.value = self.value + 1;
+  }
+}
+
+fn test() -> void {
+  let c = Counter { value: 0 };
+  c.increment();
+}
+`);
+
+    assert.ok(
+      c.includes(
+        "static void __vek_fn_Counter_increment(__vek_struct_Counter *v0)",
+      ),
+    );
+    assert.ok(c.includes("__vek_fn_Counter_increment(&v0);"));
+  });
+
   test("emits for loop over array using __vek_array_len and __vek_array_get", () => {
     const c = emitOk(`
 fn sum(xs: i32[]) -> i32 {

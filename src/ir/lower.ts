@@ -4450,13 +4450,23 @@ function lowerInstanceMethodCall(
   const type = typeFromNodeInContext(context, expression);
   const returnsVoid = type.kind === "primitive" && type.name === "void";
   const target = nextTemp(context);
+  const rawCalleeType = context.checkResult.types.get(expression.callee) as
+    | { target?: { receiver?: { isMutable?: boolean } } }
+    | undefined;
+  const selfIsMutable = rawCalleeType?.target?.receiver?.isMutable === true;
   const args = [
     lowerExpression(expression.callee.object, context),
     ...expression.args.map((arg) => lowerExpression(arg, context)),
   ];
   const concreteCalleeType: IrType = {
     kind: "function",
-    params: args.map((arg) => ({ type: arg.type, mutable: false })),
+    params: args.map((arg, index) => ({
+      type: arg.type,
+      mutable:
+        index === 0
+          ? selfIsMutable
+          : calleeType.params[index - 1]?.mutable === true,
+    })),
     returnType: type,
   };
   context.currentBlock.instructions.push({
@@ -5060,72 +5070,129 @@ function detachArrayForIndexedMutation(
   context: LowerContext,
   span?: IrLocal["span"],
 ): IrOperand {
-  if (object.kind !== "IdentifierExpression") {
+  if (object.kind === "IdentifierExpression") {
+    const localId = context.locals.get(object.name);
+    if (localId) {
+      const type = context.localTypes.get(localId);
+      if (!type || !isArrayType(type)) return lowerExpression(object, context);
+
+      const localOperand: IrOperand = { kind: "local", id: localId, type };
+      if (!context.ownedLocals.has(localId)) {
+        context.currentBlock.instructions.push({
+          kind: "retain",
+          value: localOperand,
+          span,
+        });
+        context.runtime.refCounting = true;
+      }
+
+      const target = nextTemp(context);
+      context.currentBlock.instructions.push({
+        kind: "detach",
+        target,
+        value: localOperand,
+        type,
+        span,
+      });
+      context.currentBlock.instructions.push({
+        kind: "assign",
+        target: localId,
+        value: { kind: "temp", id: target, type },
+        span,
+      });
+      markLocalOwns(localId, { kind: "temp", id: target, type }, context);
+      context.runtime.copyOnWrite = true;
+      return localOperand;
+    }
+
+    const globalId = context.globals.get(object.name);
+    if (globalId) {
+      const type = context.globalTypes.get(globalId);
+      if (!type || !isArrayType(type)) return lowerExpression(object, context);
+      if (context.lazyGlobals.has(globalId)) {
+        context.currentBlock.instructions.push({
+          kind: "ensure_global_initialized",
+          globalId,
+          span,
+        });
+      }
+      const globalOperand: IrOperand = { kind: "global", id: globalId, type };
+      const target = nextTemp(context);
+      context.currentBlock.instructions.push({
+        kind: "detach",
+        target,
+        value: globalOperand,
+        type,
+        span,
+      });
+      context.currentBlock.instructions.push({
+        kind: "store_global",
+        globalId,
+        value: { kind: "temp", id: target, type },
+        span,
+      });
+      context.runtime.copyOnWrite = true;
+      return globalOperand;
+    }
+
     return lowerExpression(object, context);
   }
 
-  const localId = context.locals.get(object.name);
-  if (localId) {
-    const type = context.localTypes.get(localId);
-    if (!type || !isArrayType(type)) return lowerExpression(object, context);
-
-    const localOperand: IrOperand = { kind: "local", id: localId, type };
-    if (!context.ownedLocals.has(localId)) {
-      context.currentBlock.instructions.push({
-        kind: "retain",
-        value: localOperand,
-        span,
-      });
-      context.runtime.refCounting = true;
+  if (
+    object.kind === "MemberExpression" &&
+    object.object.kind === "IdentifierExpression"
+  ) {
+    const structName = object.object.name;
+    const fieldName = object.property.name;
+    const localId = context.locals.get(structName);
+    if (localId) {
+      const structType = context.localTypes.get(localId);
+      if (structType?.kind === "named") {
+        const field = context.structFields
+          .get(structType.name)
+          ?.find((f) => f.name === fieldName);
+        if (field && isArrayType(field.type)) {
+          const arrayType = field.type;
+          const structOperand: IrOperand = {
+            kind: "local",
+            id: localId,
+            type: structType,
+          };
+          const fieldValId = nextTemp(context);
+          context.currentBlock.instructions.push({
+            kind: "get_field",
+            target: fieldValId,
+            object: structOperand,
+            field: fieldName,
+            type: arrayType,
+            span,
+          });
+          const detachedId = nextTemp(context);
+          context.currentBlock.instructions.push({
+            kind: "detach",
+            target: detachedId,
+            value: { kind: "temp", id: fieldValId, type: arrayType },
+            type: arrayType,
+            span,
+          });
+          const detachedOperand: IrOperand = {
+            kind: "temp",
+            id: detachedId,
+            type: arrayType,
+          };
+          context.currentBlock.instructions.push({
+            kind: "set_field",
+            target: localId,
+            field: fieldName,
+            value: detachedOperand,
+            span,
+          });
+          context.runtime.copyOnWrite = true;
+          // Ownership transferred to the struct field; do not mark as owned
+          return detachedOperand;
+        }
+      }
     }
-
-    const target = nextTemp(context);
-    context.currentBlock.instructions.push({
-      kind: "detach",
-      target,
-      value: localOperand,
-      type,
-      span,
-    });
-    context.currentBlock.instructions.push({
-      kind: "assign",
-      target: localId,
-      value: { kind: "temp", id: target, type },
-      span,
-    });
-    markLocalOwns(localId, { kind: "temp", id: target, type }, context);
-    context.runtime.copyOnWrite = true;
-    return localOperand;
-  }
-
-  const globalId = context.globals.get(object.name);
-  if (globalId) {
-    const type = context.globalTypes.get(globalId);
-    if (!type || !isArrayType(type)) return lowerExpression(object, context);
-    if (context.lazyGlobals.has(globalId)) {
-      context.currentBlock.instructions.push({
-        kind: "ensure_global_initialized",
-        globalId,
-        span,
-      });
-    }
-    const globalOperand: IrOperand = { kind: "global", id: globalId, type };
-    const target = nextTemp(context);
-    context.currentBlock.instructions.push({
-      kind: "detach",
-      target,
-      value: globalOperand,
-      type,
-      span,
-    });
-    context.currentBlock.instructions.push({
-      kind: "store_global",
-      globalId,
-      value: { kind: "temp", id: target, type },
-      span,
-    });
-    context.runtime.copyOnWrite = true;
-    return globalOperand;
   }
 
   return lowerExpression(object, context);
