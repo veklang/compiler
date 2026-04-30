@@ -3335,6 +3335,11 @@ function lowerBinary(
     return lowerEquality(expression, context);
   }
 
+  if (["<", "<=", ">", ">="].includes(expression.operator)) {
+    const orderedComparison = lowerCustomOrderedComparison(expression, context);
+    if (orderedComparison) return orderedComparison;
+  }
+
   const leftType = typeFromNodeInContext(context, expression.left);
   const isString = leftType.kind === "primitive" && leftType.name === "string";
 
@@ -3623,6 +3628,95 @@ function lowerCustomEquality(
     span,
   });
   return { kind: "temp", id: target, type: irPrimitive("bool") };
+}
+
+function lowerCustomOrderedComparison(
+  expression: BinaryExpression,
+  context: LowerContext,
+): IrOperand | null {
+  const leftType = typeFromNodeInContext(context, expression.left);
+  if (leftType.kind !== "named") return null;
+
+  const linkName = context.methodLinks.get(methodKey(leftType.name, "compare"));
+  if (!linkName) return null;
+
+  const rightType = typeFromNodeInContext(context, expression.right);
+  const left = lowerExpression(expression.left, context);
+  const right = lowerExpression(expression.right, context);
+  const orderingType = orderingIrType();
+  const target = nextTemp(context);
+  const calleeType: IrType = {
+    kind: "function",
+    params: [
+      { type: leftType, mutable: false },
+      { type: rightType, mutable: false },
+    ],
+    returnType: orderingType,
+  };
+  context.currentBlock.instructions.push({
+    kind: "call",
+    target,
+    callee: { kind: "function", name: linkName, type: calleeType },
+    args: [left, right],
+    type: orderingType,
+    span: expression.span,
+  });
+  releaseIfOwnedTemp(left, context);
+  releaseIfOwnedTemp(right, context);
+
+  const compareResult: IrOperand = {
+    kind: "temp",
+    id: target,
+    type: orderingType,
+  };
+  const tag = getEnumTagOperand(compareResult, expression.span, context);
+  const variantName =
+    expression.operator === "<" || expression.operator === ">="
+      ? "Less"
+      : "Greater";
+  const variant = findUnitVariantInfo(
+    context.variantInfos,
+    variantName,
+    "Ordering",
+  );
+  if (!variant) {
+    emitLowerDiag(
+      context,
+      "E3002",
+      `Cannot lower Ordered comparison because Ordering.${variantName} is unavailable.`,
+      expression.span,
+    );
+    return placeholderBool();
+  }
+
+  const result = lowerBinaryEquality(
+    tag,
+    {
+      kind: "const",
+      value: { kind: "int", value: String(variant.tag) },
+      type: irPrimitive("i32"),
+    },
+    expression.span,
+    context,
+  );
+  if (expression.operator === "<" || expression.operator === ">") {
+    return result;
+  }
+
+  const notTarget = nextTemp(context);
+  context.currentBlock.instructions.push({
+    kind: "unary",
+    target: notTarget,
+    operator: "!",
+    argument: result,
+    type: irPrimitive("bool"),
+    span: expression.span,
+  });
+  return { kind: "temp", id: notTarget, type: irPrimitive("bool") };
+}
+
+function orderingIrType(): IrNamedType {
+  return { kind: "named", name: "Ordering", args: [], decl: "enum" };
 }
 
 function arithmeticMethodName(

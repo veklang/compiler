@@ -1859,6 +1859,9 @@ export class Checker {
     if (["<", "<=", ">", ">="].includes(node.operator)) {
       const left = this.checkExpression(node.left, scope);
       const right = this.checkExpression(node.right, scope, left);
+      if (this.canCompareForOrdering(left, right)) {
+        return this.primitive("bool");
+      }
       if (
         !this.isNumericType(left) ||
         !this.isNumericType(right) ||
@@ -4544,6 +4547,30 @@ export class Checker {
     }
 
     return null;
+  }
+
+  private canCompareForOrdering(left: Type, right: Type): boolean {
+    if (left.kind === "Named") {
+      const satisfaction = left.symbol?.satisfactions?.find((s) => {
+        const substituted = this.substituteOwnerTypeArgs(s.trait, left);
+        return substituted.name === "Ordered";
+      });
+      if (!satisfaction) return false;
+      const substituted = this.substituteOwnerTypeArgs(
+        satisfaction.trait,
+        left,
+      );
+      const rhs = substituted.typeArgs?.[0];
+      return !!rhs && this.typeEquals(rhs, right);
+    }
+
+    if (left.kind === "TypeParam") {
+      const bound = left.bounds.find((b) => b.name === "Ordered");
+      const rhs = bound?.typeArgs?.[0];
+      return !!rhs && this.typeEquals(rhs, right);
+    }
+
+    return false;
   }
 
   private canCompareForEquality(

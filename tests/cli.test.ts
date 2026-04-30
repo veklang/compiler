@@ -1836,6 +1836,58 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs custom Ordered trait comparisons", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct Score {
+  v: i32;
+  satisfies Ordered<Score> {
+    fn compare(self, rhs: Score) -> Ordering {
+      if self.v < rhs.v { return Less; }
+      if self.v > rhs.v { return Greater; }
+      return Equal;
+    }
+  }
+}
+
+fn before<T: Ordered<T>>(a: T, b: T) -> bool {
+  return a < b;
+}
+
+fn main() -> i32 {
+  let one = Score { v: 1 };
+  let two = Score { v: 2 };
+  if !(one < two) { return 1; }
+  if !(one <= two) { return 2; }
+  if one > two { return 3; }
+  if one >= two { return 4; }
+  if !(two > one) { return 5; }
+  if !(two >= one) { return 6; }
+  if two < one { return 7; }
+  if two <= one { return 8; }
+  if !before<Score>(one, two) { return 9; }
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs custom Add/Sub/Mul/Div/Rem trait satisfactions", () => {
     if (!hasMuslGcc()) return;
 

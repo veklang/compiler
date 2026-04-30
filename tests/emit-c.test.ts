@@ -1192,6 +1192,27 @@ fn mask(a: Bits, b: Bits) -> Bits { return a & b; }
     assert.ok(c.includes("__vek_fn_Bits_bit_and(v0, v1)"));
   });
 
+  test("emits Ordered satisfaction as a method call on comparisons", () => {
+    const c = emitOk(`
+struct Score {
+  v: i32;
+  satisfies Ordered<Score> {
+    fn compare(self, rhs: Score) -> Ordering {
+      if self.v < rhs.v { return Less; }
+      if self.v > rhs.v { return Greater; }
+      return Equal;
+    }
+  }
+}
+fn less(a: Score, b: Score) -> bool { return a < b; }
+fn at_least(a: Score, b: Score) -> bool { return a >= b; }
+`);
+    assert.ok(c.includes("__vek_fn_Score_compare(v0, v1)"));
+    assert.ok(c.includes(".tag;"));
+    assert.ok(c.includes(" == 0"));
+    assert.ok(c.includes(" = !"));
+  });
+
   test("emits Index satisfaction as a method call on [] read", () => {
     const c = emitOk(`
 struct Slots {

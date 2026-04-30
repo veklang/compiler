@@ -2213,6 +2213,63 @@ fn main() -> void {
 `);
   });
 
+  test("struct satisfying Ordered<T> allows comparison operators", () => {
+    checkOk(`
+struct Score {
+  v: i32;
+  satisfies Ordered<Score> {
+    fn compare(self, rhs: Score) -> Ordering {
+      if self.v < rhs.v { return Less; }
+      if self.v > rhs.v { return Greater; }
+      return Equal;
+    }
+  }
+}
+fn main() -> void {
+  let a = Score { v: 1 };
+  let b = Score { v: 2 };
+  let _lt: bool = a < b;
+  let _le: bool = a <= b;
+  let _gt: bool = a > b;
+  let _ge: bool = a >= b;
+}
+`);
+  });
+
+  test("generic Ordered<T> bounds allow comparison operators", () => {
+    checkOk(`
+fn less<T: Ordered<T>>(a: T, b: T) -> bool {
+  return a < b;
+}
+
+struct Score {
+  v: i32;
+  satisfies Ordered<Score> {
+    fn compare(self, rhs: Score) -> Ordering {
+      if self.v < rhs.v { return Less; }
+      if self.v > rhs.v { return Greater; }
+      return Equal;
+    }
+  }
+}
+fn main() -> void {
+  let _x = less<Score>(Score { v: 1 }, Score { v: 2 });
+}
+`);
+  });
+
+  test("< on named type without Ordered satisfaction is rejected", () => {
+    const result = check(`
+struct Nope { x: i32; }
+fn main() -> void {
+  let a = Nope { x: 1 };
+  let b = Nope { x: 2 };
+  let _c = a < b;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
   test("& on named type without BitAnd is rejected", () => {
     const result = check(`
 struct Nope { x: i32; }
