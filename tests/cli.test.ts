@@ -1913,4 +1913,51 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs custom Index and IndexSet trait satisfactions", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct Slots {
+  v: i32;
+
+  satisfies Index<i32, i32> {
+    fn index_get(self, index: i32) -> i32 {
+      return self.v + index;
+    }
+  }
+
+  satisfies IndexSet<i32, i32> {
+    fn index_set(mut self, index: i32, value: i32) -> void {
+      self.v = value + index;
+    }
+  }
+}
+
+fn main() -> i32 {
+  let slots = Slots { v: 1 };
+  if slots[2] != 3 { return 1; }
+  slots[1] = 41;
+  if slots.v != 42 { return 2; }
+  if slots[0] != 42 { return 3; }
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

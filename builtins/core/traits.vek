@@ -78,3 +78,11 @@ pub trait ShiftLeft<Rhs, Output> {
 pub trait ShiftRight<Rhs, Output> {
   fn shr(self, rhs: Rhs) -> Output;
 }
+
+pub trait Index<Idx, Output> {
+  fn index_get(self, index: Idx) -> Output;
+}
+
+pub trait IndexSet<Idx, Value> {
+  fn index_set(mut self, index: Idx, value: Value) -> void;
+}

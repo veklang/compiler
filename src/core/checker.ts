@@ -1559,6 +1559,31 @@ export class Checker {
           : this.primitive("u8");
       }
       this.ensureMutableRoot(node.object, node.span, scope);
+      const targetObjectType = this.checkExpression(node.object, scope);
+      if (
+        targetObjectType.kind === "TypeParam" ||
+        (targetObjectType.kind === "Named" &&
+          targetObjectType.name !== "Array" &&
+          !this.isStringType(targetObjectType))
+      ) {
+        const info = this.lookupIndexSetInfo(targetObjectType);
+        if (info) {
+          const indexType = this.checkExpression(
+            node.index,
+            scope,
+            info.indexType,
+          );
+          if (!this.typeEquals(indexType, info.indexType)) {
+            this.report(
+              `Index must be ${this.displayType(info.indexType)}.`,
+              node.index.span,
+              "E2101",
+            );
+          }
+          this.types.set(node, info.valueType);
+          return info.valueType;
+        }
+      }
       return this.checkIndex(node, scope);
     }
 
@@ -2592,25 +2617,31 @@ export class Checker {
 
   private checkIndex(node: IndexExpression, scope: Scope): Type {
     const objectType = this.checkExpression(node.object, scope);
-    const expectedIndexType = this.isRawPointerType(objectType)
-      ? this.primitive("isize")
-      : this.primitive("usize");
-    const indexType = this.checkExpression(
-      node.index,
-      scope,
-      expectedIndexType,
-    );
-    if (!this.typeEquals(indexType, expectedIndexType)) {
-      this.report(
-        `Index must be ${this.displayType(expectedIndexType)}.`,
-        node.index.span,
-        "E2101",
-      );
-    }
+
     if (objectType.kind === "Named" && objectType.name === "Array") {
+      const indexType = this.checkExpression(
+        node.index,
+        scope,
+        this.primitive("usize"),
+      );
+      if (!this.typeEquals(indexType, this.primitive("usize"))) {
+        this.report("Index must be usize.", node.index.span, "E2101");
+      }
       return objectType.typeArgs?.[0] ?? this.unknownType();
     }
-    if (this.isStringType(objectType)) return this.primitive("string");
+
+    if (this.isStringType(objectType)) {
+      const indexType = this.checkExpression(
+        node.index,
+        scope,
+        this.primitive("usize"),
+      );
+      if (!this.typeEquals(indexType, this.primitive("usize"))) {
+        this.report("Index must be usize.", node.index.span, "E2101");
+      }
+      return this.primitive("string");
+    }
+
     if (this.isRawPointerType(objectType)) {
       if (!this.inUnsafeContext()) {
         this.report(
@@ -2618,6 +2649,14 @@ export class Checker {
           node.span,
           "E2901",
         );
+      }
+      const indexType = this.checkExpression(
+        node.index,
+        scope,
+        this.primitive("isize"),
+      );
+      if (!this.typeEquals(indexType, this.primitive("isize"))) {
+        this.report("Index must be isize.", node.index.span, "E2101");
       }
       if (objectType.kind === "Pointer") {
         if (
@@ -2635,8 +2674,15 @@ export class Checker {
       }
       return this.primitive("u8");
     }
+
+    if (objectType.kind === "Named" || objectType.kind === "TypeParam") {
+      const indexType = this.checkExpression(node.index, scope);
+      const output = this.lookupIndexOutputType(objectType, indexType);
+      if (output) return output;
+    }
+
     this.report(
-      "Indexing is only supported on arrays and strings.",
+      "Indexing requires an array, string, raw pointer, or a type implementing Index.",
       node.span,
       "E2104",
     );
@@ -4409,6 +4455,59 @@ export class Checker {
     return null;
   }
 
+  private lookupIndexOutputType(
+    objectType: Type,
+    indexType: Type,
+  ): Type | null {
+    if (objectType.kind === "TypeParam") {
+      const bound = objectType.bounds.find((b) => b.name === "Index");
+      if (!bound) return null;
+      const idx = bound.typeArgs?.[0];
+      const out = bound.typeArgs?.[1];
+      if (!idx || !out) return null;
+      if (!this.typeEquals(idx, indexType)) return null;
+      return out;
+    }
+
+    if (objectType.kind !== "Named") return null;
+    const satisfaction = objectType.symbol?.satisfactions?.find((s) => {
+      const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
+      return sub.name === "Index";
+    });
+    if (!satisfaction) return null;
+    const sub = this.substituteOwnerTypeArgs(satisfaction.trait, objectType);
+    const idx = sub.typeArgs?.[0];
+    const out = sub.typeArgs?.[1];
+    if (!idx || !out) return null;
+    if (!this.typeEquals(idx, indexType)) return null;
+    return out;
+  }
+
+  private lookupIndexSetInfo(
+    objectType: Type,
+  ): { indexType: Type; valueType: Type } | null {
+    if (objectType.kind === "TypeParam") {
+      const bound = objectType.bounds.find((b) => b.name === "IndexSet");
+      if (!bound) return null;
+      const idx = bound.typeArgs?.[0];
+      const val = bound.typeArgs?.[1];
+      if (!idx || !val) return null;
+      return { indexType: idx, valueType: val };
+    }
+
+    if (objectType.kind !== "Named") return null;
+    const satisfaction = objectType.symbol?.satisfactions?.find((s) => {
+      const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
+      return sub.name === "IndexSet";
+    });
+    if (!satisfaction) return null;
+    const sub = this.substituteOwnerTypeArgs(satisfaction.trait, objectType);
+    const idx = sub.typeArgs?.[0];
+    const val = sub.typeArgs?.[1];
+    if (!idx || !val) return null;
+    return { indexType: idx, valueType: val };
+  }
+
   private lookupArithmeticOutputType(
     left: Type,
     right: Type,
@@ -4501,6 +4600,37 @@ export class Checker {
         if (!traitArg) return true;
         if (!elemType) return false;
         return this.typeEquals(traitArg, elemType);
+      }
+      if (type.name === "Array" && trait.name === "Index") {
+        const idx = trait.typeArgs?.[0];
+        const out = trait.typeArgs?.[1];
+        const elemType = type.typeArgs?.[0];
+        if (!idx || !out) return true;
+        if (!elemType) return false;
+        return (
+          this.typeEquals(idx, this.primitive("usize")) &&
+          this.typeEquals(out, elemType)
+        );
+      }
+      if (type.name === "Array" && trait.name === "IndexSet") {
+        const idx = trait.typeArgs?.[0];
+        const value = trait.typeArgs?.[1];
+        const elemType = type.typeArgs?.[0];
+        if (!idx || !value) return true;
+        if (!elemType) return false;
+        return (
+          this.typeEquals(idx, this.primitive("usize")) &&
+          this.typeEquals(value, elemType)
+        );
+      }
+      if (type.name === "string" && trait.name === "Index") {
+        const idx = trait.typeArgs?.[0];
+        const out = trait.typeArgs?.[1];
+        if (!idx || !out) return true;
+        return (
+          this.typeEquals(idx, this.primitive("usize")) &&
+          this.typeEquals(out, this.primitive("string"))
+        );
       }
       if (trait.name === "Equal" && this.isBuiltinEquatable(type, trait))
         return true;
@@ -4597,6 +4727,15 @@ export class Checker {
         const out = trait.typeArgs?.[1];
         if (!rhs || !out) return true;
         return this.typeEquals(type, rhs) && this.typeEquals(type, out);
+      }
+      if (type.name === "string" && trait.name === "Index") {
+        const idx = trait.typeArgs?.[0];
+        const out = trait.typeArgs?.[1];
+        if (!idx || !out) return true;
+        return (
+          this.typeEquals(idx, this.primitive("usize")) &&
+          this.typeEquals(out, this.primitive("string"))
+        );
       }
     }
 

@@ -189,6 +189,14 @@ type AssignablePlace =
       pointer: IrOperand;
       type: IrType;
       span?: IrLocal["span"];
+    }
+  | {
+      kind: "custom_index";
+      object: IrOperand;
+      index: IrOperand;
+      linkName: string;
+      type: IrType;
+      span?: IrLocal["span"];
     };
 
 export function lowerProgramToIr(
@@ -1494,6 +1502,29 @@ function resolveAssignablePlace(
       };
     }
 
+    const targetObjectType = typeFromNodeInContext(context, target.object);
+    if (
+      targetObjectType.kind === "named" &&
+      targetObjectType.name !== "Array"
+    ) {
+      const linkName = context.methodLinks.get(
+        methodKey(targetObjectType.name, "index_set"),
+      );
+      if (linkName) {
+        const object = lowerExpression(target.object, context);
+        const index = lowerExpression(target.index, context);
+        const valueType = typeFromNodeInContext(context, target);
+        return {
+          kind: "custom_index",
+          object,
+          index,
+          linkName,
+          type: valueType,
+          span: target.span,
+        };
+      }
+    }
+
     const array = detachArrayForIndexedMutation(
       target.object,
       context,
@@ -1592,6 +1623,33 @@ function readAssignablePlace(
     return { kind: "temp", id: target, type: place.type };
   }
 
+  if (place.kind === "custom_index") {
+    const getKey = methodKey(
+      place.object.type.kind === "named" ? place.object.type.name : "",
+      "index_get",
+    );
+    const getLinkName =
+      context.methodLinks.get(getKey) ??
+      place.linkName.replace("_index_set", "_index_get");
+    const calleeType: IrType = {
+      kind: "function",
+      params: [
+        { type: place.object.type, mutable: false },
+        { type: place.index.type, mutable: false },
+      ],
+      returnType: place.type,
+    };
+    context.currentBlock.instructions.push({
+      kind: "call",
+      target,
+      callee: { kind: "function", name: getLinkName, type: calleeType },
+      args: [place.object, place.index],
+      type: place.type,
+      span: place.span,
+    });
+    return { kind: "temp", id: target, type: place.type };
+  }
+
   context.currentBlock.instructions.push({
     kind: "array_get",
     target,
@@ -1665,6 +1723,31 @@ function writeAssignablePlace(
       kind: "pointer_store",
       pointer: place.pointer,
       value,
+      span,
+    });
+    releaseIfOwnedTemp(value, context);
+    return;
+  }
+
+  if (place.kind === "custom_index") {
+    const calleeType: IrType = {
+      kind: "function",
+      params: [
+        { type: place.object.type, mutable: true },
+        { type: place.index.type, mutable: false },
+        { type: place.type, mutable: false },
+      ],
+      returnType: irPrimitive("void"),
+    };
+    context.currentBlock.instructions.push({
+      kind: "call",
+      callee: {
+        kind: "function",
+        name: place.linkName,
+        type: calleeType,
+      },
+      args: [place.object, place.index, value],
+      type: irPrimitive("void"),
       span,
     });
     releaseIfOwnedTemp(value, context);
@@ -4564,6 +4647,31 @@ function lowerIndexExpression(
     context.runtime.strings = true;
     return { kind: "temp", id: target, type };
   }
+  if (object.type.kind === "named") {
+    const linkName = context.methodLinks.get(
+      methodKey(object.type.name, "index_get"),
+    );
+    if (linkName) {
+      const calleeType: IrType = {
+        kind: "function",
+        params: [
+          { type: object.type, mutable: false },
+          { type: index.type, mutable: false },
+        ],
+        returnType: type,
+      };
+      context.currentBlock.instructions.push({
+        kind: "call",
+        target,
+        callee: { kind: "function", name: linkName, type: calleeType },
+        args: [object, index],
+        type,
+        span: expression.span,
+      });
+      return { kind: "temp", id: target, type };
+    }
+  }
+
   context.currentBlock.instructions.push({
     kind: "array_get",
     target,

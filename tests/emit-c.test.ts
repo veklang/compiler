@@ -1191,4 +1191,36 @@ fn mask(a: Bits, b: Bits) -> Bits { return a & b; }
 `);
     assert.ok(c.includes("__vek_fn_Bits_bitand(v0, v1)"));
   });
+
+  test("emits Index satisfaction as a method call on [] read", () => {
+    const c = emitOk(`
+struct Slots {
+  v: i32;
+  satisfies Index<i32, i32> {
+    fn index_get(self, index: i32) -> i32 { return self.v + index; }
+  }
+}
+fn get(slots: Slots) -> i32 { return slots[1]; }
+`);
+    assert.ok(c.includes("__vek_fn_Slots_index_get(v0, 1)"));
+  });
+
+  test("emits IndexSet satisfaction as a method call on [] assignment", () => {
+    const c = emitOk(`
+struct Slots {
+  v: i32;
+  satisfies IndexSet<i32, i32> {
+    fn index_set(mut self, index: i32, value: i32) -> void {
+      self.v = value + index;
+    }
+  }
+}
+fn set() -> i32 {
+  let slots = Slots { v: 0 };
+  slots[1] = 41;
+  return slots.v;
+}
+`);
+    assert.ok(c.includes("__vek_fn_Slots_index_set(&v0, 1, 41);"));
+  });
 });

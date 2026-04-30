@@ -2236,4 +2236,135 @@ fn main() -> void {
 }
 `);
   });
+
+  test("struct satisfying Index allows [] read", () => {
+    checkOk(`
+struct SlotMap {
+  k: i32;
+  v: i32;
+  satisfies Index<i32, i32> {
+    fn index_get(self, index: i32) -> i32 { return self.v + index; }
+  }
+}
+fn main() -> void {
+  let m = SlotMap { k: 1, v: 42 };
+  let _x: i32 = m[1];
+}
+`);
+  });
+
+  test("struct satisfying IndexSet allows [] write", () => {
+    checkOk(`
+struct SlotMap {
+  k: i32;
+  v: i32;
+  satisfies Index<i32, i32> {
+    fn index_get(self, index: i32) -> i32 { return self.v + index; }
+  }
+  satisfies IndexSet<i32, i32> {
+    fn index_set(mut self, index: i32, value: i32) -> void { self.v = value + index; }
+  }
+}
+fn main() -> void {
+  let m = SlotMap { k: 1, v: 0 };
+  m[1] = 42;
+}
+`);
+  });
+
+  test("generic Index bound allows [] read", () => {
+    checkOk(`
+struct SlotMap {
+  v: i32;
+  satisfies Index<i32, i32> {
+    fn index_get(self, index: i32) -> i32 { return self.v + index; }
+  }
+}
+
+fn lookup<T: Index<i32, i32>>(value: T) -> i32 {
+  return value[0];
+}
+
+fn main() -> void {
+  let m = SlotMap { v: 42 };
+  let _x: i32 = lookup(m);
+}
+`);
+  });
+
+  test("generic IndexSet bound allows [] write through mut parameter", () => {
+    checkOk(`
+struct SlotMap {
+  v: i32;
+  satisfies IndexSet<i32, i32> {
+    fn index_set(mut self, index: i32, value: i32) -> void { self.v = value + index; }
+  }
+}
+
+fn store<T: IndexSet<i32, i32>>(mut value: T) -> void {
+  value[0] = 42;
+}
+
+fn main() -> void {
+  let m = SlotMap { v: 0 };
+  store(m);
+}
+`);
+  });
+
+  test("built-in arrays and strings satisfy Index traits", () => {
+    checkOk(`
+fn array_first<T: Index<usize, i32>>(value: T) -> i32 {
+  let index: usize = 0;
+  return value[index];
+}
+
+fn string_first<T: Index<usize, string>>(value: T) -> string {
+  let index: usize = 0;
+  return value[index];
+}
+
+fn main() -> void {
+  let xs: i32[] = [1, 2];
+  let _x: i32 = array_first(xs);
+  let _s: string = string_first("hi");
+}
+`);
+  });
+
+  test("built-in arrays satisfy IndexSet traits", () => {
+    checkOk(`
+fn store<T: IndexSet<usize, i32>>(mut value: T) -> void {
+  let index: usize = 0;
+  value[index] = 42;
+}
+
+fn main() -> void {
+  let xs: i32[] = [1, 2];
+  store(xs);
+}
+`);
+  });
+
+  test("[] on named type without Index is rejected", () => {
+    const result = check(`
+struct Nope { x: i32; }
+fn main() -> void {
+  let n = Nope { x: 1 };
+  let _v = n[0];
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2104"]);
+  });
+
+  test("[] assignment on named type without IndexSet is rejected", () => {
+    const result = check(`
+struct Nope { x: i32; }
+fn main() -> void {
+  let n = Nope { x: 1 };
+  n[0] = 5;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2104"]);
+  });
 });
