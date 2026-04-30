@@ -1014,7 +1014,7 @@ struct Counter {
     return Self { current: 0, end };
   }
 
-  satisfies Iterable<i32> {
+  satisfies Iterator<i32> {
     fn next(mut self) -> i32? {
       if self.current == self.end {
         return null;
@@ -1258,11 +1258,11 @@ fn mask(a: Bits, b: Bits) -> Bits { return a & b; }
     assert.ok(c.includes("__vek_fn_Bits_bit_and(v0, v1)"));
   });
 
-  test("emits Ordered satisfaction as a method call on comparisons", () => {
+  test("emits Order satisfaction as a method call on comparisons", () => {
     const c = emitOk(`
 struct Score {
   v: i32;
-  satisfies Ordered<Score> {
+  satisfies Order<Score> {
     fn compare(self, rhs: Score) -> Ordering {
       if self.v < rhs.v { return Less; }
       if self.v > rhs.v { return Greater; }
@@ -1279,11 +1279,11 @@ fn at_least(a: Score, b: Score) -> bool { return a >= b; }
     assert.ok(c.includes(" = !"));
   });
 
-  test("emits IndexGet satisfaction as a method call on [] read", () => {
+  test("emits Index satisfaction as a method call on [] read", () => {
     const c = emitOk(`
 struct Slots {
   v: i32;
-  satisfies IndexGet<i32, i32> {
+  satisfies Index<i32, i32> {
     fn index_get(self, index: i32) -> i32 { return self.v + index; }
   }
 }
@@ -1292,11 +1292,11 @@ fn get(slots: Slots) -> i32 { return slots[1]; }
     assert.ok(c.includes("__vek_fn_Slots_index_get(v0, 1)"));
   });
 
-  test("emits IndexSet satisfaction as a method call on [] assignment", () => {
+  test("emits IndexMut satisfaction as a method call on [] assignment", () => {
     const c = emitOk(`
 struct Slots {
   v: i32;
-  satisfies IndexSet<i32, i32> {
+  satisfies IndexMut<i32, i32> {
     fn index_set(mut self, index: i32, value: i32) -> void {
       self.v = value + index;
     }

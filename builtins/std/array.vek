@@ -1,27 +1,27 @@
 builtin Array<T> {
   fn len(self) -> usize;
 
-  satisfies IndexGet<usize, T> {
+  satisfies Index<usize, T> {
     fn index_get(self, index: usize) -> T;
   }
 
-  satisfies IndexSet<usize, T> {
+  satisfies IndexMut<usize, T> {
     fn index_set(mut self, index: usize, value: T) -> void;
   }
 
-  satisfies Iterable<T> {
+  satisfies Iterator<T> {
     fn next(mut self) -> T?;
   }
 
-  satisfies Cloneable where T: Cloneable {
+  satisfies Clone where T: Clone {
     fn clone(self) -> Self;
   }
 
-  satisfies Defaultable {
+  satisfies Default {
     fn default() -> Self;
   }
 
-  satisfies Formattable where T: Formattable {
+  satisfies Display where T: Display {
     fn format(self) -> string;
   }
 }

@@ -8,7 +8,7 @@ pub enum Result<T, E> {
   Ok(T);
   Err(E);
 
-  satisfies Unwrappable<T> {
+  satisfies Unwrap<T> {
     fn unwrap(self) -> T {
       return match self {
         Ok(value) => value,

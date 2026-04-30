@@ -2339,7 +2339,7 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
   const arrayOperand = lowerExpression(statement.iterable, context);
   const arrayType = arrayOperand.type;
   if (!(arrayType.kind === "named" && arrayType.name === "Array")) {
-    lowerCustomIterableForStatement(statement, arrayOperand, context);
+    lowerCustomIteratorForStatement(statement, arrayOperand, context);
     return;
   }
 
@@ -2480,7 +2480,7 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
   switchBlock(context, exitBlock);
 }
 
-function lowerCustomIterableForStatement(
+function lowerCustomIteratorForStatement(
   statement: ForStatement,
   iterableOperand: IrOperand,
   context: LowerContext,
@@ -3562,8 +3562,8 @@ function lowerBinary(
   }
 
   if (["<", "<=", ">", ">="].includes(expression.operator)) {
-    const orderedComparison = lowerCustomOrderedComparison(expression, context);
-    if (orderedComparison) return orderedComparison;
+    const orderComparison = lowerCustomOrderComparison(expression, context);
+    if (orderComparison) return orderComparison;
   }
 
   const leftType = typeFromNodeInContext(context, expression.left);
@@ -3856,7 +3856,7 @@ function lowerCustomEquality(
   return { kind: "temp", id: target, type: irPrimitive("bool") };
 }
 
-function lowerCustomOrderedComparison(
+function lowerCustomOrderComparison(
   expression: BinaryExpression,
   context: LowerContext,
 ): IrOperand | null {
@@ -3909,7 +3909,7 @@ function lowerCustomOrderedComparison(
     emitLowerDiag(
       context,
       "E3002",
-      `Cannot lower Ordered comparison because Ordering.${variantName} is unavailable.`,
+      `Cannot lower Order comparison because Ordering.${variantName} is unavailable.`,
       expression.span,
     );
     return placeholderBool();

@@ -10,19 +10,19 @@ builtin string {
     fn add(self, rhs: string) -> string;
   }
 
-  satisfies IndexGet<usize, string> {
+  satisfies Index<usize, string> {
     fn index_get(self, index: usize) -> string;
   }
 
-  satisfies Cloneable {
+  satisfies Clone {
     fn clone(self) -> Self;
   }
 
-  satisfies Defaultable {
+  satisfies Default {
     fn default() -> Self;
   }
 
-  satisfies Formattable {
+  satisfies Display {
     fn format(self) -> string;
   }
 }

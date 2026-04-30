@@ -112,7 +112,7 @@ enum State {
 
   test("function types, array types, nullable types, and where clauses", () => {
     const program = parseOk(`
-trait Hashable {
+trait Hash {
   fn hash(self) -> u64;
 }
 
@@ -121,7 +121,7 @@ trait Equal<T> {
 }
 
 fn lookup<K, V>(map: Map<K, V>, key: K) -> V?
-where K: Equal<K>, K: Hashable
+where K: Equal<K>, K: Hash
 {
   return null;
 }

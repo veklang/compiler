@@ -2,31 +2,31 @@ pub trait Equal<T> {
   fn equals(self, other: T) -> bool;
 }
 
-pub trait Hashable {
+pub trait Hash {
   fn hash(self) -> u64;
 }
 
-pub trait Ordered<T> {
+pub trait Order<T> {
   fn compare(self, other: T) -> Ordering;
 }
 
-pub trait Cloneable {
+pub trait Clone {
   fn clone(self) -> Self;
 }
 
-pub trait Iterable<T> {
+pub trait Iterator<T> {
   fn next(mut self) -> T?;
 }
 
-pub trait Defaultable {
+pub trait Default {
   fn default() -> Self;
 }
 
-pub trait Formattable {
+pub trait Display {
   fn format(self) -> string;
 }
 
-pub trait Unwrappable<T> {
+pub trait Unwrap<T> {
   fn unwrap(self) -> T;
   fn unwrap_or(self, default: T) -> T;
 }
@@ -79,10 +79,10 @@ pub trait ShiftRight<Rhs, Output> {
   fn shift_right(self, rhs: Rhs) -> Output;
 }
 
-pub trait IndexGet<Idx, Output> {
+pub trait Index<Idx, Output> {
   fn index_get(self, index: Idx) -> Output;
 }
 
-pub trait IndexSet<Idx, Value> {
+pub trait IndexMut<Idx, Value> {
   fn index_set(mut self, index: Idx, value: Value) -> void;
 }

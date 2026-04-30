@@ -527,7 +527,7 @@ fn main() -> void {
 `);
   });
 
-  test("for loops use custom Iterable<T> item types", () => {
+  test("for loops use custom Iterator<T> item types", () => {
     checkOk(`
 struct Counter {
   current: i32;
@@ -537,7 +537,7 @@ struct Counter {
     return Self { current: 0, end };
   }
 
-  satisfies Iterable<i32> {
+  satisfies Iterator<i32> {
     fn next(mut self) -> i32? {
       if self.current == self.end {
         return null;
@@ -965,12 +965,12 @@ struct Counter {
     );
   });
 
-  test("primitives satisfy Hashable, Ordered, Cloneable, Defaultable", () => {
+  test("primitives satisfy Hash, Order, Clone, Default", () => {
     checkOk(`
-fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
-fn needs_ordered<T: Ordered<T>>(_a: T, _b: T) -> void { return; }
-fn needs_cloneable<T: Cloneable>(_x: T) -> void { return; }
-fn needs_defaultable<T: Defaultable>(_x: T) -> void { return; }
+fn needs_hashable<T: Hash>(_x: T) -> void { return; }
+fn needs_ordered<T: Order<T>>(_a: T, _b: T) -> void { return; }
+fn needs_cloneable<T: Clone>(_x: T) -> void { return; }
+fn needs_defaultable<T: Default>(_x: T) -> void { return; }
 
 fn main() -> void {
   needs_hashable(42);
@@ -981,13 +981,13 @@ fn main() -> void {
 `);
   });
 
-  test("string satisfies Hashable, Ordered, Cloneable, Defaultable, Formattable", () => {
+  test("string satisfies Hash, Order, Clone, Default, Display", () => {
     checkOk(`
-fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
-fn needs_ordered<T: Ordered<T>>(_a: T, _b: T) -> void { return; }
-fn needs_cloneable<T: Cloneable>(_x: T) -> void { return; }
-fn needs_defaultable<T: Defaultable>(_x: T) -> void { return; }
-fn needs_formattable<T: Formattable>(x: T) -> string { return x.format(); }
+fn needs_hashable<T: Hash>(_x: T) -> void { return; }
+fn needs_ordered<T: Order<T>>(_a: T, _b: T) -> void { return; }
+fn needs_cloneable<T: Clone>(_x: T) -> void { return; }
+fn needs_defaultable<T: Default>(_x: T) -> void { return; }
+fn needs_formattable<T: Display>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let s: string = "hello";
@@ -1000,12 +1000,12 @@ fn main() -> void {
 `);
   });
 
-  test("tuple satisfies Equal, Formattable, Hashable, Cloneable", () => {
+  test("tuple satisfies Equal, Display, Hash, Clone", () => {
     checkOk(`
 fn needs_eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
-fn needs_fmt<T: Formattable>(x: T) -> string { return x.format(); }
-fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
-fn needs_cloneable<T: Cloneable>(_x: T) -> void { return; }
+fn needs_fmt<T: Display>(x: T) -> string { return x.format(); }
+fn needs_hashable<T: Hash>(_x: T) -> void { return; }
+fn needs_cloneable<T: Clone>(_x: T) -> void { return; }
 
 fn main() -> void {
   let pair: (i32, string) = (1, "a");
@@ -1036,10 +1036,10 @@ fn main() -> void {
 `);
   });
 
-  test("nullable satisfies Equal and Formattable", () => {
+  test("nullable satisfies Equal and Display", () => {
     checkOk(`
 fn eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
-fn fmt<T: Formattable>(x: T) -> string { return x.format(); }
+fn fmt<T: Display>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let x: i32? = null;
@@ -1049,7 +1049,7 @@ fn main() -> void {
 `);
   });
 
-  test("nullable satisfies Unwrappable<T> and unwrap is callable", () => {
+  test("nullable satisfies Unwrap<T> and unwrap is callable", () => {
     checkOk(`
 fn main() -> void {
   let x: i32? = 42;
@@ -1058,7 +1058,7 @@ fn main() -> void {
 `);
   });
 
-  test("Result satisfies Unwrappable<T> and unwrap is callable", () => {
+  test("Result satisfies Unwrap<T> and unwrap is callable", () => {
     checkOk(`
 fn main() -> void {
   let r: Result<i32, string> = Ok(1);
@@ -1067,9 +1067,9 @@ fn main() -> void {
 `);
   });
 
-  test("Array satisfies Formattable when element is Formattable", () => {
+  test("Array satisfies Display when element is Display", () => {
     checkOk(`
-fn fmt<T: Formattable>(x: T) -> string { return x.format(); }
+fn fmt<T: Display>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let xs: i32[] = [1, 2, 3];
@@ -1078,9 +1078,9 @@ fn main() -> void {
 `);
   });
 
-  test("Ordering satisfies Formattable", () => {
+  test("Ordering satisfies Display", () => {
     checkOk(`
-fn fmt<T: Formattable>(x: T) -> string { return x.format(); }
+fn fmt<T: Display>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let _f = fmt(Less);
@@ -1120,9 +1120,9 @@ fn main() -> void {
 `);
   });
 
-  test("Ordering satisfies Hashable", () => {
+  test("Ordering satisfies Hash", () => {
     checkOk(`
-fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
+fn needs_hashable<T: Hash>(_x: T) -> void { return; }
 
 fn main() -> void {
   needs_hashable(Equal);
@@ -1130,9 +1130,9 @@ fn main() -> void {
 `);
   });
 
-  test("Array satisfies Cloneable when element is Cloneable", () => {
+  test("Array satisfies Clone when element is Clone", () => {
     checkOk(`
-fn needs_clone<T: Cloneable>(_x: T) -> void { return; }
+fn needs_clone<T: Clone>(_x: T) -> void { return; }
 
 fn main() -> void {
   let xs: i32[] = [1, 2, 3];
@@ -1141,9 +1141,9 @@ fn main() -> void {
 `);
   });
 
-  test("Array satisfies Defaultable", () => {
+  test("Array satisfies Default", () => {
     checkOk(`
-fn needs_default<T: Defaultable>(_x: T) -> void { return; }
+fn needs_default<T: Default>(_x: T) -> void { return; }
 
 fn main() -> void {
   let xs: i32[] = [];
@@ -1152,9 +1152,9 @@ fn main() -> void {
 `);
   });
 
-  test("Array satisfies Iterable<T> when element types match", () => {
+  test("Array satisfies Iterator<T> when element types match", () => {
     checkOk(`
-fn consume<T: Iterable<i32>>(_t: T) -> void { return; }
+fn consume<T: Iterator<i32>>(_t: T) -> void { return; }
 
 fn main() -> void {
   let xs: i32[] = [1, 2, 3];
@@ -1804,9 +1804,9 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2101"]);
   });
 
-  test("E2816: bool does not satisfy Ordered<bool>", () => {
+  test("E2816: bool does not satisfy Order<bool>", () => {
     const result = check(`
-fn needs_ordered<T: Ordered<T>>(_a: T, _b: T) -> void { return; }
+fn needs_ordered<T: Order<T>>(_a: T, _b: T) -> void { return; }
 
 fn main() -> void {
   needs_ordered(true, false);
@@ -1848,13 +1848,13 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2816"]);
   });
 
-  test("E2816: Array of non-Cloneable element fails Cloneable bound", () => {
+  test("E2816: Array of non-Clone element fails Clone bound", () => {
     const result = check(`
 struct Widget {
   id: i32;
 }
 
-fn needs_clone<T: Cloneable>(_x: T) -> void { return; }
+fn needs_clone<T: Clone>(_x: T) -> void { return; }
 
 fn main() -> void {
   let xs: Widget[] = [];
@@ -1864,13 +1864,13 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2816"]);
   });
 
-  test("E2816: Array of non-Formattable element fails Formattable bound", () => {
+  test("E2816: Array of non-Display element fails Display bound", () => {
     const result = check(`
 struct Widget {
   id: i32;
 }
 
-fn fmt<T: Formattable>(x: T) -> string { return x.format(); }
+fn fmt<T: Display>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let xs: Widget[] = [];
@@ -1880,9 +1880,9 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2816"]);
   });
 
-  test("E2816: Array fails Iterable bound when element type mismatches", () => {
+  test("E2816: Array fails Iterator bound when element type mismatches", () => {
     const result = check(`
-fn consume<T: Iterable<i32>>(_t: T) -> void { return; }
+fn consume<T: Iterator<i32>>(_t: T) -> void { return; }
 
 fn main() -> void {
   let xs: string[] = [];
@@ -1925,13 +1925,13 @@ let (a, b) = (1, 2);
     expectDiagnostics(result.checkDiagnostics, ["E2107"]);
   });
 
-  test("E2816: Tuple fails Hashable when an element is not Hashable", () => {
+  test("E2816: Tuple fails Hash when an element is not Hash", () => {
     const result = check(`
 struct Item {
   value: i32;
 }
 
-fn needs_hash<T: Hashable>(_x: T) -> void { return; }
+fn needs_hash<T: Hash>(_x: T) -> void { return; }
 
 fn main() -> void {
   let pair: (i32, Item) = (1, Item { value: 2 });
@@ -2283,11 +2283,11 @@ fn main() -> void {
 `);
   });
 
-  test("struct satisfying Ordered<T> allows comparison operators", () => {
+  test("struct satisfying Order<T> allows comparison operators", () => {
     checkOk(`
 struct Score {
   v: i32;
-  satisfies Ordered<Score> {
+  satisfies Order<Score> {
     fn compare(self, rhs: Score) -> Ordering {
       if self.v < rhs.v { return Less; }
       if self.v > rhs.v { return Greater; }
@@ -2306,15 +2306,15 @@ fn main() -> void {
 `);
   });
 
-  test("generic Ordered<T> bounds allow comparison operators", () => {
+  test("generic Order<T> bounds allow comparison operators", () => {
     checkOk(`
-fn less<T: Ordered<T>>(a: T, b: T) -> bool {
+fn less<T: Order<T>>(a: T, b: T) -> bool {
   return a < b;
 }
 
 struct Score {
   v: i32;
-  satisfies Ordered<Score> {
+  satisfies Order<Score> {
     fn compare(self, rhs: Score) -> Ordering {
       if self.v < rhs.v { return Less; }
       if self.v > rhs.v { return Greater; }
@@ -2328,7 +2328,7 @@ fn main() -> void {
 `);
   });
 
-  test("< on named type without Ordered satisfaction is rejected", () => {
+  test("< on named type without Order satisfaction is rejected", () => {
     const result = check(`
 struct Nope { x: i32; }
 fn main() -> void {
@@ -2364,12 +2364,12 @@ fn main() -> void {
 `);
   });
 
-  test("struct satisfying IndexGet allows [] read", () => {
+  test("struct satisfying Index allows [] read", () => {
     checkOk(`
 struct SlotMap {
   k: i32;
   v: i32;
-  satisfies IndexGet<i32, i32> {
+  satisfies Index<i32, i32> {
     fn index_get(self, index: i32) -> i32 { return self.v + index; }
   }
 }
@@ -2380,15 +2380,15 @@ fn main() -> void {
 `);
   });
 
-  test("struct satisfying IndexSet allows [] write", () => {
+  test("struct satisfying IndexMut allows [] write", () => {
     checkOk(`
 struct SlotMap {
   k: i32;
   v: i32;
-  satisfies IndexGet<i32, i32> {
+  satisfies Index<i32, i32> {
     fn index_get(self, index: i32) -> i32 { return self.v + index; }
   }
-  satisfies IndexSet<i32, i32> {
+  satisfies IndexMut<i32, i32> {
     fn index_set(mut self, index: i32, value: i32) -> void { self.v = value + index; }
   }
 }
@@ -2399,16 +2399,16 @@ fn main() -> void {
 `);
   });
 
-  test("generic IndexGet bound allows [] read", () => {
+  test("generic Index bound allows [] read", () => {
     checkOk(`
 struct SlotMap {
   v: i32;
-  satisfies IndexGet<i32, i32> {
+  satisfies Index<i32, i32> {
     fn index_get(self, index: i32) -> i32 { return self.v + index; }
   }
 }
 
-fn lookup<T: IndexGet<i32, i32>>(value: T) -> i32 {
+fn lookup<T: Index<i32, i32>>(value: T) -> i32 {
   return value[0];
 }
 
@@ -2419,16 +2419,16 @@ fn main() -> void {
 `);
   });
 
-  test("generic IndexSet bound allows [] write through mut parameter", () => {
+  test("generic IndexMut bound allows [] write through mut parameter", () => {
     checkOk(`
 struct SlotMap {
   v: i32;
-  satisfies IndexSet<i32, i32> {
+  satisfies IndexMut<i32, i32> {
     fn index_set(mut self, index: i32, value: i32) -> void { self.v = value + index; }
   }
 }
 
-fn store<T: IndexSet<i32, i32>>(mut value: T) -> void {
+fn store<T: IndexMut<i32, i32>>(mut value: T) -> void {
   value[0] = 42;
 }
 
@@ -2439,14 +2439,14 @@ fn main() -> void {
 `);
   });
 
-  test("built-in arrays and strings satisfy IndexGet traits", () => {
+  test("built-in arrays and strings satisfy Index traits", () => {
     checkOk(`
-fn array_first<T: IndexGet<usize, i32>>(value: T) -> i32 {
+fn array_first<T: Index<usize, i32>>(value: T) -> i32 {
   let index: usize = 0;
   return value[index];
 }
 
-fn string_first<T: IndexGet<usize, string>>(value: T) -> string {
+fn string_first<T: Index<usize, string>>(value: T) -> string {
   let index: usize = 0;
   return value[index];
 }
@@ -2459,9 +2459,9 @@ fn main() -> void {
 `);
   });
 
-  test("built-in arrays satisfy IndexSet traits", () => {
+  test("built-in arrays satisfy IndexMut traits", () => {
     checkOk(`
-fn store<T: IndexSet<usize, i32>>(mut value: T) -> void {
+fn store<T: IndexMut<usize, i32>>(mut value: T) -> void {
   let index: usize = 0;
   value[index] = 42;
 }
@@ -2473,7 +2473,7 @@ fn main() -> void {
 `);
   });
 
-  test("[] on named type without IndexGet is rejected", () => {
+  test("[] on named type without Index is rejected", () => {
     const result = check(`
 struct Nope { x: i32; }
 fn main() -> void {
@@ -2484,7 +2484,7 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2104"]);
   });
 
-  test("[] assignment on named type without IndexSet is rejected", () => {
+  test("[] assignment on named type without IndexMut is rejected", () => {
     const result = check(`
 struct Nope { x: i32; }
 fn main() -> void {

@@ -674,7 +674,7 @@ struct Counter {
     return Self { current: 0, end };
   }
 
-  satisfies Iterable<i32> {
+  satisfies Iterator<i32> {
     fn next(mut self) -> i32? {
       if self.current == self.end {
         return null;
@@ -2068,14 +2068,14 @@ fn main() -> i32 {
     );
   });
 
-  test("compiles and runs custom Ordered trait comparisons", () => {
+  test("compiles and runs custom Order trait comparisons", () => {
     if (!hasCc()) return;
 
     withTempFile(
       `
 struct Score {
   v: i32;
-  satisfies Ordered<Score> {
+  satisfies Order<Score> {
     fn compare(self, rhs: Score) -> Ordering {
       if self.v < rhs.v { return Less; }
       if self.v > rhs.v { return Greater; }
@@ -2084,7 +2084,7 @@ struct Score {
   }
 }
 
-fn before<T: Ordered<T>>(a: T, b: T) -> bool {
+fn before<T: Order<T>>(a: T, b: T) -> bool {
   return a < b;
 }
 
@@ -2198,7 +2198,7 @@ fn main() -> i32 {
     );
   });
 
-  test("compiles and runs custom IndexGet and IndexSet trait satisfactions", () => {
+  test("compiles and runs custom Index and IndexMut trait satisfactions", () => {
     if (!hasCc()) return;
 
     withTempFile(
@@ -2206,13 +2206,13 @@ fn main() -> i32 {
 struct Slots {
   v: i32;
 
-  satisfies IndexGet<i32, i32> {
+  satisfies Index<i32, i32> {
     fn index_get(self, index: i32) -> i32 {
       return self.v + index;
     }
   }
 
-  satisfies IndexSet<i32, i32> {
+  satisfies IndexMut<i32, i32> {
     fn index_set(mut self, index: i32, value: i32) -> void {
       self.v = value + index;
     }

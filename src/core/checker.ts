@@ -1690,7 +1690,7 @@ export class Checker {
           targetObjectType.name !== "Array" &&
           !this.isStringType(targetObjectType))
       ) {
-        const info = this.lookupIndexSetInfo(targetObjectType);
+        const info = this.lookupIndexMutInfo(targetObjectType);
         if (info) {
           const indexType = this.checkExpression(
             node.index,
@@ -2806,7 +2806,7 @@ export class Checker {
     }
 
     this.report(
-      "Indexing requires an array, string, raw pointer, or a type implementing IndexGet.",
+      "Indexing requires an array, string, raw pointer, or a type implementing Index.",
       node.span,
       "E2104",
     );
@@ -4230,38 +4230,34 @@ export class Checker {
     if (
       this.typeSatisfiesTrait(
         type,
-        this.resolveBuiltinTrait("Formattable", []),
+        this.resolveBuiltinTrait("Display", []),
         scope,
       )
     ) {
-      candidates.push(this.resolveBuiltinTrait("Formattable", []));
+      candidates.push(this.resolveBuiltinTrait("Display", []));
+    }
+    if (
+      this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Hash", []), scope)
+    ) {
+      candidates.push(this.resolveBuiltinTrait("Hash", []));
     }
     if (
       this.typeSatisfiesTrait(
         type,
-        this.resolveBuiltinTrait("Hashable", []),
+        this.resolveBuiltinTrait("Clone", []),
         scope,
       )
     ) {
-      candidates.push(this.resolveBuiltinTrait("Hashable", []));
+      candidates.push(this.resolveBuiltinTrait("Clone", []));
     }
     if (
       this.typeSatisfiesTrait(
         type,
-        this.resolveBuiltinTrait("Cloneable", []),
+        this.resolveBuiltinTrait("Default", []),
         scope,
       )
     ) {
-      candidates.push(this.resolveBuiltinTrait("Cloneable", []));
-    }
-    if (
-      this.typeSatisfiesTrait(
-        type,
-        this.resolveBuiltinTrait("Defaultable", []),
-        scope,
-      )
-    ) {
-      candidates.push(this.resolveBuiltinTrait("Defaultable", []));
+      candidates.push(this.resolveBuiltinTrait("Default", []));
     }
     if (
       this.typeSatisfiesTrait(
@@ -4275,16 +4271,14 @@ export class Checker {
     if (
       this.typeSatisfiesTrait(
         type,
-        this.resolveBuiltinTrait("Ordered", [type]),
+        this.resolveBuiltinTrait("Order", [type]),
         scope,
       )
     ) {
-      candidates.push(this.resolveBuiltinTrait("Ordered", [type]));
+      candidates.push(this.resolveBuiltinTrait("Order", [type]));
     }
     if (type.kind === "Named" && type.name === "Result" && type.typeArgs?.[0]) {
-      candidates.push(
-        this.resolveBuiltinTrait("Unwrappable", [type.typeArgs[0]]),
-      );
+      candidates.push(this.resolveBuiltinTrait("Unwrap", [type.typeArgs[0]]));
     }
     if (type.kind === "Named") {
       for (const satisfaction of type.symbol?.builtinSatisfactions ?? []) {
@@ -4296,7 +4290,7 @@ export class Checker {
       }
     }
     if (type.kind === "Nullable") {
-      candidates.push(this.resolveBuiltinTrait("Unwrappable", [type.base]));
+      candidates.push(this.resolveBuiltinTrait("Unwrap", [type.base]));
     }
     if (type.kind === "Named") {
       for (const satisfaction of type.symbol?.satisfactions ?? []) {
@@ -4469,9 +4463,9 @@ export class Checker {
   }
 
   private iterableItemType(type: Type, scope: Scope): Type | null {
-    const satisfied = this.findSatisfiedTrait(type, "Iterable", scope);
+    const satisfied = this.findSatisfiedTrait(type, "Iterator", scope);
     const iterable =
-      satisfied ?? this.resolveBuiltinTrait("Iterable", [this.unknownType()]);
+      satisfied ?? this.resolveBuiltinTrait("Iterator", [this.unknownType()]);
     if (this.typeSatisfiesTrait(type, iterable, scope)) {
       return iterable.typeArgs?.[0] ?? this.unknownType();
     }
@@ -4489,13 +4483,13 @@ export class Checker {
     if (type.kind === "Named") {
       if (
         type.name === "Result" &&
-        traitName === "Unwrappable" &&
+        traitName === "Unwrap" &&
         type.typeArgs?.[0]
       ) {
-        return this.resolveBuiltinTrait("Unwrappable", [type.typeArgs[0]]);
+        return this.resolveBuiltinTrait("Unwrap", [type.typeArgs[0]]);
       }
-      if (traitName === "Formattable" && this.isFormattable(type)) {
-        return this.resolveBuiltinTrait("Formattable", []);
+      if (traitName === "Display" && this.isDisplayable(type)) {
+        return this.resolveBuiltinTrait("Display", []);
       }
       const builtinSatisfaction = type.symbol?.builtinSatisfactions?.find(
         (entry) =>
@@ -4512,14 +4506,14 @@ export class Checker {
         return this.resolveBuiltinTrait("Equal", [type]);
       }
       if (
-        traitName === "Ordered" &&
+        traitName === "Order" &&
         this.typeSatisfiesTrait(
           type,
-          this.resolveBuiltinTrait("Ordered", [type]),
+          this.resolveBuiltinTrait("Order", [type]),
           scope,
         )
       ) {
-        return this.resolveBuiltinTrait("Ordered", [type]);
+        return this.resolveBuiltinTrait("Order", [type]);
       }
       return (
         type.symbol?.satisfactions?.find(
@@ -4528,8 +4522,8 @@ export class Checker {
       );
     }
     if (type.kind === "Primitive") {
-      if (traitName === "Formattable" && this.isFormattable(type)) {
-        return this.resolveBuiltinTrait("Formattable", []);
+      if (traitName === "Display" && this.isDisplayable(type)) {
+        return this.resolveBuiltinTrait("Display", []);
       }
       if (traitName === "Equal") {
         const equal = this.resolveBuiltinTrait("Equal", [type]);
@@ -4635,7 +4629,7 @@ export class Checker {
     indexType: Type,
   ): Type | null {
     if (objectType.kind === "TypeParam") {
-      const bound = objectType.bounds.find((b) => b.name === "IndexGet");
+      const bound = objectType.bounds.find((b) => b.name === "Index");
       if (!bound) return null;
       const idx = bound.typeArgs?.[0];
       const out = bound.typeArgs?.[1];
@@ -4647,7 +4641,7 @@ export class Checker {
     if (objectType.kind === "Primitive") {
       const builtinSym = this.getBuiltinSymbolForType(objectType);
       const bs = builtinSym?.builtinSatisfactions?.find(
-        (s) => s.trait.name === "IndexGet",
+        (s) => s.trait.name === "Index",
       );
       if (bs) {
         const idx = bs.trait.typeArgs?.[0];
@@ -4664,7 +4658,7 @@ export class Checker {
     const builtinSatisfaction = objectType.symbol?.builtinSatisfactions?.find(
       (s) => {
         const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
-        return sub.name === "IndexGet";
+        return sub.name === "Index";
       },
     );
     if (builtinSatisfaction) {
@@ -4681,7 +4675,7 @@ export class Checker {
 
     const satisfaction = objectType.symbol?.satisfactions?.find((s) => {
       const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
-      return sub.name === "IndexGet";
+      return sub.name === "Index";
     });
     if (!satisfaction) return null;
     const sub = this.substituteOwnerTypeArgs(satisfaction.trait, objectType);
@@ -4692,11 +4686,11 @@ export class Checker {
     return out;
   }
 
-  private lookupIndexSetInfo(
+  private lookupIndexMutInfo(
     objectType: Type,
   ): { indexType: Type; valueType: Type } | null {
     if (objectType.kind === "TypeParam") {
-      const bound = objectType.bounds.find((b) => b.name === "IndexSet");
+      const bound = objectType.bounds.find((b) => b.name === "IndexMut");
       if (!bound) return null;
       const idx = bound.typeArgs?.[0];
       const val = bound.typeArgs?.[1];
@@ -4709,7 +4703,7 @@ export class Checker {
     const builtinSatisfaction = objectType.symbol?.builtinSatisfactions?.find(
       (s) => {
         const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
-        return sub.name === "IndexSet";
+        return sub.name === "IndexMut";
       },
     );
     if (builtinSatisfaction) {
@@ -4725,7 +4719,7 @@ export class Checker {
 
     const satisfaction = objectType.symbol?.satisfactions?.find((s) => {
       const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
-      return sub.name === "IndexSet";
+      return sub.name === "IndexMut";
     });
     if (!satisfaction) return null;
     const sub = this.substituteOwnerTypeArgs(satisfaction.trait, objectType);
@@ -4777,7 +4771,7 @@ export class Checker {
     if (left.kind === "Named") {
       const satisfaction = left.symbol?.satisfactions?.find((s) => {
         const substituted = this.substituteOwnerTypeArgs(s.trait, left);
-        return substituted.name === "Ordered";
+        return substituted.name === "Order";
       });
       if (!satisfaction) return false;
       const substituted = this.substituteOwnerTypeArgs(
@@ -4789,7 +4783,7 @@ export class Checker {
     }
 
     if (left.kind === "TypeParam") {
-      const bound = left.bounds.find((b) => b.name === "Ordered");
+      const bound = left.bounds.find((b) => b.name === "Order");
       const rhs = bound?.typeArgs?.[0];
       return !!rhs && this.typeEquals(rhs, right);
     }
@@ -4827,14 +4821,14 @@ export class Checker {
   }
 
   // Built-in trait satisfactions (spec/08):
-  // Primitives (int/float): Equal<T>, Hashable, Ordered<T> (not bool), Cloneable, Defaultable, Formattable
-  // bool:                   Equal<bool>, Hashable, Cloneable, Defaultable, Formattable
-  // string:                 Equal<string>, Hashable, Ordered<string>, Cloneable, Defaultable, Formattable
-  // Array<T>:               Iterable<T>, Formattable (T: Formattable), Cloneable (T: Cloneable), Defaultable
-  // (T1,T2,...):            Equal, Hashable, Formattable, Cloneable — when every Ti satisfies
-  // T?:                     Equal (T: Equal), Formattable (T: Formattable), Unwrappable<T>
-  // Ordering:               Equal<Ordering>, Hashable, Formattable
-  // Result<T,E>:            Unwrappable<T> (via satisfies block), Formattable (T,E: Formattable)
+  // Primitives (int/float): Equal<T>, Hash, Order<T> (not bool), Clone, Default, Display
+  // bool:                   Equal<bool>, Hash, Clone, Default, Display
+  // string:                 Equal<string>, Hash, Order<string>, Clone, Default, Display
+  // Array<T>:               Iterator<T>, Display (T: Display), Clone (T: Clone), Default
+  // (T1,T2,...):            Equal, Hash, Display, Clone — when every Ti satisfies
+  // T?:                     Equal (T: Equal), Display (T: Display), Unwrap<T>
+  // Ordering:               Equal<Ordering>, Hash, Display
+  // Result<T,E>:            Unwrap<T> (via satisfies block), Display (T,E: Display)
   private typeSatisfiesTrait(
     type: Type,
     trait: NamedRefType,
@@ -4853,35 +4847,35 @@ export class Checker {
         return true;
       if (trait.name === "Equal" && this.isBuiltinEquatable(type, trait))
         return true;
-      if (trait.name === "Formattable") {
-        if (this.isFormattable(type)) return true;
+      if (trait.name === "Display") {
+        if (this.isDisplayable(type)) return true;
         if (type.name === "Ordering") return true;
         if (type.name === "Result" && type.typeArgs?.length === 2)
           return (
             this.typeSatisfiesTrait(
               type.typeArgs[0],
-              this.resolveBuiltinTrait("Formattable", []),
+              this.resolveBuiltinTrait("Display", []),
               scope,
             ) &&
             this.typeSatisfiesTrait(
               type.typeArgs[1],
-              this.resolveBuiltinTrait("Formattable", []),
+              this.resolveBuiltinTrait("Display", []),
               scope,
             )
           );
       }
-      if (trait.name === "Hashable") {
+      if (trait.name === "Hash") {
         if (type.name === "string") return true;
         if (type.name === "Ordering") return true;
       }
-      if (trait.name === "Ordered" && type.name === "string") {
+      if (trait.name === "Order" && type.name === "string") {
         const typeArg = trait.typeArgs?.[0];
         if (typeArg && this.typeEquals(type, typeArg)) return true;
       }
-      if (trait.name === "Cloneable") {
+      if (trait.name === "Clone") {
         if (type.name === "string") return true;
       }
-      if (trait.name === "Defaultable") {
+      if (trait.name === "Default") {
         if (type.name === "string") return true;
       }
       return (
@@ -4895,16 +4889,16 @@ export class Checker {
     }
 
     if (type.kind === "Primitive") {
-      if (trait.name === "Formattable") return this.isFormattable(type);
+      if (trait.name === "Display") return this.isDisplayable(type);
       if (trait.name === "Equal") return this.isBuiltinEquatable(type, trait);
-      if (trait.name === "Hashable") return true;
-      if (trait.name === "Ordered") {
+      if (trait.name === "Hash") return true;
+      if (trait.name === "Order") {
         const typeArg = trait.typeArgs?.[0];
         if (!typeArg || !this.typeEquals(type, typeArg)) return false;
         return type.name !== "bool";
       }
-      if (trait.name === "Cloneable") return true;
-      if (trait.name === "Defaultable") return true;
+      if (trait.name === "Clone") return true;
+      if (trait.name === "Default") return true;
       if (["Add", "Sub", "Mul", "Div", "Rem"].includes(trait.name)) {
         if (!this.isNumericType(type)) return false;
         const rhs = trait.typeArgs?.[0];
@@ -4958,12 +4952,12 @@ export class Checker {
             ),
           )
         );
-      if (trait.name === "Formattable")
-        return allSatisfy(this.resolveBuiltinTrait("Formattable", []));
-      if (trait.name === "Hashable")
-        return allSatisfy(this.resolveBuiltinTrait("Hashable", []));
-      if (trait.name === "Cloneable")
-        return allSatisfy(this.resolveBuiltinTrait("Cloneable", []));
+      if (trait.name === "Display")
+        return allSatisfy(this.resolveBuiltinTrait("Display", []));
+      if (trait.name === "Hash")
+        return allSatisfy(this.resolveBuiltinTrait("Hash", []));
+      if (trait.name === "Clone")
+        return allSatisfy(this.resolveBuiltinTrait("Clone", []));
     }
 
     if (type.kind === "Nullable") {
@@ -4973,13 +4967,13 @@ export class Checker {
           this.resolveBuiltinTrait("Equal", [type.base]),
           scope,
         );
-      if (trait.name === "Formattable")
+      if (trait.name === "Display")
         return this.typeSatisfiesTrait(
           type.base,
-          this.resolveBuiltinTrait("Formattable", []),
+          this.resolveBuiltinTrait("Display", []),
           scope,
         );
-      if (trait.name === "Unwrappable") {
+      if (trait.name === "Unwrap") {
         const typeArg = trait.typeArgs?.[0];
         if (!typeArg) return false;
         return this.typeEquals(type.base, typeArg);
@@ -5062,7 +5056,7 @@ export class Checker {
     );
   }
 
-  private isFormattable(type: Type): boolean {
+  private isDisplayable(type: Type): boolean {
     return (
       (type.kind === "Primitive" &&
         [
