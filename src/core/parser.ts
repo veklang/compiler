@@ -2,6 +2,9 @@ import type {
   ArrayLiteralExpression,
   AssignableExpression,
   BlockStatement,
+  BuiltinDeclaration,
+  BuiltinMember,
+  BuiltinSatisfiesBlock,
   ContinueStatement,
   EnumDeclaration,
   EnumMember,
@@ -87,6 +90,7 @@ export class Parser {
 
   private parseStatement(): Statement | null {
     if (this.checkKeyword("import")) return this.parseImport();
+    if (this.checkKeyword("builtin")) return this.parseBuiltinDeclaration();
 
     let isPublic = false;
     if (this.matchKeyword("pub")) isPublic = true;
@@ -102,6 +106,68 @@ export class Parser {
     if (declaration) return declaration;
 
     return this.parseNonDeclarationStatement();
+  }
+
+  private parseBuiltinDeclaration(): BuiltinDeclaration {
+    const start = this.expectKeyword("builtin");
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const typeParams = this.parseTypeParams();
+    this.expectPunctuator("{");
+
+    const members: BuiltinMember[] = [];
+    while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      if (this.checkKeyword("satisfies")) {
+        members.push(this.parseBuiltinSatisfiesBlock());
+      } else if (this.checkKeyword("fn")) {
+        members.push(this.parseTraitMethodSignature());
+      } else {
+        this.report(
+          "Expected 'fn' or 'satisfies' inside builtin declaration.",
+          this.currentSpan(),
+          "E1041",
+        );
+        this.advance();
+      }
+    }
+
+    const end = this.expectPunctuator("}");
+    return {
+      kind: "BuiltinDeclaration",
+      span: this.spanFrom(start?.span, end?.span ?? name.span),
+      name,
+      typeParams: typeParams ?? undefined,
+      members,
+    };
+  }
+
+  private parseBuiltinSatisfiesBlock(): BuiltinSatisfiesBlock {
+    const start = this.expectKeyword("satisfies");
+    const trait =
+      this.parseNamedType() ?? this.placeholderNamedType(start?.span);
+    this.expectPunctuator("{");
+
+    const methods: TraitMethodSignature[] = [];
+    while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      if (this.checkKeyword("fn")) {
+        methods.push(this.parseTraitMethodSignature());
+      } else {
+        this.report(
+          "Expected 'fn' inside builtin satisfies block.",
+          this.currentSpan(),
+          "E1042",
+        );
+        this.advance();
+      }
+    }
+
+    const end = this.expectPunctuator("}");
+    return {
+      kind: "BuiltinSatisfiesBlock",
+      span: this.spanFrom(start?.span, end?.span ?? trait.span),
+      trait,
+      methods,
+    };
   }
 
   private parseImport(): ImportDeclaration {

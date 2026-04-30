@@ -1,0 +1,16 @@
+builtin string {
+  fn len(self) -> usize;
+  fn to_cstr(self) -> cstr;
+
+  satisfies Equal<string> {
+    fn equals(self, other: string) -> bool;
+  }
+
+  satisfies Add<string, string> {
+    fn add(self, rhs: string) -> string;
+  }
+
+  satisfies IndexGet<usize, string> {
+    fn index_get(self, index: usize) -> string;
+  }
+}

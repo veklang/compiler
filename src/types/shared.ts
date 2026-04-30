@@ -29,6 +29,7 @@ export const keywords = [
   "as",
   "where",
   "satisfies",
+  "builtin",
   "Self",
   "void",
   "null",

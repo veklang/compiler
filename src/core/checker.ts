@@ -7,6 +7,7 @@ import type {
   AssignmentStatement,
   BinaryExpression,
   BlockStatement,
+  BuiltinDeclaration,
   CallExpression,
   CastExpression,
   EnumDeclaration,
@@ -218,6 +219,12 @@ interface TraitSatisfactionInfo {
   methods: Map<string, MethodDeclaration>;
 }
 
+interface BuiltinTraitSatisfactionInfo {
+  span: Span;
+  trait: NamedRefType;
+  methods: Map<string, TraitMethodSignature>;
+}
+
 interface TypeSymbol extends BaseSymbol {
   kind: "BuiltinType" | "Alias" | "Struct" | "Enum" | "Trait";
   typeParams: TypeParameter[];
@@ -229,6 +236,8 @@ interface TypeSymbol extends BaseSymbol {
   methods?: Map<string, MethodDeclaration>;
   variants?: Map<string, EnumVariant>;
   satisfactions?: TraitSatisfactionInfo[];
+  builtinMethods?: Map<string, TraitMethodSignature>;
+  builtinSatisfactions?: BuiltinTraitSatisfactionInfo[];
 }
 
 export interface GenericInstantiation {
@@ -287,6 +296,7 @@ export class Checker {
   private functionLocals: ValueSymbol[][] = [];
   private instantiations: GenericInstantiation[] = [];
   private externLinkNames = new Map<string, FunctionDeclaration>();
+  private processingTrustedStd = false;
 
   constructor(
     private program: Program,
@@ -301,11 +311,16 @@ export class Checker {
 
   public checkProgram(): CheckResult {
     const coreStatements = this.loadCoreLibraryStatements();
+    const stdStatements = this.loadStdLibraryStatements();
     this.predeclareTypes(coreStatements);
     this.predeclareFunctions(coreStatements);
     this.predeclareTypes();
     this.predeclareFunctions();
     this.materializeTypes();
+    this.processingTrustedStd = true;
+    for (const statement of stdStatements)
+      this.checkStatement(statement, this.globalScope);
+    this.processingTrustedStd = false;
     for (const statement of coreStatements)
       this.checkStatement(statement, this.globalScope);
     for (const statement of this.program.body)
@@ -331,6 +346,79 @@ export class Checker {
       statements.push(...parsed.program.body);
     }
     return statements;
+  }
+
+  private loadStdLibraryStatements(): Statement[] {
+    const builtinsDir = path.resolve(__dirname, "../../builtins/std");
+    const files = ["string.vek", "array.vek"];
+    const statements: Statement[] = [];
+    for (const file of files) {
+      const source = fs.readFileSync(path.join(builtinsDir, file), "utf8");
+      const lexed = new Lexer(source).lex();
+      const parsed = new Parser(lexed.tokens).parseProgram();
+      statements.push(...parsed.program.body);
+    }
+    return statements;
+  }
+
+  private attachBuiltinDeclaration(decl: BuiltinDeclaration, scope: Scope) {
+    const symbol = this.lookupType(decl.name.name, scope);
+    if (!symbol) {
+      this.report(
+        `Builtin declaration refers to unknown type '${decl.name.name}'.`,
+        decl.name.span,
+        "E2051",
+      );
+      return;
+    }
+
+    const ownerScope = this.createTypeScope(symbol, scope);
+
+    for (const member of decl.members) {
+      if (member.kind === "TraitMethodSignature") {
+        if (!symbol.builtinMethods) symbol.builtinMethods = new Map();
+        symbol.builtinMethods.set(member.name.name, member);
+      } else if (member.kind === "BuiltinSatisfiesBlock") {
+        const traitRef = this.resolveNamedReference(member.trait, ownerScope);
+        if (!symbol.builtinSatisfactions) symbol.builtinSatisfactions = [];
+        const methods = new Map<string, TraitMethodSignature>();
+        for (const m of member.methods) {
+          methods.set(m.name.name, m);
+        }
+        symbol.builtinSatisfactions.push({
+          span: member.span,
+          trait: traitRef,
+          methods,
+        });
+      }
+    }
+  }
+
+  private getBuiltinSymbolForType(type: Type): TypeSymbol | undefined {
+    if (type.kind === "Named" && type.symbol?.kind === "BuiltinType") {
+      return type.symbol;
+    }
+    if (type.kind === "Primitive") {
+      const sym = this.globalScope.types.get(type.name);
+      if (sym?.kind === "BuiltinType") return sym;
+    }
+    return undefined;
+  }
+
+  private lookupBuiltinInherentMethod(
+    type: Type,
+    name: string,
+    scope: Scope,
+  ): MethodInfo | null {
+    const symbol = this.getBuiltinSymbolForType(type);
+    if (!symbol?.builtinMethods) return null;
+    const method = symbol.builtinMethods.get(name);
+    if (!method) return null;
+    const resolved = this.resolveMethod(method, symbol, scope);
+    if (type.kind === "Named") {
+      return this.instantiateMethodForOwner(resolved, type);
+    }
+    return resolved;
   }
 
   private createScope(parent?: Scope, selfType?: NamedRefType): Scope {
@@ -691,6 +779,17 @@ export class Checker {
           this.requireTypeSymbol(statement.name.name, scope),
           scope,
         );
+        return;
+      case "BuiltinDeclaration":
+        if (!this.processingTrustedStd) {
+          this.report(
+            "The 'builtin' declaration is only allowed in trusted std sources.",
+            statement.span,
+            "E2050",
+          );
+          return;
+        }
+        this.attachBuiltinDeclaration(statement, scope);
         return;
       case "ReturnStatement":
         this.checkReturnStatement(statement, scope);
@@ -2446,15 +2545,12 @@ export class Checker {
       return this.primitive("usize");
     }
 
-    if (node.property.name === "to_cstr" && this.isStringType(objectType)) {
-      return {
-        kind: "Function",
-        isUnsafe: false,
-        typeParams: [],
-        params: [],
-        returnType: this.primitive("cstr"),
-      };
-    }
+    const builtinMethod = this.lookupBuiltinInherentMethod(
+      objectType,
+      node.property.name,
+      scope,
+    );
+    if (builtinMethod) return this.methodCallType(builtinMethod);
 
     if (objectType.kind === "Module") {
       if (!objectType.exportedNames.has(node.property.name)) {
@@ -4472,7 +4568,41 @@ export class Checker {
       return out;
     }
 
+    if (objectType.kind === "Primitive") {
+      const builtinSym = this.getBuiltinSymbolForType(objectType);
+      const bs = builtinSym?.builtinSatisfactions?.find(
+        (s) => s.trait.name === "IndexGet",
+      );
+      if (bs) {
+        const idx = bs.trait.typeArgs?.[0];
+        const out = bs.trait.typeArgs?.[1];
+        if (!idx || !out) return null;
+        if (!this.typeEquals(idx, indexType)) return null;
+        return out;
+      }
+      return null;
+    }
+
     if (objectType.kind !== "Named") return null;
+
+    const builtinSatisfaction = objectType.symbol?.builtinSatisfactions?.find(
+      (s) => {
+        const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
+        return sub.name === "IndexGet";
+      },
+    );
+    if (builtinSatisfaction) {
+      const sub = this.substituteOwnerTypeArgs(
+        builtinSatisfaction.trait,
+        objectType,
+      );
+      const idx = sub.typeArgs?.[0];
+      const out = sub.typeArgs?.[1];
+      if (!idx || !out) return null;
+      if (!this.typeEquals(idx, indexType)) return null;
+      return out;
+    }
+
     const satisfaction = objectType.symbol?.satisfactions?.find((s) => {
       const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
       return sub.name === "IndexGet";
@@ -4499,6 +4629,24 @@ export class Checker {
     }
 
     if (objectType.kind !== "Named") return null;
+
+    const builtinSatisfaction = objectType.symbol?.builtinSatisfactions?.find(
+      (s) => {
+        const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
+        return sub.name === "IndexSet";
+      },
+    );
+    if (builtinSatisfaction) {
+      const sub = this.substituteOwnerTypeArgs(
+        builtinSatisfaction.trait,
+        objectType,
+      );
+      const idx = sub.typeArgs?.[0];
+      const val = sub.typeArgs?.[1];
+      if (!idx || !val) return null;
+      return { indexType: idx, valueType: val };
+    }
+
     const satisfaction = objectType.symbol?.satisfactions?.find((s) => {
       const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
       return sub.name === "IndexSet";
@@ -4628,37 +4776,6 @@ export class Checker {
         if (!elemType) return false;
         return this.typeEquals(traitArg, elemType);
       }
-      if (type.name === "Array" && trait.name === "IndexGet") {
-        const idx = trait.typeArgs?.[0];
-        const out = trait.typeArgs?.[1];
-        const elemType = type.typeArgs?.[0];
-        if (!idx || !out) return true;
-        if (!elemType) return false;
-        return (
-          this.typeEquals(idx, this.primitive("usize")) &&
-          this.typeEquals(out, elemType)
-        );
-      }
-      if (type.name === "Array" && trait.name === "IndexSet") {
-        const idx = trait.typeArgs?.[0];
-        const value = trait.typeArgs?.[1];
-        const elemType = type.typeArgs?.[0];
-        if (!idx || !value) return true;
-        if (!elemType) return false;
-        return (
-          this.typeEquals(idx, this.primitive("usize")) &&
-          this.typeEquals(value, elemType)
-        );
-      }
-      if (type.name === "string" && trait.name === "IndexGet") {
-        const idx = trait.typeArgs?.[0];
-        const out = trait.typeArgs?.[1];
-        if (!idx || !out) return true;
-        return (
-          this.typeEquals(idx, this.primitive("usize")) &&
-          this.typeEquals(out, this.primitive("string"))
-        );
-      }
       if (trait.name === "Equal" && this.isBuiltinEquatable(type, trait))
         return true;
       if (trait.name === "Formattable") {
@@ -4704,6 +4821,15 @@ export class Checker {
       if (trait.name === "Defaultable") {
         if (type.name === "string" || type.name === "Array") return true;
       }
+      if (
+        type.symbol?.builtinSatisfactions?.some((entry) =>
+          this.namedTypeEquals(
+            this.substituteOwnerTypeArgs(entry.trait, type),
+            trait,
+          ),
+        )
+      )
+        return true;
       return (
         type.symbol?.satisfactions?.some((entry) =>
           this.namedTypeEquals(
@@ -4755,15 +4881,13 @@ export class Checker {
         if (!rhs || !out) return true;
         return this.typeEquals(type, rhs) && this.typeEquals(type, out);
       }
-      if (type.name === "string" && trait.name === "IndexGet") {
-        const idx = trait.typeArgs?.[0];
-        const out = trait.typeArgs?.[1];
-        if (!idx || !out) return true;
-        return (
-          this.typeEquals(idx, this.primitive("usize")) &&
-          this.typeEquals(out, this.primitive("string"))
-        );
-      }
+      const builtinSym = this.getBuiltinSymbolForType(type);
+      if (
+        builtinSym?.builtinSatisfactions?.some((entry) =>
+          this.namedTypeEquals(entry.trait, trait),
+        )
+      )
+        return true;
     }
 
     if (type.kind === "Tuple") {

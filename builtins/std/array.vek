@@ -1,0 +1,11 @@
+builtin Array<T> {
+  fn len(self) -> usize;
+
+  satisfies IndexGet<usize, T> {
+    fn index_get(self, index: usize) -> T;
+  }
+
+  satisfies IndexSet<usize, T> {
+    fn index_set(mut self, index: usize, value: T) -> void;
+  }
+}

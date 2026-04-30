@@ -19,6 +19,7 @@ export type Statement =
   | StructDeclaration
   | TraitDeclaration
   | EnumDeclaration
+  | BuiltinDeclaration
   | ReturnStatement
   | IfStatement
   | WhileStatement
@@ -151,6 +152,21 @@ export interface TraitSatisfiesDeclaration extends Node {
   kind: "TraitSatisfiesDeclaration";
   trait: NamedType;
   methods: MethodDeclaration[];
+}
+
+export interface BuiltinDeclaration extends Node {
+  kind: "BuiltinDeclaration";
+  name: Identifier;
+  typeParams?: TypeParameter[];
+  members: BuiltinMember[];
+}
+
+export type BuiltinMember = TraitMethodSignature | BuiltinSatisfiesBlock;
+
+export interface BuiltinSatisfiesBlock extends Node {
+  kind: "BuiltinSatisfiesBlock";
+  trait: NamedType;
+  methods: TraitMethodSignature[];
 }
 
 export interface TypeParameter extends Node {
