@@ -1471,6 +1471,12 @@ export class Checker {
     }
 
     if (["+", "-", "*", "/", "%"].includes(operator)) {
+      const customOutput = this.lookupArithmeticOutputType(
+        targetType,
+        valueType,
+        operator,
+      );
+      if (customOutput) return customOutput;
       if (!this.isNumericType(targetType) || !this.isNumericType(valueType)) {
         this.report(
           "Arithmetic requires numeric operands.",
@@ -1895,6 +1901,12 @@ export class Checker {
     }
 
     if (["+", "-", "*", "/", "%"].includes(node.operator)) {
+      const customOutput = this.lookupArithmeticOutputType(
+        left,
+        right,
+        node.operator,
+      );
+      if (customOutput) return customOutput;
       if (!this.isNumericType(left) || !this.isNumericType(right)) {
         this.report(
           "Arithmetic requires numeric operands.",
@@ -4282,6 +4294,55 @@ export class Checker {
     return null;
   }
 
+  private arithmeticTraitName(
+    operator: string,
+  ): "Add" | "Sub" | "Mul" | "Div" | "Rem" | null {
+    if (operator === "+") return "Add";
+    if (operator === "-") return "Sub";
+    if (operator === "*") return "Mul";
+    if (operator === "/") return "Div";
+    if (operator === "%") return "Rem";
+    return null;
+  }
+
+  private lookupArithmeticOutputType(
+    left: Type,
+    right: Type,
+    operator: string,
+  ): Type | null {
+    const traitName = this.arithmeticTraitName(operator);
+    if (!traitName) return null;
+
+    if (left.kind === "Named") {
+      const satisfaction = left.symbol?.satisfactions?.find((s) => {
+        const substituted = this.substituteOwnerTypeArgs(s.trait, left);
+        return substituted.name === traitName;
+      });
+      if (!satisfaction) return null;
+      const substituted = this.substituteOwnerTypeArgs(
+        satisfaction.trait,
+        left,
+      );
+      const rhs = substituted.typeArgs?.[0];
+      const output = substituted.typeArgs?.[1];
+      if (!rhs || !output) return null;
+      if (!this.typeEquals(rhs, right)) return null;
+      return output;
+    }
+
+    if (left.kind === "TypeParam") {
+      const bound = left.bounds.find((b) => b.name === traitName);
+      if (!bound) return null;
+      const rhs = bound.typeArgs?.[0];
+      const output = bound.typeArgs?.[1];
+      if (!rhs || !output) return null;
+      if (!this.typeEquals(rhs, right)) return null;
+      return output;
+    }
+
+    return null;
+  }
+
   private canCompareForEquality(
     left: Type,
     right: Type,
@@ -4403,6 +4464,13 @@ export class Checker {
       }
       if (trait.name === "Cloneable") return true;
       if (trait.name === "Defaultable") return true;
+      if (["Add", "Sub", "Mul", "Div", "Rem"].includes(trait.name)) {
+        if (!this.isNumericType(type)) return false;
+        const rhs = trait.typeArgs?.[0];
+        const out = trait.typeArgs?.[1];
+        if (!rhs || !out) return true;
+        return this.typeEquals(type, rhs) && this.typeEquals(type, out);
+      }
     }
 
     if (type.kind === "Tuple") {

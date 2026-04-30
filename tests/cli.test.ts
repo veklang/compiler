@@ -1782,4 +1782,82 @@ fn main() -> i32 {
       },
     );
   });
+
+  test("compiles and runs custom Add/Sub/Mul/Div/Rem trait satisfactions", () => {
+    if (!hasMuslGcc()) return;
+
+    withTempFile(
+      `
+struct Vec2 {
+  x: i32;
+  y: i32;
+
+  satisfies Add<Vec2, Vec2> {
+    fn add(self, rhs: Vec2) -> Vec2 {
+      return Vec2 { x: self.x + rhs.x, y: self.y + rhs.y };
+    }
+  }
+
+  satisfies Sub<Vec2, Vec2> {
+    fn sub(self, rhs: Vec2) -> Vec2 {
+      return Vec2 { x: self.x - rhs.x, y: self.y - rhs.y };
+    }
+  }
+
+  satisfies Mul<Vec2, Vec2> {
+    fn mul(self, rhs: Vec2) -> Vec2 {
+      return Vec2 { x: self.x * rhs.x, y: self.y * rhs.y };
+    }
+  }
+
+  satisfies Div<Vec2, Vec2> {
+    fn div(self, rhs: Vec2) -> Vec2 {
+      return Vec2 { x: self.x / rhs.x, y: self.y / rhs.y };
+    }
+  }
+
+  satisfies Rem<Vec2, Vec2> {
+    fn rem(self, rhs: Vec2) -> Vec2 {
+      return Vec2 { x: self.x % rhs.x, y: self.y % rhs.y };
+    }
+  }
+}
+
+fn main() -> i32 {
+  let a = Vec2 { x: 10, y: 20 };
+  let b = Vec2 { x: 3, y: 4 };
+  let added = a + b;
+  let subbed = a - b;
+  let mulled = a * b;
+  let divved = a / b;
+  let remmed = a % b;
+  if added.x != 13 { return 1; }
+  if added.y != 24 { return 2; }
+  if subbed.x != 7 { return 3; }
+  if subbed.y != 16 { return 4; }
+  if mulled.x != 30 { return 5; }
+  if mulled.y != 80 { return 6; }
+  if divved.x != 3 { return 7; }
+  if divved.y != 5 { return 8; }
+  if remmed.x != 1 { return 9; }
+  if remmed.y != 0 { return 10; }
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
 });

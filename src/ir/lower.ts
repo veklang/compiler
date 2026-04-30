@@ -10,6 +10,7 @@ import type {
   IrGlobalId,
   IrLocal,
   IrLocalId,
+  IrNamedType,
   IrOperand,
   IrPrimitiveType,
   IrProgram,
@@ -1730,6 +1731,35 @@ function lowerCompoundOperation(
     return { kind: "temp", id: target, type };
   }
 
+  if (left.type.kind === "named") {
+    const arithMethod = arithmeticMethodName(operator);
+    if (arithMethod) {
+      const linkName = context.methodLinks.get(
+        methodKey(left.type.name, arithMethod),
+      );
+      if (linkName) {
+        const target = nextTemp(context);
+        const calleeType: IrType = {
+          kind: "function",
+          params: [
+            { type: left.type, mutable: false },
+            { type: right.type, mutable: false },
+          ],
+          returnType: type,
+        };
+        context.currentBlock.instructions.push({
+          kind: "call",
+          target,
+          callee: { kind: "function", name: linkName, type: calleeType },
+          args: [left, right],
+          type,
+          span,
+        });
+        return { kind: "temp", id: target, type };
+      }
+    }
+  }
+
   const target = nextTemp(context);
   context.currentBlock.instructions.push({
     kind: "binary",
@@ -3242,8 +3272,30 @@ function lowerBinary(
     return { kind: "temp", id: target, type: irPrimitive("string") };
   }
 
-  const target = nextTemp(context);
   const type = typeFromNodeInContext(context, expression);
+
+  if (type.kind !== "primitive" && type.kind !== "pointer") {
+    const arithMethod = arithmeticMethodName(expression.operator);
+    if (arithMethod) {
+      const leftType = typeFromNodeInContext(context, expression.left);
+      if (leftType.kind === "named") {
+        const linkName = context.methodLinks.get(
+          methodKey(leftType.name, arithMethod),
+        );
+        if (linkName) {
+          return lowerCustomArithmetic(
+            linkName,
+            expression,
+            leftType,
+            type,
+            context,
+          );
+        }
+      }
+    }
+  }
+
+  const target = nextTemp(context);
   const left = lowerExpression(expression.left, context);
   const right = lowerExpression(expression.right, context);
   context.currentBlock.instructions.push({
@@ -3484,6 +3536,47 @@ function lowerCustomEquality(
     span,
   });
   return { kind: "temp", id: target, type: irPrimitive("bool") };
+}
+
+function arithmeticMethodName(
+  operator: string,
+): "add" | "sub" | "mul" | "div" | "rem" | null {
+  if (operator === "+") return "add";
+  if (operator === "-") return "sub";
+  if (operator === "*") return "mul";
+  if (operator === "/") return "div";
+  if (operator === "%") return "rem";
+  return null;
+}
+
+function lowerCustomArithmetic(
+  linkName: string,
+  expression: BinaryExpression,
+  leftType: IrNamedType,
+  outputType: IrType,
+  context: LowerContext,
+): IrOperand {
+  const target = nextTemp(context);
+  const left = lowerExpression(expression.left, context);
+  const right = lowerExpression(expression.right, context);
+  const rightType = typeFromNodeInContext(context, expression.right);
+  const calleeType: IrType = {
+    kind: "function",
+    params: [
+      { type: leftType, mutable: false },
+      { type: rightType, mutable: false },
+    ],
+    returnType: outputType,
+  };
+  context.currentBlock.instructions.push({
+    kind: "call",
+    target,
+    callee: { kind: "function", name: linkName, type: calleeType },
+    args: [left, right],
+    type: outputType,
+    span: expression.span,
+  });
+  return { kind: "temp", id: target, type: outputType };
 }
 
 function lowerNullableEquality(

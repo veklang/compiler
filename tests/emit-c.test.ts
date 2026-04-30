@@ -1138,4 +1138,30 @@ fn length(xs: i32[]) -> usize {
 
     assert.ok(c.includes("__vek_array_len("));
   });
+
+  test("emits Add satisfaction as a method call on +", () => {
+    const c = emitOk(`
+struct Vec2 {
+  x: i32;
+  y: i32;
+
+  satisfies Add<Vec2, Vec2> {
+    fn add(self, rhs: Vec2) -> Vec2 {
+      return Vec2 { x: self.x + rhs.x, y: self.y + rhs.y };
+    }
+  }
+}
+
+fn sum(a: Vec2, b: Vec2) -> Vec2 {
+  return a + b;
+}
+`);
+
+    assert.ok(
+      c.includes(
+        "static __vek_struct_Vec2 __vek_fn_Vec2_add(__vek_struct_Vec2 v0, __vek_struct_Vec2 v1);",
+      ),
+    );
+    assert.ok(c.includes("__vek_fn_Vec2_add(v0, v1)"));
+  });
 });

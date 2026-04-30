@@ -2066,3 +2066,94 @@ const x: i32;
     );
   });
 });
+
+describe("arithmetic operator traits", () => {
+  test("struct satisfying Add<T, T> allows + on that type", () => {
+    checkOk(`
+struct Vec2 {
+  x: i32;
+  y: i32;
+
+  satisfies Add<Vec2, Vec2> {
+    fn add(self, rhs: Vec2) -> Vec2 {
+      return Vec2 { x: self.x + rhs.x, y: self.y + rhs.y };
+    }
+  }
+}
+
+fn main() -> void {
+  let a = Vec2 { x: 1, y: 2 };
+  let b = Vec2 { x: 3, y: 4 };
+  let _c: Vec2 = a + b;
+}
+`);
+  });
+
+  test("struct satisfying Add with heterogeneous Output type is accepted", () => {
+    checkOk(`
+struct Meters {
+  val: i32;
+  satisfies Add<Meters, Meters> {
+    fn add(self, rhs: Meters) -> Meters {
+      return Meters { val: self.val + rhs.val };
+    }
+  }
+}
+
+fn needs_meters(_m: Meters) -> void { return; }
+
+fn main() -> void {
+  let a = Meters { val: 10 };
+  let b = Meters { val: 5 };
+  needs_meters(a + b);
+}
+`);
+  });
+
+  test("+ on named type without Add satisfaction is rejected", () => {
+    const result = check(`
+struct Nope { x: i32; }
+fn main() -> void {
+  let a = Nope { x: 1 };
+  let b = Nope { x: 2 };
+  let _c = a + b;
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101"]);
+  });
+
+  test("struct satisfying Sub, Mul, Div, Rem allows those operators", () => {
+    checkOk(`
+struct N {
+  v: i32;
+  satisfies Add<N, N> { fn add(self, rhs: N) -> N { return N { v: self.v + rhs.v }; } }
+  satisfies Sub<N, N> { fn sub(self, rhs: N) -> N { return N { v: self.v - rhs.v }; } }
+  satisfies Mul<N, N> { fn mul(self, rhs: N) -> N { return N { v: self.v * rhs.v }; } }
+  satisfies Div<N, N> { fn div(self, rhs: N) -> N { return N { v: self.v / rhs.v }; } }
+  satisfies Rem<N, N> { fn rem(self, rhs: N) -> N { return N { v: self.v % rhs.v }; } }
+}
+fn main() -> void {
+  let a = N { v: 10 };
+  let b = N { v: 3 };
+  let _add: N = a + b;
+  let _sub: N = a - b;
+  let _mul: N = a * b;
+  let _div: N = a / b;
+  let _rem: N = a % b;
+}
+`);
+  });
+
+  test("primitives implicitly satisfy Add<T, T>", () => {
+    checkOk(`
+fn needs_add<T: Add<T, T>>(a: T, b: T) -> T { return a + b; }
+
+fn main() -> void {
+  let _x: i32 = needs_add(1, 2);
+  let a: f64 = 1.0;
+  let b: f64 = 2.0;
+  let _y: f64 = needs_add(a, b);
+}
+`);
+  });
+});
