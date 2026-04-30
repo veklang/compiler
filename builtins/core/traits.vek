@@ -60,23 +60,23 @@ pub trait Not<Output> {
 }
 
 pub trait BitAnd<Rhs, Output> {
-  fn bitand(self, rhs: Rhs) -> Output;
+  fn bit_and(self, rhs: Rhs) -> Output;
 }
 
 pub trait BitOr<Rhs, Output> {
-  fn bitor(self, rhs: Rhs) -> Output;
+  fn bit_or(self, rhs: Rhs) -> Output;
 }
 
 pub trait BitXor<Rhs, Output> {
-  fn bitxor(self, rhs: Rhs) -> Output;
+  fn bit_xor(self, rhs: Rhs) -> Output;
 }
 
 pub trait ShiftLeft<Rhs, Output> {
-  fn shl(self, rhs: Rhs) -> Output;
+  fn shift_left(self, rhs: Rhs) -> Output;
 }
 
 pub trait ShiftRight<Rhs, Output> {
-  fn shr(self, rhs: Rhs) -> Output;
+  fn shift_right(self, rhs: Rhs) -> Output;
 }
 
 pub trait Index<Idx, Output> {

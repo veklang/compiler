@@ -785,8 +785,8 @@ type IntegerHelperOp =
   | "mul"
   | "div"
   | "mod"
-  | "shl"
-  | "shr"
+  | "shift_left"
+  | "shift_right"
   | "neg";
 
 interface IntegerHelper {
@@ -848,8 +848,8 @@ function binaryHelperOp(operator: string): IntegerHelperOp | null {
   if (operator === "*") return "mul";
   if (operator === "/") return "div";
   if (operator === "%") return "mod";
-  if (operator === "<<") return "shl";
-  if (operator === ">>") return "shr";
+  if (operator === "<<") return "shift_left";
+  if (operator === ">>") return "shift_right";
   return null;
 }
 
@@ -922,7 +922,7 @@ function emitIntegerHelper(helper: IntegerHelper): string[] {
       "}",
     ];
   }
-  if (helper.op === "shl") {
+  if (helper.op === "shift_left") {
     return [
       `static inline ${typeName} ${name}(${typeName} a, ${typeName} b) {`,
       ...shiftGuards(helper.type.name, "b", bits),

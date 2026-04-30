@@ -3638,12 +3638,12 @@ function arithmeticMethodName(
 
 function bitwiseMethodName(
   operator: string,
-): "bitand" | "bitor" | "bitxor" | "shl" | "shr" | null {
-  if (operator === "&") return "bitand";
-  if (operator === "|") return "bitor";
-  if (operator === "^") return "bitxor";
-  if (operator === "<<") return "shl";
-  if (operator === ">>") return "shr";
+): "bit_and" | "bit_or" | "bit_xor" | "shift_left" | "shift_right" | null {
+  if (operator === "&") return "bit_and";
+  if (operator === "|") return "bit_or";
+  if (operator === "^") return "bit_xor";
+  if (operator === "<<") return "shift_left";
+  if (operator === ">>") return "shift_right";
   return null;
 }
 

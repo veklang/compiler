@@ -2195,11 +2195,11 @@ fn main() -> void { let _a = !Nope { x: 1 }; }
     checkOk(`
 struct Bits {
   v: i32;
-  satisfies BitAnd<Bits, Bits> { fn bitand(self, rhs: Bits) -> Bits { return Bits { v: self.v & rhs.v }; } }
-  satisfies BitOr<Bits, Bits>  { fn bitor(self, rhs: Bits)  -> Bits { return Bits { v: self.v | rhs.v }; } }
-  satisfies BitXor<Bits, Bits> { fn bitxor(self, rhs: Bits) -> Bits { return Bits { v: self.v ^ rhs.v }; } }
-  satisfies ShiftLeft<Bits, Bits>  { fn shl(self, rhs: Bits) -> Bits { return Bits { v: self.v << rhs.v }; } }
-  satisfies ShiftRight<Bits, Bits> { fn shr(self, rhs: Bits) -> Bits { return Bits { v: self.v >> rhs.v }; } }
+  satisfies BitAnd<Bits, Bits> { fn bit_and(self, rhs: Bits) -> Bits { return Bits { v: self.v & rhs.v }; } }
+  satisfies BitOr<Bits, Bits>  { fn bit_or(self, rhs: Bits)  -> Bits { return Bits { v: self.v | rhs.v }; } }
+  satisfies BitXor<Bits, Bits> { fn bit_xor(self, rhs: Bits) -> Bits { return Bits { v: self.v ^ rhs.v }; } }
+  satisfies ShiftLeft<Bits, Bits>  { fn shift_left(self, rhs: Bits) -> Bits { return Bits { v: self.v << rhs.v }; } }
+  satisfies ShiftRight<Bits, Bits> { fn shift_right(self, rhs: Bits) -> Bits { return Bits { v: self.v >> rhs.v }; } }
 }
 fn main() -> void {
   let a = Bits { v: 12 };

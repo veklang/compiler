@@ -705,8 +705,8 @@ fn main() -> i32 {
 
     assert.ok(c.includes("__vek_i8_add("));
     assert.ok(c.includes("__vek_i8_mul("));
-    assert.ok(c.includes("__vek_i8_shl("));
-    assert.ok(c.includes("__vek_i8_shr("));
+    assert.ok(c.includes("__vek_i8_shift_left("));
+    assert.ok(c.includes("__vek_i8_shift_right("));
     assert.ok(c.includes("__vek_i8_neg("));
     assert.ok(c.includes("__vek_i8_div("));
     assert.ok(c.includes("__vek_i8_mod("));
@@ -1184,12 +1184,12 @@ fn negate(a: Vec2) -> Vec2 { return -a; }
 struct Bits {
   v: i32;
   satisfies BitAnd<Bits, Bits> {
-    fn bitand(self, rhs: Bits) -> Bits { return Bits { v: self.v & rhs.v }; }
+    fn bit_and(self, rhs: Bits) -> Bits { return Bits { v: self.v & rhs.v }; }
   }
 }
 fn mask(a: Bits, b: Bits) -> Bits { return a & b; }
 `);
-    assert.ok(c.includes("__vek_fn_Bits_bitand(v0, v1)"));
+    assert.ok(c.includes("__vek_fn_Bits_bit_and(v0, v1)"));
   });
 
   test("emits Index satisfaction as a method call on [] read", () => {
