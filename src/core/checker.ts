@@ -6,6 +6,7 @@ import type {
   ArrayLiteralExpression,
   AssignmentStatement,
   BinaryExpression,
+  BindingPattern,
   BlockStatement,
   BuiltinDeclaration,
   CallExpression,
@@ -856,6 +857,14 @@ export class Checker {
   }
 
   private checkVariableDeclaration(node: VariableDeclaration, scope: Scope) {
+    if (this.currentFunctionDepth === 0 && node.name.kind !== "Identifier") {
+      this.report(
+        "Top-level declarations require a single binding name.",
+        node.name.span,
+        "E2107",
+      );
+    }
+
     const declaredType = node.typeAnnotation
       ? this.resolveType(node.typeAnnotation, scope)
       : undefined;
@@ -888,17 +897,13 @@ export class Checker {
       this.report("Type mismatch in variable initializer.", node.span, "E2101");
     }
 
-    if (node.name.kind === "Identifier") {
-      this.declareValue(scope, {
-        kind: "Value",
-        name: node.name.name,
-        node,
-        type: finalType,
-        functionDepth: this.currentFunctionDepth,
-        isGlobal: this.currentFunctionDepth === 0,
-        isConst: node.declarationKind === "const",
-      });
-    }
+    this.bindVariablePattern(
+      node.name,
+      finalType,
+      scope,
+      node.declarationKind === "const",
+      this.currentFunctionDepth === 0,
+    );
   }
 
   private checkFunctionDeclaration(node: FunctionDeclaration, scope: Scope) {
@@ -1458,15 +1463,13 @@ export class Checker {
     }
     const bodyScope = this.createScope(scope, scope.selfType);
     bodyScope.typeParams = new Map(scope.typeParams);
-    this.declareValue(bodyScope, {
-      kind: "Value",
-      name: node.iterator.name,
-      node: node.iterator,
-      type: itemType ?? this.unknownType(),
-      functionDepth: this.currentFunctionDepth,
-      isGlobal: false,
-    });
-    this.types.set(node.iterator, itemType ?? this.unknownType());
+    this.bindVariablePattern(
+      node.iterator,
+      itemType ?? this.unknownType(),
+      bodyScope,
+      false,
+      false,
+    );
     this.checkBlockStatement(node.body, bodyScope);
   }
 
@@ -3498,6 +3501,52 @@ export class Checker {
         targetScope,
         checkScope,
         coverage,
+      );
+    }
+  }
+
+  private bindVariablePattern(
+    pattern: BindingPattern,
+    matchedType: Type,
+    scope: Scope,
+    isConst: boolean,
+    isGlobal: boolean,
+  ) {
+    this.types.set(pattern, matchedType);
+
+    if (pattern.kind === "WildcardBindingPattern") return;
+
+    if (pattern.kind === "Identifier") {
+      this.declareValue(scope, {
+        kind: "Value",
+        name: pattern.name,
+        node: pattern,
+        type: matchedType,
+        functionDepth: this.currentFunctionDepth,
+        isGlobal,
+        isConst,
+      });
+      return;
+    }
+
+    if (matchedType.kind !== "Tuple") {
+      this.report(
+        "Tuple destructuring requires a tuple value.",
+        pattern.span,
+        "E2101",
+      );
+      return;
+    }
+    if (pattern.elements.length !== matchedType.elements.length) {
+      this.report("Tuple destructuring arity mismatch.", pattern.span, "E2101");
+    }
+    for (let i = 0; i < pattern.elements.length; i++) {
+      this.bindVariablePattern(
+        pattern.elements[i],
+        matchedType.elements[i] ?? this.unknownType(),
+        scope,
+        isConst,
+        isGlobal,
       );
     }
   }

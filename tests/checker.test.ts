@@ -1017,6 +1017,25 @@ fn main() -> void {
 `);
   });
 
+  test("tuple destructuring binds nested local names and for-loop items", () => {
+    checkOk(`
+fn use_i32(_x: i32) -> void { return; }
+
+fn main() -> void {
+  let (a, (b, _)) = (1, (2, 3));
+  use_i32(a);
+  use_i32(b);
+
+  let pairs: (i32, i32)[] = [(4, 5), (6, 7)];
+  let total: i32 = 0;
+  for (left, right) in pairs {
+    total += left + right;
+  }
+  use_i32(total);
+}
+`);
+  });
+
   test("nullable satisfies Equal and Formattable", () => {
     checkOk(`
 fn eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
@@ -1887,6 +1906,23 @@ fn main() -> void {
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("E2101: tuple destructuring requires tuple values with matching arity", () => {
+    const result = check(`
+fn main() -> void {
+  let (_a, _b) = 1;
+  let (_c, _d, _e) = (1, 2);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2101", "E2101"]);
+  });
+
+  test("E2107: top-level tuple destructuring is rejected", () => {
+    const result = check(`
+let (a, b) = (1, 2);
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2107"]);
   });
 
   test("E2816: Tuple fails Hashable when an element is not Hashable", () => {

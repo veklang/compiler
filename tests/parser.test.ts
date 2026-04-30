@@ -162,6 +162,33 @@ fn main() -> void {
     assert.equal(program.body[0].kind, "FunctionDeclaration");
   });
 
+  test("tuple destructuring binding patterns are parsed", () => {
+    const program = parseOk(`
+fn main() -> void {
+  let (a, (_, b)) = (1, (2, 3));
+  for (i, value) in [(1, 2)] {
+    let _sum = i + value;
+  }
+}
+`);
+    const fn = program.body[0];
+    assert.equal(fn.kind, "FunctionDeclaration");
+    if (fn.kind !== "FunctionDeclaration" || !fn.body) return;
+
+    const decl = fn.body.body[0];
+    assert.equal(decl.kind, "VariableDeclaration");
+    if (decl.kind === "VariableDeclaration") {
+      assert.equal(decl.name.kind, "TupleBindingPattern");
+      assert.equal(decl.name.elements[1]?.kind, "TupleBindingPattern");
+    }
+
+    const loop = fn.body.body[1];
+    assert.equal(loop.kind, "ForStatement");
+    if (loop.kind === "ForStatement") {
+      assert.equal(loop.iterator.kind, "TupleBindingPattern");
+    }
+  });
+
   test("compound assignment statements", () => {
     const program = parseOk(`
 fn main() -> void {

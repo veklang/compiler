@@ -93,7 +93,19 @@ export interface VariableDeclaration extends Node {
   isPublic: boolean;
 }
 
-export type BindingPattern = Identifier;
+export type BindingPattern =
+  | Identifier
+  | WildcardBindingPattern
+  | TupleBindingPattern;
+
+export interface WildcardBindingPattern extends Node {
+  kind: "WildcardBindingPattern";
+}
+
+export interface TupleBindingPattern extends Node {
+  kind: "TupleBindingPattern";
+  elements: BindingPattern[];
+}
 
 export interface TypeAliasDeclaration extends Node {
   kind: "TypeAliasDeclaration";
@@ -216,7 +228,7 @@ export interface WhileStatement extends Node {
 
 export interface ForStatement extends Node {
   kind: "ForStatement";
-  iterator: Identifier;
+  iterator: BindingPattern;
   iterable: Expression;
   body: BlockStatement;
 }

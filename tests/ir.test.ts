@@ -612,6 +612,21 @@ fn second() -> i32 {
     assert.ok(dump.includes(".1"));
   });
 
+  test("lowers tuple destructuring declarations", () => {
+    const ir = irOk(`
+fn total() -> i32 {
+  let (a, (b, _)) = (1, (2, 3));
+  return a + b;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("construct_tuple"));
+    assert.ok(dump.includes("get_tuple_field"));
+    assert.ok(dump.includes("local.0"));
+    assert.ok(dump.includes("local.1"));
+  });
+
   test("lowers nullable construction, null checks, and narrowed unwraps", () => {
     const ir = irOk(`
 fn main() -> i32 {
@@ -1283,6 +1298,22 @@ fn sum(xs: i32[]) -> i32 {
     );
     assert.ok(fn_);
     assert.ok(fn_.blocks.length > 1);
+  });
+
+  test("lowers tuple destructuring in array for loops", () => {
+    const ir = irOk(`
+fn sum_pairs(xs: (i32, i32)[]) -> i32 {
+  let total: i32 = 0;
+  for (left, right) in xs {
+    total = total + left + right;
+  }
+  return total;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("array_get"));
+    assert.ok(dump.includes("get_tuple_field"));
   });
 
   test("lowers builtin Result, Ordering, and nullable unwrapping support", () => {

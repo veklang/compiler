@@ -27,6 +27,7 @@ import type {
   ArrayLiteralExpression,
   AssignmentStatement,
   BinaryExpression,
+  BindingPattern,
   BlockStatement,
   BreakStatement,
   CallExpression,
@@ -39,6 +40,7 @@ import type {
   FunctionDeclaration,
   FunctionExpression,
   GroupingExpression,
+  Identifier,
   IdentifierExpression,
   IfExpression,
   IfStatement,
@@ -81,6 +83,8 @@ interface IrTypeSource {
   callInstantiations?: WeakMap<CallExpression, GenericInstantiationInfo>;
   coreStatements?: Statement[];
 }
+
+type NamedVariableDeclaration = VariableDeclaration & { name: Identifier };
 
 interface GenericInstantiationInfo {
   kind: "Function" | "Method" | "Struct" | "Enum";
@@ -347,20 +351,24 @@ export function lowerProgramToIr(
   const globals = new Map<string, IrGlobalId>();
   const globalTypes = new Map<IrGlobalId, IrType>();
   const lazyGlobals = new Set<IrGlobalId>();
-  const globalStatements: VariableDeclaration[] = [];
+  const globalStatements: NamedVariableDeclaration[] = [];
   for (const statement of statements) {
-    if (statement.kind === "VariableDeclaration") {
+    if (
+      statement.kind === "VariableDeclaration" &&
+      statement.name.kind === "Identifier"
+    ) {
+      const namedStatement = statement as NamedVariableDeclaration;
       const global = lowerGlobalDeclaration(
-        statement,
+        namedStatement,
         checkResult,
         runtime,
         enumNames,
       );
       declarations.push(global);
-      globals.set(statement.name.name, global.id);
+      globals.set(namedStatement.name.name, global.id);
       globalTypes.set(global.id, global.type);
       if (global.initializerFunction) lazyGlobals.add(global.id);
-      globalStatements.push(statement);
+      globalStatements.push(namedStatement);
     }
   }
 
@@ -907,7 +915,7 @@ function recordSatisfactionMethodLinks(
 }
 
 function lowerGlobalDeclaration(
-  node: VariableDeclaration,
+  node: NamedVariableDeclaration,
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
   enumNames: Set<string>,
@@ -941,7 +949,7 @@ function lowerGlobalDeclaration(
 }
 
 function lowerGlobalInitializerFunction(
-  node: VariableDeclaration,
+  node: NamedVariableDeclaration,
   checkResult: IrTypeSource,
   runtime: IrRuntimeRequirements,
   structFields: Map<string, IrStructField[]>,
@@ -1466,29 +1474,102 @@ function lowerVariableDeclaration(
   const type = statement.typeAnnotation
     ? typeFromTypeNodeInContext(statement.typeAnnotation, context)
     : typeFromNodeInContext(context, statement.initializer);
-  const local = declareLocal(
-    context,
-    statement.name.name,
-    type,
-    statement.declarationKind === "let",
-    statement.span,
-  );
-
-  if (statement.initializer) {
-    const value = coerceOperand(
-      lowerExpression(statement.initializer, context),
-      local.type,
+  if (!statement.initializer) {
+    declareBindingPattern(
+      statement.name,
+      type,
+      statement.declarationKind === "let",
       context,
       statement.span,
     );
-    retainIfBorrowedHeap(value, context, statement.span);
+    return;
+  }
+
+  const value = coerceOperand(
+    lowerExpression(statement.initializer, context),
+    type,
+    context,
+    statement.span,
+  );
+  lowerBindingPattern(
+    statement.name,
+    value,
+    statement.declarationKind === "let",
+    context,
+    statement.span,
+  );
+}
+
+function declareBindingPattern(
+  pattern: BindingPattern,
+  type: IrType,
+  mutable: boolean,
+  context: LowerContext,
+  span?: VariableDeclaration["span"],
+) {
+  if (pattern.kind === "WildcardBindingPattern") return;
+
+  if (pattern.kind === "Identifier") {
+    declareLocal(context, pattern.name, type, mutable, pattern.span ?? span);
+    return;
+  }
+
+  if (type.kind !== "tuple") return;
+  for (let i = 0; i < pattern.elements.length; i++) {
+    declareBindingPattern(
+      pattern.elements[i],
+      type.elements[i] ?? { kind: "unknown" },
+      mutable,
+      context,
+      pattern.elements[i].span,
+    );
+  }
+}
+
+function lowerBindingPattern(
+  pattern: BindingPattern,
+  value: IrOperand,
+  mutable: boolean,
+  context: LowerContext,
+  span?: VariableDeclaration["span"],
+) {
+  if (pattern.kind === "WildcardBindingPattern") return;
+
+  if (pattern.kind === "Identifier") {
+    const local = declareLocal(
+      context,
+      pattern.name,
+      value.type,
+      mutable,
+      pattern.span ?? span,
+    );
+    retainIfBorrowedHeap(value, context, pattern.span ?? span);
     context.currentBlock.instructions.push({
       kind: "assign",
       target: local.id,
       value,
-      span: statement.span,
+      span: pattern.span ?? span,
     });
     markLocalOwns(local.id, value, context);
+    return;
+  }
+
+  if (value.type.kind !== "tuple") return;
+  const tupleType = value.type;
+  for (let i = 0; i < pattern.elements.length; i++) {
+    lowerBindingPattern(
+      pattern.elements[i],
+      extractTupleFieldOperand(
+        value,
+        i,
+        tupleType.elements[i] ?? { kind: "unknown" },
+        pattern.elements[i].span,
+        context,
+      ),
+      mutable,
+      context,
+      pattern.elements[i].span,
+    );
   }
 }
 
@@ -2340,21 +2421,13 @@ function lowerForStatement(statement: ForStatement, context: LowerContext) {
     id: elemTarget,
     type: elementType,
   };
-  retainIfBorrowedHeap(elemValue, context, statement.span);
-  const iterLocal = declareLocal(
-    context,
-    statement.iterator.name,
-    elementType,
+  lowerBindingPattern(
+    statement.iterator,
+    elemValue,
     false,
+    context,
     statement.span,
   );
-  context.currentBlock.instructions.push({
-    kind: "assign",
-    target: iterLocal.id,
-    value: elemValue,
-    span: statement.span,
-  });
-  markLocalOwns(iterLocal.id, elemValue, context);
 
   const savedExit = context.loopExit;
   const savedContinue = context.loopContinue;
@@ -2496,21 +2569,13 @@ function lowerCustomIterableForStatement(
 
   switchBlock(context, bodyBlock);
   const itemValue = unwrapNullableOperand(nextValue, context, statement.span);
-  retainIfBorrowedHeap(itemValue, context, statement.span);
-  const itemLocal = declareLocal(
-    context,
-    statement.iterator.name,
-    itemType,
+  lowerBindingPattern(
+    statement.iterator,
+    itemValue,
     false,
+    context,
     statement.span,
   );
-  context.currentBlock.instructions.push({
-    kind: "assign",
-    target: itemLocal.id,
-    value: itemValue,
-    span: statement.span,
-  });
-  markLocalOwns(itemLocal.id, itemValue, context);
   releaseIfOwnedTemp(nextValue, context);
 
   const savedExit = context.loopExit;

@@ -1,6 +1,7 @@
 import type {
   ArrayLiteralExpression,
   AssignableExpression,
+  BindingPattern,
   BlockStatement,
   BuiltinDeclaration,
   BuiltinMember,
@@ -278,8 +279,7 @@ export class Parser {
     if (!this.checkKeyword("let") && !this.checkKeyword("const")) return null;
     const start = this.advance();
     const declarationKind = start?.lexeme === "const" ? "const" : "let";
-    const name =
-      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const name = this.parseBindingPattern();
     const typeAnnotation = this.matchPunctuator(":")
       ? this.parseType()
       : undefined;
@@ -620,8 +620,7 @@ export class Parser {
 
   private parseForStatement(): ForStatement {
     const start = this.expectKeyword("for");
-    const iterator =
-      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const iterator = this.parseBindingPattern();
     this.expectKeyword("in");
     const iterable =
       this.withStructLiteral(false, () => this.parseExpression()) ??
@@ -1170,6 +1169,46 @@ export class Parser {
 
     this.report("Invalid match pattern.", token.span, "E1030");
     return this.placeholderPattern(token.span);
+  }
+
+  private parseBindingPattern(): BindingPattern {
+    if (this.matchPunctuator("(")) {
+      const start = this.previousSpan();
+      const elements: BindingPattern[] = [];
+      while (!this.isAtEnd() && !this.checkPunctuator(")")) {
+        if (this.checkPunctuator(",")) {
+          this.report("Invalid binding pattern.", this.currentSpan(), "E1031");
+          this.advance();
+          continue;
+        }
+
+        elements.push(this.parseBindingPattern());
+        if (!this.matchPunctuator(",")) break;
+        if (this.checkPunctuator(")")) break;
+      }
+      const end = this.matchPunctuator(")");
+      if (!end) this.report("Expected ')'.", this.currentSpan(), "E1005");
+      return {
+        kind: "TupleBindingPattern",
+        span: this.spanFrom(start, end?.span ?? this.currentSpan()),
+        elements,
+      };
+    }
+
+    const token = this.advance();
+    if (!token) return this.placeholderIdentifier(this.currentSpan());
+    if (token.kind === "Identifier") {
+      if (token.lexeme === "_") {
+        return {
+          kind: "WildcardBindingPattern",
+          span: token.span,
+        };
+      }
+      return this.identifierFromToken(token);
+    }
+
+    this.report("Expected binding pattern.", token.span, "E1031");
+    return this.placeholderIdentifier(token.span);
   }
 
   private parsePatternList(close: string): Pattern[] {
