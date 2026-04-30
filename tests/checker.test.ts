@@ -698,6 +698,20 @@ unsafe extern "abs" fn c_abs(value: i32) -> i32;
     expectDiagnostics(result.checkDiagnostics, ["E2910"]);
   });
 
+  test("E2910: importing __vek_* symbols is rejected", () => {
+    const explicit = check(`unsafe extern "__vek_user_hook" fn foo(x: i32) -> i32;`);
+    const inferred = check(`unsafe extern fn __vek_user_hook(x: i32) -> i32;`);
+    expectDiagnostics(explicit.checkDiagnostics, ["E2910"]);
+    expectDiagnostics(inferred.checkDiagnostics, ["E2910"]);
+  });
+
+  test("E2910: exporting __vek_* symbols is rejected", () => {
+    const explicit = check(`pub extern "__vek_user_hook" fn foo() -> void {}`);
+    const inferred = check(`pub extern fn __vek_user_hook() -> void {}`);
+    expectDiagnostics(explicit.checkDiagnostics, ["E2910"]);
+    expectDiagnostics(inferred.checkDiagnostics, ["E2910"]);
+  });
+
   test("E2904: generic extern fn is rejected", () => {
     const result = check(`
 unsafe extern fn identity<T>(value: T) -> T;

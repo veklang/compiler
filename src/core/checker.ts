@@ -297,6 +297,7 @@ export class Checker {
   private instantiations: GenericInstantiation[] = [];
   private externLinkNames = new Map<string, FunctionDeclaration>();
   private processingTrustedStd = false;
+  private processingBuiltinSource = false;
 
   constructor(
     private program: Program,
@@ -317,12 +318,14 @@ export class Checker {
     this.predeclareTypes();
     this.predeclareFunctions();
     this.materializeTypes();
+    this.processingBuiltinSource = true;
     this.processingTrustedStd = true;
     for (const statement of stdStatements)
       this.checkStatement(statement, this.globalScope);
     this.processingTrustedStd = false;
     for (const statement of coreStatements)
       this.checkStatement(statement, this.globalScope);
+    this.processingBuiltinSource = false;
     for (const statement of this.program.body)
       this.checkStatement(statement, this.globalScope);
     this.checkMainFunction();
@@ -977,6 +980,15 @@ export class Checker {
     }
 
     const linkName = node.externName?.value ?? node.name.name;
+
+    if (!this.processingBuiltinSource && linkName.startsWith("__vek_")) {
+      this.report(
+        `Reserved extern symbol name '${linkName}'.`,
+        node.externName?.span ?? node.name.span,
+        "E2910",
+      );
+    }
+
     const previous = this.externLinkNames.get(linkName);
     if (previous && previous !== node) {
       this.report(
