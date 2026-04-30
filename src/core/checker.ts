@@ -222,7 +222,13 @@ interface TraitSatisfactionInfo {
 interface BuiltinTraitSatisfactionInfo {
   span: Span;
   trait: NamedRefType;
+  whereConstraints?: BuiltinTraitWhereConstraint[];
   methods: Map<string, TraitMethodSignature>;
+}
+
+interface BuiltinTraitWhereConstraint {
+  typeParam: string;
+  trait: NamedRefType;
 }
 
 interface TypeSymbol extends BaseSymbol {
@@ -391,6 +397,10 @@ export class Checker {
         symbol.builtinSatisfactions.push({
           span: member.span,
           trait: traitRef,
+          whereConstraints: member.whereClause?.map((clause) => ({
+            typeParam: clause.typeName.name,
+            trait: this.resolveNamedReference(clause.trait, ownerScope),
+          })),
           methods,
         });
       }
@@ -4222,13 +4232,19 @@ export class Checker {
     ) {
       candidates.push(this.resolveBuiltinTrait("Ordered", [type]));
     }
-    if (type.kind === "Named" && type.name === "Array" && type.typeArgs?.[0]) {
-      candidates.push(this.resolveBuiltinTrait("Iterable", [type.typeArgs[0]]));
-    }
     if (type.kind === "Named" && type.name === "Result" && type.typeArgs?.[0]) {
       candidates.push(
         this.resolveBuiltinTrait("Unwrappable", [type.typeArgs[0]]),
       );
+    }
+    if (type.kind === "Named") {
+      for (const satisfaction of type.symbol?.builtinSatisfactions ?? []) {
+        if (this.builtinSatisfactionApplies(type, satisfaction, scope)) {
+          candidates.push(
+            this.substituteOwnerTypeArgs(satisfaction.trait, type),
+          );
+        }
+      }
     }
     if (type.kind === "Nullable") {
       candidates.push(this.resolveBuiltinTrait("Unwrappable", [type.base]));
@@ -4404,8 +4420,6 @@ export class Checker {
   }
 
   private iterableItemType(type: Type, scope: Scope): Type | null {
-    if (type.kind === "Named" && type.name === "Array")
-      return type.typeArgs?.[0] ?? this.unknownType();
     const satisfied = this.findSatisfiedTrait(type, "Iterable", scope);
     const iterable =
       satisfied ?? this.resolveBuiltinTrait("Iterable", [this.unknownType()]);
@@ -4425,13 +4439,6 @@ export class Checker {
     }
     if (type.kind === "Named") {
       if (
-        type.name === "Array" &&
-        traitName === "Iterable" &&
-        type.typeArgs?.[0]
-      ) {
-        return this.resolveBuiltinTrait("Iterable", [type.typeArgs[0]]);
-      }
-      if (
         type.name === "Result" &&
         traitName === "Unwrappable" &&
         type.typeArgs?.[0]
@@ -4440,6 +4447,14 @@ export class Checker {
       }
       if (traitName === "Formattable" && this.isFormattable(type)) {
         return this.resolveBuiltinTrait("Formattable", []);
+      }
+      const builtinSatisfaction = type.symbol?.builtinSatisfactions?.find(
+        (entry) =>
+          this.substituteOwnerTypeArgs(entry.trait, type).name === traitName &&
+          this.builtinSatisfactionApplies(type, entry, scope),
+      );
+      if (builtinSatisfaction) {
+        return this.substituteOwnerTypeArgs(builtinSatisfaction.trait, type);
       }
       if (
         traitName === "Equal" &&
@@ -4781,24 +4796,17 @@ export class Checker {
     }
 
     if (type.kind === "Named") {
-      if (type.name === "Array" && trait.name === "Iterable") {
-        const traitArg = trait.typeArgs?.[0];
-        const elemType = type.typeArgs?.[0];
-        if (!traitArg) return true;
-        if (!elemType) return false;
-        return this.typeEquals(traitArg, elemType);
-      }
+      if (
+        type.symbol?.builtinSatisfactions?.some((entry) =>
+          this.builtinSatisfactionMatches(type, entry, trait, scope),
+        )
+      )
+        return true;
       if (trait.name === "Equal" && this.isBuiltinEquatable(type, trait))
         return true;
       if (trait.name === "Formattable") {
         if (this.isFormattable(type)) return true;
         if (type.name === "Ordering") return true;
-        if (type.name === "Array" && type.typeArgs?.[0])
-          return this.typeSatisfiesTrait(
-            type.typeArgs[0],
-            this.resolveBuiltinTrait("Formattable", []),
-            scope,
-          );
         if (type.name === "Result" && type.typeArgs?.length === 2)
           return (
             this.typeSatisfiesTrait(
@@ -4823,25 +4831,10 @@ export class Checker {
       }
       if (trait.name === "Cloneable") {
         if (type.name === "string") return true;
-        if (type.name === "Array" && type.typeArgs?.[0])
-          return this.typeSatisfiesTrait(
-            type.typeArgs[0],
-            this.resolveBuiltinTrait("Cloneable", []),
-            scope,
-          );
       }
       if (trait.name === "Defaultable") {
-        if (type.name === "string" || type.name === "Array") return true;
+        if (type.name === "string") return true;
       }
-      if (
-        type.symbol?.builtinSatisfactions?.some((entry) =>
-          this.namedTypeEquals(
-            this.substituteOwnerTypeArgs(entry.trait, type),
-            trait,
-          ),
-        )
-      )
-        return true;
       return (
         type.symbol?.satisfactions?.some((entry) =>
           this.namedTypeEquals(
@@ -4896,7 +4889,7 @@ export class Checker {
       const builtinSym = this.getBuiltinSymbolForType(type);
       if (
         builtinSym?.builtinSatisfactions?.some((entry) =>
-          this.namedTypeEquals(entry.trait, trait),
+          this.builtinSatisfactionMatches(type, entry, trait, scope),
         )
       )
         return true;
@@ -4961,6 +4954,53 @@ export class Checker {
     )
       bindings.set(owner.symbol.typeParams[i].name.name, owner.typeArgs[i]);
     return this.substituteNamedType(trait, bindings);
+  }
+
+  private builtinSatisfactionMatches(
+    owner: Type,
+    satisfaction: BuiltinTraitSatisfactionInfo,
+    trait: NamedRefType,
+    scope: Scope,
+  ): boolean {
+    const resolvedTrait =
+      owner.kind === "Named"
+        ? this.substituteOwnerTypeArgs(satisfaction.trait, owner)
+        : satisfaction.trait;
+    return (
+      this.namedTypeEquals(resolvedTrait, trait) &&
+      this.builtinSatisfactionApplies(owner, satisfaction, scope)
+    );
+  }
+
+  private builtinSatisfactionApplies(
+    owner: Type,
+    satisfaction: BuiltinTraitSatisfactionInfo,
+    scope: Scope,
+  ): boolean {
+    for (const constraint of satisfaction.whereConstraints ?? []) {
+      const constrainedType = this.builtinOwnerTypeArg(
+        owner,
+        constraint.typeParam,
+      );
+      if (!constrainedType) return false;
+      const constrainedTrait =
+        owner.kind === "Named"
+          ? this.substituteOwnerTypeArgs(constraint.trait, owner)
+          : constraint.trait;
+      if (!this.typeSatisfiesTrait(constrainedType, constrainedTrait, scope)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private builtinOwnerTypeArg(owner: Type, typeParam: string): Type | null {
+    if (owner.kind !== "Named" || !owner.symbol?.typeParams) return null;
+    const index = owner.symbol.typeParams.findIndex(
+      (param) => param.name.name === typeParam,
+    );
+    if (index < 0) return null;
+    return owner.typeArgs?.[index] ?? null;
   }
 
   private isBuiltinEquatable(type: Type, trait: NamedRefType): boolean {

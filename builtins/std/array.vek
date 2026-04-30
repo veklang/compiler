@@ -8,4 +8,20 @@ builtin Array<T> {
   satisfies IndexSet<usize, T> {
     fn index_set(mut self, index: usize, value: T) -> void;
   }
+
+  satisfies Iterable<T> {
+    fn next(mut self) -> T?;
+  }
+
+  satisfies Cloneable where T: Cloneable {
+    fn clone(self) -> Self;
+  }
+
+  satisfies Defaultable {
+    fn default() -> Self;
+  }
+
+  satisfies Formattable where T: Formattable {
+    fn format(self) -> string;
+  }
 }

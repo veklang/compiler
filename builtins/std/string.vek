@@ -13,4 +13,16 @@ builtin string {
   satisfies IndexGet<usize, string> {
     fn index_get(self, index: usize) -> string;
   }
+
+  satisfies Cloneable {
+    fn clone(self) -> Self;
+  }
+
+  satisfies Defaultable {
+    fn default() -> Self;
+  }
+
+  satisfies Formattable {
+    fn format(self) -> string;
+  }
 }

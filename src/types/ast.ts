@@ -166,6 +166,7 @@ export type BuiltinMember = TraitMethodSignature | BuiltinSatisfiesBlock;
 export interface BuiltinSatisfiesBlock extends Node {
   kind: "BuiltinSatisfiesBlock";
   trait: NamedType;
+  whereClause?: WhereConstraint[];
   methods: TraitMethodSignature[];
 }
 

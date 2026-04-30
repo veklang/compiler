@@ -145,6 +145,7 @@ export class Parser {
     const start = this.expectKeyword("satisfies");
     const trait =
       this.parseNamedType() ?? this.placeholderNamedType(start?.span);
+    const whereClause = this.parseWhereClause();
     this.expectPunctuator("{");
 
     const methods: TraitMethodSignature[] = [];
@@ -166,6 +167,7 @@ export class Parser {
       kind: "BuiltinSatisfiesBlock",
       span: this.spanFrom(start?.span, end?.span ?? trait.span),
       trait,
+      whereClause,
       methods,
     };
   }

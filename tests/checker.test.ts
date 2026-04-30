@@ -986,6 +986,7 @@ fn main() -> void {
 fn needs_hashable<T: Hashable>(_x: T) -> void { return; }
 fn needs_ordered<T: Ordered<T>>(_a: T, _b: T) -> void { return; }
 fn needs_cloneable<T: Cloneable>(_x: T) -> void { return; }
+fn needs_defaultable<T: Defaultable>(_x: T) -> void { return; }
 fn needs_formattable<T: Formattable>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
@@ -993,6 +994,7 @@ fn main() -> void {
   needs_hashable(s);
   needs_ordered(s, s);
   needs_cloneable(s);
+  needs_defaultable(s);
   needs_formattable(s);
 }
 `);
@@ -1838,6 +1840,22 @@ fn needs_clone<T: Cloneable>(_x: T) -> void { return; }
 fn main() -> void {
   let xs: Widget[] = [];
   needs_clone(xs);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("E2816: Array of non-Formattable element fails Formattable bound", () => {
+    const result = check(`
+struct Widget {
+  id: i32;
+}
+
+fn fmt<T: Formattable>(x: T) -> string { return x.format(); }
+
+fn main() -> void {
+  let xs: Widget[] = [];
+  let _f = fmt(xs);
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2816"]);
