@@ -2294,12 +2294,12 @@ fn main() -> void {
 `);
   });
 
-  test("struct satisfying Index allows [] read", () => {
+  test("struct satisfying IndexGet allows [] read", () => {
     checkOk(`
 struct SlotMap {
   k: i32;
   v: i32;
-  satisfies Index<i32, i32> {
+  satisfies IndexGet<i32, i32> {
     fn index_get(self, index: i32) -> i32 { return self.v + index; }
   }
 }
@@ -2315,7 +2315,7 @@ fn main() -> void {
 struct SlotMap {
   k: i32;
   v: i32;
-  satisfies Index<i32, i32> {
+  satisfies IndexGet<i32, i32> {
     fn index_get(self, index: i32) -> i32 { return self.v + index; }
   }
   satisfies IndexSet<i32, i32> {
@@ -2329,16 +2329,16 @@ fn main() -> void {
 `);
   });
 
-  test("generic Index bound allows [] read", () => {
+  test("generic IndexGet bound allows [] read", () => {
     checkOk(`
 struct SlotMap {
   v: i32;
-  satisfies Index<i32, i32> {
+  satisfies IndexGet<i32, i32> {
     fn index_get(self, index: i32) -> i32 { return self.v + index; }
   }
 }
 
-fn lookup<T: Index<i32, i32>>(value: T) -> i32 {
+fn lookup<T: IndexGet<i32, i32>>(value: T) -> i32 {
   return value[0];
 }
 
@@ -2369,14 +2369,14 @@ fn main() -> void {
 `);
   });
 
-  test("built-in arrays and strings satisfy Index traits", () => {
+  test("built-in arrays and strings satisfy IndexGet traits", () => {
     checkOk(`
-fn array_first<T: Index<usize, i32>>(value: T) -> i32 {
+fn array_first<T: IndexGet<usize, i32>>(value: T) -> i32 {
   let index: usize = 0;
   return value[index];
 }
 
-fn string_first<T: Index<usize, string>>(value: T) -> string {
+fn string_first<T: IndexGet<usize, string>>(value: T) -> string {
   let index: usize = 0;
   return value[index];
 }
@@ -2403,7 +2403,7 @@ fn main() -> void {
 `);
   });
 
-  test("[] on named type without Index is rejected", () => {
+  test("[] on named type without IndexGet is rejected", () => {
     const result = check(`
 struct Nope { x: i32; }
 fn main() -> void {

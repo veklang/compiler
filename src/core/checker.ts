@@ -2685,7 +2685,7 @@ export class Checker {
     }
 
     this.report(
-      "Indexing requires an array, string, raw pointer, or a type implementing Index.",
+      "Indexing requires an array, string, raw pointer, or a type implementing IndexGet.",
       node.span,
       "E2104",
     );
@@ -4463,7 +4463,7 @@ export class Checker {
     indexType: Type,
   ): Type | null {
     if (objectType.kind === "TypeParam") {
-      const bound = objectType.bounds.find((b) => b.name === "Index");
+      const bound = objectType.bounds.find((b) => b.name === "IndexGet");
       if (!bound) return null;
       const idx = bound.typeArgs?.[0];
       const out = bound.typeArgs?.[1];
@@ -4475,7 +4475,7 @@ export class Checker {
     if (objectType.kind !== "Named") return null;
     const satisfaction = objectType.symbol?.satisfactions?.find((s) => {
       const sub = this.substituteOwnerTypeArgs(s.trait, objectType);
-      return sub.name === "Index";
+      return sub.name === "IndexGet";
     });
     if (!satisfaction) return null;
     const sub = this.substituteOwnerTypeArgs(satisfaction.trait, objectType);
@@ -4628,7 +4628,7 @@ export class Checker {
         if (!elemType) return false;
         return this.typeEquals(traitArg, elemType);
       }
-      if (type.name === "Array" && trait.name === "Index") {
+      if (type.name === "Array" && trait.name === "IndexGet") {
         const idx = trait.typeArgs?.[0];
         const out = trait.typeArgs?.[1];
         const elemType = type.typeArgs?.[0];
@@ -4650,7 +4650,7 @@ export class Checker {
           this.typeEquals(value, elemType)
         );
       }
-      if (type.name === "string" && trait.name === "Index") {
+      if (type.name === "string" && trait.name === "IndexGet") {
         const idx = trait.typeArgs?.[0];
         const out = trait.typeArgs?.[1];
         if (!idx || !out) return true;
@@ -4755,7 +4755,7 @@ export class Checker {
         if (!rhs || !out) return true;
         return this.typeEquals(type, rhs) && this.typeEquals(type, out);
       }
-      if (type.name === "string" && trait.name === "Index") {
+      if (type.name === "string" && trait.name === "IndexGet") {
         const idx = trait.typeArgs?.[0];
         const out = trait.typeArgs?.[1];
         if (!idx || !out) return true;

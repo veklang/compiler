@@ -1213,11 +1213,11 @@ fn at_least(a: Score, b: Score) -> bool { return a >= b; }
     assert.ok(c.includes(" = !"));
   });
 
-  test("emits Index satisfaction as a method call on [] read", () => {
+  test("emits IndexGet satisfaction as a method call on [] read", () => {
     const c = emitOk(`
 struct Slots {
   v: i32;
-  satisfies Index<i32, i32> {
+  satisfies IndexGet<i32, i32> {
     fn index_get(self, index: i32) -> i32 { return self.v + index; }
   }
 }

@@ -79,7 +79,7 @@ pub trait ShiftRight<Rhs, Output> {
   fn shift_right(self, rhs: Rhs) -> Output;
 }
 
-pub trait Index<Idx, Output> {
+pub trait IndexGet<Idx, Output> {
   fn index_get(self, index: Idx) -> Output;
 }
 

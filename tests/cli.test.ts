@@ -1966,7 +1966,7 @@ fn main() -> i32 {
     );
   });
 
-  test("compiles and runs custom Index and IndexSet trait satisfactions", () => {
+  test("compiles and runs custom IndexGet and IndexSet trait satisfactions", () => {
     if (!hasMuslGcc()) return;
 
     withTempFile(
@@ -1974,7 +1974,7 @@ fn main() -> i32 {
 struct Slots {
   v: i32;
 
-  satisfies Index<i32, i32> {
+  satisfies IndexGet<i32, i32> {
     fn index_get(self, index: i32) -> i32 {
       return self.v + index;
     }
