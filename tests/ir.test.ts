@@ -273,6 +273,61 @@ fn main() -> i32 {
     assert.ok(dump.includes("call @Box__User_extract"));
   });
 
+  test("prunes unused trait satisfaction methods from IR", () => {
+    const ir = irOk(`
+trait Scored {
+  fn score(self) -> i32;
+}
+
+struct User {
+  id: i32;
+
+  satisfies Scored {
+    fn score(self) -> i32 {
+      return self.id;
+    }
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User { id: 42 };
+  return user.id;
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(!dump.includes("fn fn.User_score"));
+    assert.ok(!dump.includes("call @User_score"));
+  });
+
+  test("keeps trait satisfaction methods referenced as function values", () => {
+    const ir = irOk(`
+trait Scored {
+  fn score(self) -> i32;
+}
+
+struct User {
+  id: i32;
+
+  satisfies Scored {
+    fn score(self) -> i32 {
+      return self.id;
+    }
+  }
+}
+
+fn main() -> i32 {
+  let f: fn(User) -> i32 = User.score;
+  let user: User = User { id: 42 };
+  return f(user);
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.User_score"));
+    assert.ok(dump.includes("@User_score"));
+  });
+
   test("lowers generic method specialization on generic struct owner", () => {
     const ir = irOk(`
 struct User {

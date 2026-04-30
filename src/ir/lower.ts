@@ -102,6 +102,7 @@ interface MethodDeclarationInfo {
   node: MethodDeclaration;
   ownerName: string;
   ownerDecl: "struct" | "enum";
+  isSatisfaction: boolean;
 }
 
 interface LowerContext {
@@ -265,6 +266,7 @@ export function lowerProgramToIr(
   }
 
   const loweredSpecializations = new Set<string>();
+  const satisfactionMethodLinks = new Set<string>();
   for (const instantiation of checkResult.instantiations ?? []) {
     if (instantiation.kind !== "Struct") continue;
     const declaration = structsByName.get(instantiation.name);
@@ -294,6 +296,11 @@ export function lowerProgramToIr(
         },
       ),
     );
+    recordSatisfactionMethodLinks(
+      linkName,
+      declaration.members,
+      satisfactionMethodLinks,
+    );
   }
 
   for (const instantiation of checkResult.instantiations ?? []) {
@@ -318,6 +325,11 @@ export function lowerProgramToIr(
         linkName,
         typeSubstitutions,
       }),
+    );
+    recordSatisfactionMethodLinks(
+      linkName,
+      declaration.members,
+      satisfactionMethodLinks,
     );
   }
 
@@ -358,11 +370,21 @@ export function lowerProgramToIr(
       statement.kind !== "EnumDeclaration"
     )
       continue;
-    for (const member of methodDeclarationsFromMembers(statement.members)) {
-      methodsByKey.set(methodKey(statement.name.name, member.name.name), {
-        node: member,
-        ownerName: statement.name.name,
-        ownerDecl: statement.kind === "EnumDeclaration" ? "enum" : "struct",
+    recordSatisfactionMethodLinks(
+      statement.name.name,
+      statement.members,
+      satisfactionMethodLinks,
+    );
+    for (const member of methodDeclarationInfosFromMembers(
+      statement.name.name,
+      statement.kind === "EnumDeclaration" ? "enum" : "struct",
+      statement.members,
+    )) {
+      methodsByKey.set(methodKey(statement.name.name, member.node.name.name), {
+        node: member.node,
+        ownerName: member.ownerName,
+        ownerDecl: member.ownerDecl,
+        isSatisfaction: member.isSatisfaction,
       });
       if (
         (statement.kind === "StructDeclaration" ||
@@ -370,10 +392,10 @@ export function lowerProgramToIr(
         (statement.typeParams?.length ?? 0) > 0
       )
         continue;
-      if ((member.typeParams?.length ?? 0) > 0) continue;
+      if ((member.node.typeParams?.length ?? 0) > 0) continue;
       declarations.push(
         lowerMethod(
-          member,
+          member.node,
           statement.name.name,
           statement.kind === "EnumDeclaration" ? "enum" : "struct",
           checkResult,
@@ -392,6 +414,11 @@ export function lowerProgramToIr(
   }
 
   for (const specialization of genericStructSpecializations) {
+    recordSatisfactionMethodLinks(
+      specialization.linkName,
+      specialization.declaration.members,
+      satisfactionMethodLinks,
+    );
     for (const member of methodDeclarationsFromMembers(
       specialization.declaration.members,
     )) {
@@ -421,6 +448,11 @@ export function lowerProgramToIr(
   }
 
   for (const specialization of genericEnumSpecializations) {
+    recordSatisfactionMethodLinks(
+      specialization.linkName,
+      specialization.declaration.members,
+      satisfactionMethodLinks,
+    );
     for (const member of methodDeclarationsFromMembers(
       specialization.declaration.members,
     )) {
@@ -538,6 +570,7 @@ export function lowerProgramToIr(
     const linkName = methodInstantiationLinkName(instantiation);
     if (loweredSpecializations.has(linkName)) continue;
     loweredSpecializations.add(linkName);
+    if (methodInfo.isSatisfaction) satisfactionMethodLinks.add(linkName);
     const ownerTypeSubstitutions = instantiation.ownerTypeArgs?.length
       ? ownerTypeSubstitutionsForMethod(
           methodInfo.ownerDecl === "struct"
@@ -579,17 +612,99 @@ export function lowerProgramToIr(
   }
 
   declarations.push(...session.generatedFunctions);
+  const prunedDeclarations = pruneUnreachableSatisfactionMethods(
+    declarations,
+    satisfactionMethodLinks,
+  );
 
   return {
     program: {
       version: 1,
       sourceFiles: [{ id: "source.0", path: options.sourcePath }],
-      declarations,
+      declarations: prunedDeclarations,
       entry,
       runtime,
     },
     diagnostics: session.diagnostics,
   };
+}
+
+function pruneUnreachableSatisfactionMethods(
+  declarations: IrDeclaration[],
+  satisfactionMethodLinks: Set<string>,
+): IrDeclaration[] {
+  if (satisfactionMethodLinks.size === 0) return declarations;
+
+  const functions = declarations.filter(
+    (declaration): declaration is IrFunction => declaration.kind === "function",
+  );
+  const functionsByLinkName = new Map(functions.map((fn) => [fn.linkName, fn]));
+  const referencesByFunction = new Map<string, Set<string>>();
+
+  for (const fn of functions) {
+    referencesByFunction.set(fn.linkName, collectFunctionReferences(fn));
+  }
+
+  const reachable = new Set<string>();
+  const queue: string[] = [];
+  for (const fn of functions) {
+    if (satisfactionMethodLinks.has(fn.linkName)) continue;
+    reachable.add(fn.linkName);
+    queue.push(fn.linkName);
+  }
+
+  while (queue.length > 0) {
+    const linkName = queue.shift()!;
+    for (const ref of referencesByFunction.get(linkName) ?? []) {
+      if (reachable.has(ref) || !functionsByLinkName.has(ref)) continue;
+      reachable.add(ref);
+      queue.push(ref);
+    }
+  }
+
+  return declarations.filter(
+    (declaration) =>
+      declaration.kind !== "function" ||
+      !satisfactionMethodLinks.has(declaration.linkName) ||
+      reachable.has(declaration.linkName),
+  );
+}
+
+function collectFunctionReferences(fn: IrFunction): Set<string> {
+  const references = new Set<string>();
+  for (const block of fn.blocks) {
+    for (const instruction of block.instructions) {
+      collectFunctionReferencesFromValue(instruction, references);
+    }
+    collectFunctionReferencesFromValue(block.terminator, references);
+  }
+  return references;
+}
+
+function collectFunctionReferencesFromValue(
+  value: unknown,
+  references: Set<string>,
+): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value)
+      collectFunctionReferencesFromValue(item, references);
+    return;
+  }
+
+  if (
+    "kind" in value &&
+    (value as { kind?: unknown }).kind === "function" &&
+    "name" in value &&
+    typeof (value as { name?: unknown }).name === "string"
+  ) {
+    references.add((value as { name: string }).name);
+    return;
+  }
+
+  for (const child of Object.values(value)) {
+    collectFunctionReferencesFromValue(child, references);
+  }
 }
 
 function emitLowerDiag(
@@ -743,6 +858,52 @@ function methodDeclarationsFromMembers(
     }
   }
   return methods;
+}
+
+function methodDeclarationInfosFromMembers(
+  ownerName: string,
+  ownerDecl: "struct" | "enum",
+  members: Array<
+    StructDeclaration["members"][number] | EnumDeclaration["members"][number]
+  >,
+): MethodDeclarationInfo[] {
+  const methods: MethodDeclarationInfo[] = [];
+  for (const member of members) {
+    if (member.kind === "MethodDeclaration") {
+      methods.push({
+        node: member,
+        ownerName,
+        ownerDecl,
+        isSatisfaction: false,
+      });
+    } else if (member.kind === "TraitSatisfiesDeclaration") {
+      for (const method of member.methods) {
+        methods.push({
+          node: method,
+          ownerName,
+          ownerDecl,
+          isSatisfaction: true,
+        });
+      }
+    }
+  }
+  return methods;
+}
+
+function recordSatisfactionMethodLinks(
+  ownerName: string,
+  members: Array<
+    StructDeclaration["members"][number] | EnumDeclaration["members"][number]
+  >,
+  satisfactionMethodLinks: Set<string>,
+): void {
+  for (const member of members) {
+    if (member.kind !== "TraitSatisfiesDeclaration") continue;
+    for (const method of member.methods) {
+      if ((method.typeParams?.length ?? 0) > 0) continue;
+      satisfactionMethodLinks.add(methodLinkName(ownerName, method.name.name));
+    }
+  }
 }
 
 function lowerGlobalDeclaration(
