@@ -242,6 +242,7 @@ interface TraitSatisfactionInfo {
   trait: NamedRefType;
   associatedTypes: Map<string, AssociatedTypeDefinition>;
   methods: Map<string, MethodDeclaration>;
+  defaultMethods: Map<string, MethodDeclaration>;
 }
 
 interface BuiltinTraitSatisfactionInfo {
@@ -738,6 +739,7 @@ export class Checker {
       trait,
       associatedTypes,
       methods,
+      defaultMethods: new Map(),
     };
   }
 
@@ -803,10 +805,11 @@ export class Checker {
 
   private traitMethodDeclarations(
     declaration: TraitDeclaration,
-  ): TraitMethodSignature[] {
+  ): Array<TraitMethodSignature | MethodDeclaration> {
     return declaration.members.filter(
-      (member): member is TraitMethodSignature =>
-        member.kind === "TraitMethodSignature",
+      (member): member is TraitMethodSignature | MethodDeclaration =>
+        member.kind === "TraitMethodSignature" ||
+        member.kind === "MethodDeclaration",
     );
   }
 
@@ -1208,7 +1211,18 @@ export class Checker {
         continue;
       }
       seen.add(method.name.name);
-      this.resolveTraitMethod(method, symbol, typeScope);
+      const resolved = this.resolveTraitMethod(method, symbol, typeScope);
+      if (method.kind === "MethodDeclaration") {
+        const diagnosticsBefore = this.diagnostics.length;
+        this.checkMethodBody(method, resolved, symbol, typeScope);
+        if (this.diagnostics.length > diagnosticsBefore) {
+          this.report(
+            `Invalid default implementation for trait method '${method.name.name}'.`,
+            method.span,
+            "E2824",
+          );
+        }
+      }
     }
   }
 
@@ -1255,11 +1269,13 @@ export class Checker {
     for (const [name, requiredMethod] of required) {
       const impl = satisfaction.methods.get(name);
       if (!impl) {
-        this.report(
-          `Missing trait method '${name}'.`,
-          owner.node.span,
-          "E2814",
-        );
+        if (!this.traitDefaultMethod(traitSymbol, name)) {
+          this.report(
+            `Missing trait method '${name}'.`,
+            owner.node.span,
+            "E2814",
+          );
+        }
         continue;
       }
       const actual = this.resolveMethod(impl, owner, satisfactionScope);
@@ -4418,11 +4434,21 @@ export class Checker {
   }
 
   private resolveTraitMethod(
-    method: TraitMethodSignature,
+    method: TraitMethodSignature | MethodDeclaration,
     trait: TypeSymbol,
     scope: Scope,
   ) {
     return this.resolveMethod(method, trait, scope);
+  }
+
+  private traitDefaultMethod(
+    trait: TypeSymbol,
+    name: string,
+  ): MethodDeclaration | undefined {
+    return trait.traitDecl?.members.find(
+      (member): member is MethodDeclaration =>
+        member.kind === "MethodDeclaration" && member.name.name === name,
+    );
   }
 
   private resolveTraitMethodsForReference(
@@ -4563,6 +4589,18 @@ export class Checker {
           ),
           owner,
         );
+      const defaultMethod = satisfaction.trait.symbol
+        ? this.traitDefaultMethod(satisfaction.trait.symbol, name)
+        : undefined;
+      if (defaultMethod)
+        return this.instantiateMethodForOwner(
+          this.resolveMethod(
+            defaultMethod,
+            satisfaction.trait.symbol!,
+            this.createSatisfactionMethodScope(satisfaction, owner, scope),
+          ),
+          owner,
+        );
     }
 
     return null;
@@ -4629,6 +4667,9 @@ export class Checker {
       candidates.push(this.resolveBuiltinTrait("Unwrap", [type.typeArgs[0]]));
     }
     if (type.kind === "Named") {
+      if (type.symbol?.kind === "Trait") {
+        candidates.push(this.namedType(type.name, type.symbol, type.typeArgs));
+      }
       for (const satisfaction of type.symbol?.builtinSatisfactions ?? []) {
         if (this.builtinSatisfactionApplies(type, satisfaction, scope)) {
           candidates.push(
@@ -4680,6 +4721,19 @@ export class Checker {
         return this.resolveMethod(
           impl,
           owner,
+          this.createSatisfactionMethodScope(
+            satisfaction,
+            this.namedType(owner.name, owner, this.ownerTypeArgs(owner, scope)),
+            scope,
+          ),
+        );
+      const defaultMethod = satisfaction.trait.symbol
+        ? this.traitDefaultMethod(satisfaction.trait.symbol, name)
+        : undefined;
+      if (defaultMethod)
+        return this.resolveMethod(
+          defaultMethod,
+          satisfaction.trait.symbol!,
           this.createSatisfactionMethodScope(
             satisfaction,
             this.namedType(owner.name, owner, this.ownerTypeArgs(owner, scope)),

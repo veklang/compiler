@@ -172,7 +172,10 @@ export interface TraitDeclaration extends Node {
   isPublic: boolean;
 }
 
-export type TraitMember = TraitMethodSignature | AssociatedTypeDeclaration;
+export type TraitMember =
+  | TraitMethodSignature
+  | MethodDeclaration
+  | AssociatedTypeDeclaration;
 
 export interface TraitSatisfiesDeclaration extends Node {
   kind: "TraitSatisfiesDeclaration";

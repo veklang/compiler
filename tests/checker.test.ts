@@ -344,6 +344,47 @@ fn main() -> void {
 `);
   });
 
+  test("trait default methods may be omitted and overridden", () => {
+    checkOk(`
+trait Labeled {
+  fn label(self) -> i32 {
+    return 4;
+  }
+}
+
+struct DefaultLabel {
+  satisfies Labeled {
+  }
+}
+
+struct CustomLabel {
+  satisfies Labeled {
+    fn label(self) -> i32 {
+      return 9;
+    }
+  }
+}
+
+fn main() -> void {
+  let a = DefaultLabel {};
+  let b = CustomLabel {};
+  let _x: i32 = a.label();
+  let _y: i32 = b.label();
+}
+`);
+  });
+
+  test("trait default methods are type checked", () => {
+    const result = check(`
+trait BadDefault {
+  fn value(self) -> i32 {
+    return "wrong";
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2302", "E2824"]);
+  });
+
   test("associated type definitions satisfy trait method signatures", () => {
     checkOk(`
 trait Source {

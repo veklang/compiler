@@ -165,6 +165,10 @@ function walkStmt(stmt: Statement, refs: Set<string>): void {
           if (member.bound) walkTypeNode(member.bound, refs);
           continue;
         }
+        if (member.kind === "MethodDeclaration") {
+          walkMethod(member, refs);
+          continue;
+        }
         for (const p of member.params)
           if (p.kind === "NamedParameter") walkTypeNode(p.type, refs);
         if (member.returnType) walkTypeNode(member.returnType, refs);

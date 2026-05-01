@@ -1215,6 +1215,44 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs omitted trait default methods", () => {
+    if (!hasCc()) return;
+
+    withTempFile(
+      `
+trait Scored {
+  fn score(self) -> i32 {
+    return 42;
+  }
+}
+
+struct User {
+  satisfies Scored {
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User {};
+  return user.score();
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs generic method specialization on generic struct owner", () => {
     if (!hasCc()) return;
 

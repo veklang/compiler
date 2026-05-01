@@ -300,6 +300,30 @@ fn main() -> i32 {
     assert.ok(!dump.includes("call @User_score"));
   });
 
+  test("lowers omitted trait default methods as satisfaction methods", () => {
+    const ir = irOk(`
+trait Scored {
+  fn score(self) -> i32 {
+    return 42;
+  }
+}
+
+struct User {
+  satisfies Scored {
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User {};
+  return user.score();
+}
+`);
+
+    const dump = dumpIr(ir);
+    assert.ok(dump.includes("fn fn.User_score User_score(self: User) -> i32"));
+    assert.ok(dump.includes("call @User_score"));
+  });
+
   test("keeps trait satisfaction methods referenced as function values", () => {
     const ir = irOk(`
 trait Scored {

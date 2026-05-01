@@ -162,6 +162,26 @@ where S: Source<Item = i32>, S.Item: Format
     }
   });
 
+  test("trait default methods are parsed", () => {
+    const program = parseOk(`
+trait Described {
+  fn name(self) -> string;
+
+  fn code(self) -> i32 {
+    return 7;
+  }
+}
+`);
+    const trait = program.body[0];
+    assert.equal(trait.kind, "TraitDeclaration");
+    if (trait.kind === "TraitDeclaration") {
+      assert.deepEqual(
+        trait.members.map((member) => member.kind),
+        ["TraitMethodSignature", "MethodDeclaration"],
+      );
+    }
+  });
+
   test("enum members may include methods using Self", () => {
     const program = parseOk(`
 enum State {

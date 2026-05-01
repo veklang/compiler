@@ -445,7 +445,7 @@ export class Parser {
     const members: TraitMember[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
       if (this.checkKeyword("fn")) {
-        members.push(this.parseTraitMethodSignature());
+        members.push(this.parseTraitMethodMember());
       } else if (this.checkKeyword("type")) {
         members.push(this.parseAssociatedTypeDeclaration());
       } else {
@@ -517,6 +517,40 @@ export class Parser {
       params,
       returnType: returnType ?? undefined,
       whereClause,
+    };
+  }
+
+  private parseTraitMethodMember(): TraitMethodSignature | MethodDeclaration {
+    const start = this.expectKeyword("fn");
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const typeParams = this.parseTypeParams();
+    const params = this.parseParameterList();
+    const returnType = this.matchOperator("->") ? this.parseType() : undefined;
+    const whereClause = this.parseWhereClause();
+    if (this.matchPunctuator(";")) {
+      return {
+        kind: "TraitMethodSignature",
+        span: this.spanFrom(start?.span, returnType?.span ?? name.span),
+        name,
+        typeParams,
+        params,
+        returnType: returnType ?? undefined,
+        whereClause,
+      };
+    }
+    const body = this.parseBlockStatement();
+    return {
+      kind: "MethodDeclaration",
+      span: this.spanFrom(start?.span, body.span),
+      name,
+      typeParams,
+      params,
+      returnType: returnType ?? undefined,
+      whereClause,
+      body,
+      isInline: false,
+      isUnsafe: false,
     };
   }
 

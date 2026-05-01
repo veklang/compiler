@@ -842,6 +842,31 @@ fn main() -> i32 {
     assert.ok(c.includes("__vek_fn_User_score(v0);"));
   });
 
+  test("emits omitted trait default methods as static functions", () => {
+    const c = emitOk(`
+trait Scored {
+  fn score(self) -> i32 {
+    return 42;
+  }
+}
+
+struct User {
+  satisfies Scored {
+  }
+}
+
+fn main() -> i32 {
+  let user: User = User {};
+  return user.score();
+}
+`);
+
+    assert.ok(
+      c.includes("static int32_t __vek_fn_User_score(__vek_struct_User v0);"),
+    );
+    assert.ok(c.includes("__vek_fn_User_score(v0);"));
+  });
+
   test("does not emit unused trait satisfaction methods", () => {
     const c = emitOk(`
 trait Scored {

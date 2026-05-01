@@ -53,6 +53,7 @@ import type {
   MatchStatementArm,
   MemberExpression,
   MethodDeclaration,
+  NamedType,
   NamedParameter,
   Node,
   Parameter,
@@ -65,6 +66,7 @@ import type {
   StructLiteralExpression,
   TupleLiteralExpression,
   TupleMemberExpression,
+  TraitDeclaration,
   TypeNode,
   TypeParameter,
   UnaryExpression,
@@ -109,6 +111,8 @@ interface MethodDeclarationInfo {
   ownerDecl: "struct" | "enum";
   isSatisfaction: boolean;
   associatedTypes?: AssociatedTypeDefinition[];
+  traitName?: string;
+  trait?: NamedType;
 }
 
 interface LowerContext {
@@ -226,6 +230,7 @@ export function lowerProgramToIr(
   const functionLinks = new Map<string, FunctionLinkInfo>();
   const structsByName = new Map<string, StructDeclaration>();
   const enumsByName = new Map<string, EnumDeclaration>();
+  const traitsByName = new Map<string, TraitDeclaration>();
   const genericStructSpecializations: Array<{
     declaration: StructDeclaration;
     linkName: string;
@@ -248,11 +253,23 @@ export function lowerProgramToIr(
   let entry: string | undefined;
 
   for (const statement of statements) {
+    if (statement.kind === "TraitDeclaration") {
+      traitsByName.set(statement.name.name, statement);
+    }
+  }
+
+  for (const statement of statements) {
     if (statement.kind === "StructDeclaration") {
       structsByName.set(statement.name.name, statement);
       if ((statement.typeParams?.length ?? 0) > 0) continue;
       declarations.push(
-        lowerStructDeclaration(statement, structFields, methodLinks, enumNames),
+        lowerStructDeclaration(
+          statement,
+          structFields,
+          methodLinks,
+          traitsByName,
+          enumNames,
+        ),
       );
     } else if (statement.kind === "EnumDeclaration") {
       enumsByName.set(statement.name.name, statement);
@@ -261,12 +278,19 @@ export function lowerProgramToIr(
           statement,
           variantInfos,
           methodLinks,
+          traitsByName,
           enumNames,
         );
         continue;
       }
       declarations.push(
-        lowerEnumDeclaration(statement, variantInfos, methodLinks, enumNames),
+        lowerEnumDeclaration(
+          statement,
+          variantInfos,
+          methodLinks,
+          traitsByName,
+          enumNames,
+        ),
       );
     }
   }
@@ -295,6 +319,7 @@ export function lowerProgramToIr(
         declaration,
         structFields,
         methodLinks,
+        traitsByName,
         enumNames,
         {
           linkName,
@@ -306,6 +331,7 @@ export function lowerProgramToIr(
       linkName,
       declaration.members,
       satisfactionMethodLinks,
+      traitsByName,
     );
   }
 
@@ -327,15 +353,23 @@ export function lowerProgramToIr(
       typeSubstitutions,
     });
     declarations.push(
-      lowerEnumDeclaration(declaration, variantInfos, methodLinks, enumNames, {
-        linkName,
-        typeSubstitutions,
-      }),
+      lowerEnumDeclaration(
+        declaration,
+        variantInfos,
+        methodLinks,
+        traitsByName,
+        enumNames,
+        {
+          linkName,
+          typeSubstitutions,
+        },
+      ),
     );
     recordSatisfactionMethodLinks(
       linkName,
       declaration.members,
       satisfactionMethodLinks,
+      traitsByName,
     );
   }
 
@@ -384,11 +418,13 @@ export function lowerProgramToIr(
       statement.name.name,
       statement.members,
       satisfactionMethodLinks,
+      traitsByName,
     );
     for (const member of methodDeclarationInfosFromMembers(
       statement.name.name,
       statement.kind === "EnumDeclaration" ? "enum" : "struct",
       statement.members,
+      traitsByName,
     )) {
       methodsByKey.set(methodKey(statement.name.name, member.node.name.name), {
         node: member.node,
@@ -396,6 +432,8 @@ export function lowerProgramToIr(
         ownerDecl: member.ownerDecl,
         isSatisfaction: member.isSatisfaction,
         associatedTypes: member.associatedTypes,
+        traitName: member.traitName,
+        trait: member.trait,
       });
       if (
         (statement.kind === "StructDeclaration" ||
@@ -404,10 +442,20 @@ export function lowerProgramToIr(
       )
         continue;
       if ((member.node.typeParams?.length ?? 0) > 0) continue;
-      const typeSubstitutions = associatedTypeSubstitutionsFromDefinitions(
-        member.associatedTypes,
+      const traitTypeSubstitutions = traitTypeSubstitutionsFromReference(
+        member.trait,
+        traitsByName,
         enumNames,
         statement.name.name,
+      );
+      const typeSubstitutions = mergeTypeSubstitutions(
+        traitTypeSubstitutions,
+        associatedTypeSubstitutionsFromDefinitions(
+          member.associatedTypes,
+          enumNames,
+          statement.name.name,
+          traitTypeSubstitutions,
+        ),
       );
       declarations.push(
         lowerMethod(
@@ -443,20 +491,33 @@ export function lowerProgramToIr(
       specialization.linkName,
       specialization.declaration.members,
       satisfactionMethodLinks,
+      traitsByName,
     );
     for (const member of methodDeclarationInfosFromMembers(
       specialization.linkName,
       "struct",
       specialization.declaration.members,
+      traitsByName,
     )) {
       if ((member.node.typeParams?.length ?? 0) > 0) continue;
-      const typeSubstitutions = mergeTypeSubstitutions(
+      const traitTypeSubstitutions = traitTypeSubstitutionsFromReference(
+        member.trait,
+        traitsByName,
+        enumNames,
+        specialization.linkName,
         specialization.typeSubstitutions,
+      );
+      const baseTypeSubstitutions = mergeTypeSubstitutions(
+        specialization.typeSubstitutions,
+        traitTypeSubstitutions,
+      );
+      const typeSubstitutions = mergeTypeSubstitutions(
+        baseTypeSubstitutions,
         associatedTypeSubstitutionsFromDefinitions(
           member.associatedTypes,
           enumNames,
           specialization.linkName,
-          specialization.typeSubstitutions,
+          baseTypeSubstitutions,
         ),
       );
       declarations.push(
@@ -491,20 +552,33 @@ export function lowerProgramToIr(
       specialization.linkName,
       specialization.declaration.members,
       satisfactionMethodLinks,
+      traitsByName,
     );
     for (const member of methodDeclarationInfosFromMembers(
       specialization.linkName,
       "enum",
       specialization.declaration.members,
+      traitsByName,
     )) {
       if ((member.node.typeParams?.length ?? 0) > 0) continue;
-      const typeSubstitutions = mergeTypeSubstitutions(
+      const traitTypeSubstitutions = traitTypeSubstitutionsFromReference(
+        member.trait,
+        traitsByName,
+        enumNames,
+        specialization.linkName,
         specialization.typeSubstitutions,
+      );
+      const baseTypeSubstitutions = mergeTypeSubstitutions(
+        specialization.typeSubstitutions,
+        traitTypeSubstitutions,
+      );
+      const typeSubstitutions = mergeTypeSubstitutions(
+        baseTypeSubstitutions,
         associatedTypeSubstitutionsFromDefinitions(
           member.associatedTypes,
           enumNames,
           specialization.linkName,
-          specialization.typeSubstitutions,
+          baseTypeSubstitutions,
         ),
       );
       declarations.push(
@@ -642,12 +716,23 @@ export function lowerProgramToIr(
       ownerTypeSubstitutions,
       methodTypeSubstitutions,
     );
+    const traitTypeSubstitutions = traitTypeSubstitutionsFromReference(
+      methodInfo.trait,
+      traitsByName,
+      enumNames,
+      ownerLinkName,
+      baseTypeSubstitutions,
+    );
+    const traitAndBaseTypeSubstitutions = mergeTypeSubstitutions(
+      baseTypeSubstitutions,
+      traitTypeSubstitutions,
+    );
     const associatedTypeSubstitutions =
       associatedTypeSubstitutionsFromDefinitions(
         methodInfo.associatedTypes,
         enumNames,
         ownerLinkName,
-        baseTypeSubstitutions,
+        traitAndBaseTypeSubstitutions,
       );
     declarations.push(
       lowerMethod(
@@ -667,7 +752,7 @@ export function lowerProgramToIr(
         {
           linkName,
           typeSubstitutions: mergeTypeSubstitutions(
-            baseTypeSubstitutions,
+            traitAndBaseTypeSubstitutions,
             associatedTypeSubstitutions,
           ),
         },
@@ -792,6 +877,7 @@ function lowerStructDeclaration(
   node: StructDeclaration,
   structFields: Map<string, IrStructField[]>,
   methodLinks: Map<string, string>,
+  traitsByName: Map<string, TraitDeclaration>,
   enumNames: Set<string>,
   specialization?: {
     linkName: string;
@@ -812,7 +898,7 @@ function lowerStructDeclaration(
   const linkName = specialization?.linkName ?? node.name.name;
   const id: IrTypeDeclId = `struct.${linkName}`;
   structFields.set(linkName, fields);
-  recordMethodLinks(linkName, node.members, methodLinks);
+  recordMethodLinks(linkName, node.members, methodLinks, traitsByName);
   return {
     kind: "struct_decl",
     id,
@@ -827,6 +913,7 @@ function lowerEnumDeclaration(
   node: EnumDeclaration,
   variantInfos: Map<string, VariantInfo>,
   methodLinks: Map<string, string>,
+  traitsByName: Map<string, TraitDeclaration>,
   enumNames?: Set<string>,
   specialization?: {
     linkName: string;
@@ -836,7 +923,7 @@ function lowerEnumDeclaration(
   const linkName = specialization?.linkName ?? node.name.name;
   const id: IrTypeDeclId = `enum.${linkName}`;
   const declId = id;
-  recordMethodLinks(linkName, node.members, methodLinks);
+  recordMethodLinks(linkName, node.members, methodLinks, traitsByName);
   const variants: IrEnumVariant[] = node.members
     .filter((m): m is EnumVariant => m.kind === "EnumVariant")
     .map((variant, tag) => {
@@ -872,9 +959,10 @@ function recordEnumDeclarationInfo(
   node: EnumDeclaration,
   variantInfos: Map<string, VariantInfo>,
   methodLinks: Map<string, string>,
+  traitsByName: Map<string, TraitDeclaration>,
   enumNames?: Set<string>,
 ) {
-  recordMethodLinks(node.name.name, node.members, methodLinks);
+  recordMethodLinks(node.name.name, node.members, methodLinks, traitsByName);
   for (const [tag, variant] of node.members
     .filter((m): m is EnumVariant => m.kind === "EnumVariant")
     .entries()) {
@@ -899,8 +987,9 @@ function recordMethodLinks(
     StructDeclaration["members"][number] | EnumDeclaration["members"][number]
   >,
   methodLinks: Map<string, string>,
+  traitsByName: Map<string, TraitDeclaration>,
 ) {
-  for (const member of methodDeclarationsFromMembers(members)) {
+  for (const member of methodDeclarationsFromMembers(members, traitsByName)) {
     methodLinks.set(
       methodKey(ownerName, member.name.name),
       methodLinkName(ownerName, member.name.name),
@@ -912,6 +1001,7 @@ function methodDeclarationsFromMembers(
   members: Array<
     StructDeclaration["members"][number] | EnumDeclaration["members"][number]
   >,
+  traitsByName: Map<string, TraitDeclaration>,
 ): MethodDeclaration[] {
   const methods: MethodDeclaration[] = [];
   for (const member of members) {
@@ -919,6 +1009,14 @@ function methodDeclarationsFromMembers(
       methods.push(member);
     } else if (member.kind === "TraitSatisfiesDeclaration") {
       methods.push(...member.methods);
+      for (const method of defaultMethodsForSatisfaction(
+        member,
+        traitsByName,
+      )) {
+        if (!member.methods.some((m) => m.name.name === method.name.name)) {
+          methods.push(method);
+        }
+      }
     }
   }
   return methods;
@@ -930,6 +1028,7 @@ function methodDeclarationInfosFromMembers(
   members: Array<
     StructDeclaration["members"][number] | EnumDeclaration["members"][number]
   >,
+  traitsByName: Map<string, TraitDeclaration>,
 ): MethodDeclarationInfo[] {
   const methods: MethodDeclarationInfo[] = [];
   for (const member of members) {
@@ -948,11 +1047,47 @@ function methodDeclarationInfosFromMembers(
           ownerDecl,
           isSatisfaction: true,
           associatedTypes: member.associatedTypes,
+          traitName: member.trait.name.name,
+          trait: member.trait,
+        });
+      }
+      for (const method of defaultMethodsForSatisfaction(
+        member,
+        traitsByName,
+      )) {
+        if (member.methods.some((m) => m.name.name === method.name.name)) {
+          continue;
+        }
+        methods.push({
+          node: method,
+          ownerName,
+          ownerDecl,
+          isSatisfaction: true,
+          associatedTypes: member.associatedTypes,
+          traitName: member.trait.name.name,
+          trait: member.trait,
         });
       }
     }
   }
   return methods;
+}
+
+function defaultMethodsForSatisfaction(
+  member:
+    | StructDeclaration["members"][number]
+    | EnumDeclaration["members"][number],
+  traitsByName: Map<string, TraitDeclaration>,
+): MethodDeclaration[] {
+  if (member.kind !== "TraitSatisfiesDeclaration") return [];
+  return (
+    traitsByName
+      .get(member.trait.name.name)
+      ?.members.filter(
+        (traitMember): traitMember is MethodDeclaration =>
+          traitMember.kind === "MethodDeclaration",
+      ) ?? []
+  );
 }
 
 function recordSatisfactionMethodLinks(
@@ -961,10 +1096,18 @@ function recordSatisfactionMethodLinks(
     StructDeclaration["members"][number] | EnumDeclaration["members"][number]
   >,
   satisfactionMethodLinks: Set<string>,
+  traitsByName: Map<string, TraitDeclaration>,
 ): void {
   for (const member of members) {
     if (member.kind !== "TraitSatisfiesDeclaration") continue;
-    for (const method of member.methods) {
+    const methods = [
+      ...member.methods,
+      ...defaultMethodsForSatisfaction(member, traitsByName).filter(
+        (method) =>
+          !member.methods.some((m) => m.name.name === method.name.name),
+      ),
+    ];
+    for (const method of methods) {
       if ((method.typeParams?.length ?? 0) > 0) continue;
       satisfactionMethodLinks.add(methodLinkName(ownerName, method.name.name));
     }
@@ -5755,6 +5898,39 @@ function associatedTypeSubstitutionsFromDefinitions(
           baseSubstitutions,
         );
     substitutions.set(definition.name.name, type);
+  }
+  return substitutions;
+}
+
+function traitTypeSubstitutionsFromReference(
+  reference: NamedType | undefined,
+  traitsByName: Map<string, TraitDeclaration>,
+  enumNames: Set<string>,
+  selfTypeName?: string,
+  baseSubstitutions?: Map<string, IrType>,
+): Map<string, IrType> {
+  const substitutions = new Map<string, IrType>();
+  if (!reference) return substitutions;
+  const declaration = traitsByName.get(reference.name.name);
+  const typeArgs = reference.typeArgs ?? [];
+  for (
+    let i = 0;
+    i < Math.min(declaration?.typeParams?.length ?? 0, typeArgs.length);
+    i++
+  ) {
+    const type = selfTypeName
+      ? typeFromTypeNodeWithSelfAndSubstitutions(
+          typeArgs[i],
+          selfTypeName,
+          enumNames,
+          baseSubstitutions,
+        )
+      : typeFromTypeNodeWithSubstitutions(
+          typeArgs[i],
+          enumNames,
+          baseSubstitutions,
+        );
+    substitutions.set(declaration!.typeParams![i].name.name, type);
   }
   return substitutions;
 }
