@@ -344,6 +344,83 @@ fn main() -> void {
 `);
   });
 
+  test("associated type definitions satisfy trait method signatures", () => {
+    checkOk(`
+trait Source {
+  type Item;
+
+  fn get(self) -> Item;
+}
+
+struct Num {
+  value: i32;
+
+  satisfies Source {
+    type Item = i32;
+
+    fn get(self) -> Item {
+      let value: Item = self.value;
+      return value;
+    }
+  }
+}
+
+fn main() -> void {
+  let n = Num { value: 4 };
+  let _x: i32 = n.get();
+}
+`);
+  });
+
+  test("associated type bounds are enforced", () => {
+    const result = check(`
+trait Source {
+  type Item: Format;
+}
+
+struct Widget {
+  id: i32;
+
+  satisfies Source {
+    type Item = Widget;
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2823"]);
+  });
+
+  test("associated type definitions are required and must be declared", () => {
+    const missing = check(`
+trait Source {
+  type Item;
+}
+
+struct Num {
+  value: i32;
+
+  satisfies Source {
+  }
+}
+`);
+    expectDiagnostics(missing.checkDiagnostics, ["E2822"]);
+
+    const unknown = check(`
+trait Source {
+  type Item;
+}
+
+struct Num {
+  value: i32;
+
+  satisfies Source {
+    type Item = i32;
+    type Extra = string;
+  }
+}
+`);
+    expectDiagnostics(unknown.checkDiagnostics, ["E2821"]);
+  });
+
   test("custom Equal<T> satisfactions drive ==", () => {
     checkOk(`
 struct UserId {

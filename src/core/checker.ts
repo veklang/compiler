@@ -5,6 +5,8 @@ import { Parser } from "@/core/parser";
 import type {
   ArrayLiteralExpression,
   AssignmentStatement,
+  AssociatedTypeDeclaration,
+  AssociatedTypeDefinition,
   BinaryExpression,
   BindingPattern,
   BlockStatement,
@@ -180,6 +182,7 @@ interface Scope {
   values: Map<string, ValueSymbol>;
   types: Map<string, TypeSymbol>;
   typeParams: Map<string, TypeParamSpec>;
+  associatedTypes: Map<string, Type>;
   overrides: Map<string, Type>;
   selfType?: NamedRefType;
 }
@@ -217,6 +220,7 @@ interface MethodInfo {
 interface TraitSatisfactionInfo {
   span: Span;
   trait: NamedRefType;
+  associatedTypes: Map<string, AssociatedTypeDefinition>;
   methods: Map<string, MethodDeclaration>;
 }
 
@@ -224,6 +228,7 @@ interface BuiltinTraitSatisfactionInfo {
   span: Span;
   trait: NamedRefType;
   whereConstraints?: BuiltinTraitWhereConstraint[];
+  associatedTypes: Map<string, AssociatedTypeDefinition>;
   methods: Map<string, TraitMethodSignature>;
 }
 
@@ -395,6 +400,10 @@ export class Checker {
         for (const m of member.methods) {
           methods.set(m.name.name, m);
         }
+        const associatedTypes = new Map<string, AssociatedTypeDefinition>();
+        for (const associatedType of member.associatedTypes) {
+          associatedTypes.set(associatedType.name.name, associatedType);
+        }
         symbol.builtinSatisfactions.push({
           span: member.span,
           trait: traitRef,
@@ -402,6 +411,7 @@ export class Checker {
             typeParam: clause.typeName.name,
             trait: this.resolveNamedReference(clause.trait, ownerScope),
           })),
+          associatedTypes,
           methods,
         });
       }
@@ -441,6 +451,7 @@ export class Checker {
       values: new Map(),
       types: new Map(),
       typeParams: new Map(),
+      associatedTypes: new Map(parent?.associatedTypes),
       overrides: new Map(),
       selfType,
     };
@@ -685,7 +696,24 @@ export class Checker {
       }
       methods.set(method.name.name, method);
     }
-    return { span: declaration.trait.span, trait, methods };
+    const associatedTypes = new Map<string, AssociatedTypeDefinition>();
+    for (const associatedType of declaration.associatedTypes) {
+      if (associatedTypes.has(associatedType.name.name)) {
+        this.report(
+          `Duplicate associated type definition '${associatedType.name.name}'.`,
+          associatedType.span,
+          "E2822",
+        );
+        continue;
+      }
+      associatedTypes.set(associatedType.name.name, associatedType);
+    }
+    return {
+      span: declaration.trait.span,
+      trait,
+      associatedTypes,
+      methods,
+    };
   }
 
   private validateTypeMemberConflicts(symbol: TypeSymbol) {
@@ -741,9 +769,29 @@ export class Checker {
   ): string[] {
     const traitSymbol = satisfaction.trait.symbol;
     if (traitSymbol?.kind === "Trait" && traitSymbol.traitDecl) {
-      return traitSymbol.traitDecl.methods.map((method) => method.name.name);
+      return this.traitMethodDeclarations(traitSymbol.traitDecl).map(
+        (method) => method.name.name,
+      );
     }
     return Array.from(satisfaction.methods.keys());
+  }
+
+  private traitMethodDeclarations(
+    declaration: TraitDeclaration,
+  ): TraitMethodSignature[] {
+    return declaration.members.filter(
+      (member): member is TraitMethodSignature =>
+        member.kind === "TraitMethodSignature",
+    );
+  }
+
+  private traitAssociatedTypeDeclarations(
+    declaration: TraitDeclaration,
+  ): AssociatedTypeDeclaration[] {
+    return declaration.members.filter(
+      (member): member is AssociatedTypeDeclaration =>
+        member.kind === "AssociatedTypeDeclaration",
+    );
   }
 
   private createTypeScope(symbol: TypeSymbol, parent: Scope) {
@@ -1102,8 +1150,30 @@ export class Checker {
     }
     typeScope.selfType = this.namedType("Self", symbol);
 
+    const seenAssociatedTypes = new Set<string>();
+    for (const associatedType of this.traitAssociatedTypeDeclarations(
+      symbol.traitDecl,
+    )) {
+      if (seenAssociatedTypes.has(associatedType.name.name)) {
+        this.report(
+          `Duplicate associated type '${associatedType.name.name}'.`,
+          associatedType.span,
+          "E2822",
+        );
+        continue;
+      }
+      seenAssociatedTypes.add(associatedType.name.name);
+      typeScope.associatedTypes.set(
+        associatedType.name.name,
+        this.unknownType(),
+      );
+      if (associatedType.bound) {
+        this.resolveNamedReference(associatedType.bound, typeScope);
+      }
+    }
+
     const seen = new Set<string>();
-    for (const method of symbol.traitDecl.methods) {
+    for (const method of this.traitMethodDeclarations(symbol.traitDecl)) {
       if (seen.has(method.name.name)) {
         this.report(
           `Duplicate method '${method.name.name}'.`,
@@ -1135,12 +1205,27 @@ export class Checker {
     }
 
     const traitSymbol = satisfaction.trait.symbol;
+    const associatedTypes = this.resolveAssociatedTypeDefinitions(
+      satisfaction.associatedTypes,
+      traitSymbol,
+      owner,
+      scope,
+      satisfaction.span,
+    );
     const required = this.resolveTraitMethodsForReference(
       traitSymbol,
       satisfaction.trait,
       this.namedType(owner.name, owner, this.ownerTypeArgs(owner, scope)),
       scope,
+      associatedTypes,
     );
+    const satisfactionScope = this.createScope(
+      scope,
+      this.namedType(owner.name, owner, this.ownerTypeArgs(owner, scope)),
+    );
+    for (const [name, type] of associatedTypes) {
+      satisfactionScope.associatedTypes.set(name, type);
+    }
 
     for (const [name, requiredMethod] of required) {
       const impl = satisfaction.methods.get(name);
@@ -1152,7 +1237,7 @@ export class Checker {
         );
         continue;
       }
-      const actual = this.resolveMethod(impl, owner, scope);
+      const actual = this.resolveMethod(impl, owner, satisfactionScope);
       if (!this.methodEquals(actual, requiredMethod)) {
         this.report(
           `Trait method signature mismatch for '${name}'.`,
@@ -1160,8 +1245,76 @@ export class Checker {
           "E2815",
         );
       }
-      this.checkMethodBody(impl, actual, owner, scope);
+      this.checkMethodBody(impl, actual, owner, satisfactionScope);
     }
+  }
+
+  private resolveAssociatedTypeDefinitions(
+    definitions: Map<string, AssociatedTypeDefinition>,
+    traitSymbol: TypeSymbol,
+    owner: TypeSymbol,
+    scope: Scope,
+    span: Span,
+  ): Map<string, Type> {
+    const resolved = new Map<string, Type>();
+    if (!traitSymbol.traitDecl) return resolved;
+
+    const declarations = this.traitAssociatedTypeDeclarations(
+      traitSymbol.traitDecl,
+    );
+    const declarationNames = new Set(
+      declarations.map((declaration) => declaration.name.name),
+    );
+
+    for (const declaration of declarations) {
+      const definition = definitions.get(declaration.name.name);
+      if (!definition) {
+        this.report(
+          `Missing associated type definition '${declaration.name.name}'.`,
+          span,
+          "E2822",
+        );
+        resolved.set(declaration.name.name, this.errorType());
+        continue;
+      }
+      const concrete = this.resolveType(definition.type, scope);
+      resolved.set(declaration.name.name, concrete);
+    }
+
+    for (const [name, definition] of definitions) {
+      if (!declarationNames.has(name)) {
+        this.report(
+          `Unknown associated type '${name}' for trait '${traitSymbol.name}'.`,
+          definition.span,
+          "E2821",
+        );
+      }
+    }
+
+    for (const declaration of declarations) {
+      if (!declaration.bound) continue;
+      const concrete = resolved.get(declaration.name.name);
+      if (!concrete || concrete.kind === "Error") continue;
+      const ownerType = this.namedType(
+        owner.name,
+        owner,
+        this.ownerTypeArgs(owner, scope),
+      );
+      const traitScope = this.createScope(scope, ownerType);
+      for (const [name, type] of resolved) {
+        traitScope.associatedTypes.set(name, type);
+      }
+      const bound = this.resolveNamedReference(declaration.bound, traitScope);
+      if (!this.typeSatisfiesTrait(concrete, bound, scope)) {
+        this.report(
+          `Associated type '${declaration.name.name}' does not satisfy bound '${this.displayType(bound)}'.`,
+          definitions.get(declaration.name.name)?.span ?? span,
+          "E2823",
+        );
+      }
+    }
+
+    return resolved;
   }
 
   private checkMethodDeclaration(
@@ -3782,6 +3935,9 @@ export class Checker {
       return this.typeParamType(spec.name, spec.bounds);
     }
 
+    const associatedType = this.lookupAssociatedType(node.name.name, scope);
+    if (associatedType) return associatedType;
+
     if (node.name.name === "never") return this.neverType();
 
     if (node.name.name === "ptr" || node.name.name === "const_ptr") {
@@ -3877,6 +4033,16 @@ export class Checker {
     if (resolved.kind === "Named") return resolved;
     this.report("Expected named type.", node.span, "E2003");
     return this.namedType(node.name.name);
+  }
+
+  private lookupAssociatedType(name: string, scope: Scope): Type | undefined {
+    let current: Scope | undefined = scope;
+    while (current) {
+      const type = current.associatedTypes.get(name);
+      if (type) return type;
+      current = current.parent;
+    }
+    return undefined;
   }
 
   private resolveAliasType(symbol: TypeSymbol, scope: Scope): Type {
@@ -4103,6 +4269,7 @@ export class Checker {
     reference: NamedRefType,
     selfType: Type,
     scope: Scope,
+    associatedTypes = new Map<string, Type>(),
   ): Map<string, MethodInfo> {
     const methods = new Map<string, MethodInfo>();
     if (!trait.traitDecl) return methods;
@@ -4129,8 +4296,11 @@ export class Checker {
       });
     }
     if (selfType.kind === "Named") traitScope.selfType = selfType;
+    for (const [name, type] of associatedTypes) {
+      traitScope.associatedTypes.set(name, type);
+    }
 
-    for (const method of trait.traitDecl.methods) {
+    for (const method of this.traitMethodDeclarations(trait.traitDecl)) {
       const resolved = this.resolveMethod(method, trait, traitScope);
       methods.set(method.name.name, {
         ...resolved,
@@ -4211,7 +4381,7 @@ export class Checker {
           this.resolveMethod(
             impl,
             owner.symbol,
-            this.createTypeScope(owner.symbol, scope),
+            this.createSatisfactionMethodScope(satisfaction, owner, scope),
           ),
           owner,
         );
@@ -4332,11 +4502,31 @@ export class Checker {
         return this.resolveMethod(
           impl,
           owner,
-          this.createTypeScope(owner, scope),
+          this.createSatisfactionMethodScope(
+            satisfaction,
+            this.namedType(owner.name, owner, this.ownerTypeArgs(owner, scope)),
+            scope,
+          ),
         );
     }
 
     return null;
+  }
+
+  private createSatisfactionMethodScope(
+    satisfaction: TraitSatisfactionInfo,
+    ownerType: NamedRefType,
+    scope: Scope,
+  ): Scope {
+    const methodScope = this.createTypeScope(ownerType.symbol!, scope);
+    methodScope.selfType = ownerType;
+    for (const definition of satisfaction.associatedTypes.values()) {
+      methodScope.associatedTypes.set(
+        definition.name.name,
+        this.resolveType(definition.type, methodScope),
+      );
+    }
+    return methodScope;
   }
 
   private instantiateMethodForOwner(

@@ -84,6 +84,18 @@ export interface TraitMethodSignature extends Node {
   whereClause?: WhereConstraint[];
 }
 
+export interface AssociatedTypeDeclaration extends Node {
+  kind: "AssociatedTypeDeclaration";
+  name: Identifier;
+  bound?: NamedType;
+}
+
+export interface AssociatedTypeDefinition extends Node {
+  kind: "AssociatedTypeDefinition";
+  name: Identifier;
+  type: TypeNode;
+}
+
 export interface VariableDeclaration extends Node {
   kind: "VariableDeclaration";
   declarationKind: "let" | "const";
@@ -156,13 +168,16 @@ export interface TraitDeclaration extends Node {
   kind: "TraitDeclaration";
   name: Identifier;
   typeParams?: TypeParameter[];
-  methods: TraitMethodSignature[];
+  members: TraitMember[];
   isPublic: boolean;
 }
+
+export type TraitMember = TraitMethodSignature | AssociatedTypeDeclaration;
 
 export interface TraitSatisfiesDeclaration extends Node {
   kind: "TraitSatisfiesDeclaration";
   trait: NamedType;
+  associatedTypes: AssociatedTypeDefinition[];
   methods: MethodDeclaration[];
 }
 
@@ -179,6 +194,7 @@ export interface BuiltinSatisfiesBlock extends Node {
   kind: "BuiltinSatisfiesBlock";
   trait: NamedType;
   whereClause?: WhereConstraint[];
+  associatedTypes: AssociatedTypeDefinition[];
   methods: TraitMethodSignature[];
 }
 

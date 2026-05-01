@@ -89,6 +89,53 @@ struct User {
     ]);
   });
 
+  test("associated type declarations and definitions are parsed", () => {
+    const program = parseOk(`
+trait Source {
+  type Item;
+  type Label: Format;
+
+  fn get(self) -> Item;
+}
+
+struct Num {
+  value: i32;
+
+  satisfies Source {
+    type Item = i32;
+    type Label = string;
+
+    fn get(self) -> i32 {
+      return self.value;
+    }
+  }
+}
+`);
+    const trait = program.body[0];
+    const struct = program.body[1];
+    assert.equal(trait.kind, "TraitDeclaration");
+    assert.equal(struct.kind, "StructDeclaration");
+    if (trait.kind === "TraitDeclaration") {
+      assert.deepEqual(
+        trait.members.map((member) => member.kind),
+        [
+          "AssociatedTypeDeclaration",
+          "AssociatedTypeDeclaration",
+          "TraitMethodSignature",
+        ],
+      );
+    }
+    if (struct.kind === "StructDeclaration") {
+      const satisfies = struct.members.find(
+        (member) => member.kind === "TraitSatisfiesDeclaration",
+      );
+      assert.equal(satisfies?.kind, "TraitSatisfiesDeclaration");
+      if (satisfies?.kind === "TraitSatisfiesDeclaration") {
+        assert.equal(satisfies.associatedTypes.length, 2);
+      }
+    }
+  });
+
   test("enum members may include methods using Self", () => {
     const program = parseOk(`
 enum State {

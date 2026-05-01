@@ -160,11 +160,15 @@ function walkStmt(stmt: Statement, refs: Set<string>): void {
 
     case "TraitDeclaration":
       walkTypeParams(stmt.typeParams, refs);
-      for (const method of stmt.methods) {
-        for (const p of method.params)
+      for (const member of stmt.members) {
+        if (member.kind === "AssociatedTypeDeclaration") {
+          if (member.bound) walkTypeNode(member.bound, refs);
+          continue;
+        }
+        for (const p of member.params)
           if (p.kind === "NamedParameter") walkTypeNode(p.type, refs);
-        if (method.returnType) walkTypeNode(method.returnType, refs);
-        walkWhereClause(method.whereClause, refs);
+        if (member.returnType) walkTypeNode(member.returnType, refs);
+        walkWhereClause(member.whereClause, refs);
       }
       break;
 
@@ -229,6 +233,9 @@ function walkSatisfies(
   refs: Set<string>,
 ): void {
   refs.add(sat.trait.name.name);
+  for (const associatedType of sat.associatedTypes) {
+    walkTypeNode(associatedType.type, refs);
+  }
   for (const method of sat.methods) walkMethod(method, refs);
 }
 

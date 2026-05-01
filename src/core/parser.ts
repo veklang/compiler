@@ -1,6 +1,8 @@
 import type {
   ArrayLiteralExpression,
   AssignableExpression,
+  AssociatedTypeDeclaration,
+  AssociatedTypeDefinition,
   BindingPattern,
   BlockStatement,
   BuiltinDeclaration,
@@ -39,6 +41,7 @@ import type {
   StructLiteralField,
   StructMember,
   TraitDeclaration,
+  TraitMember,
   TraitMethodSignature,
   TraitSatisfiesDeclaration,
   TypeAliasDeclaration,
@@ -150,12 +153,15 @@ export class Parser {
     this.expectPunctuator("{");
 
     const methods: TraitMethodSignature[] = [];
+    const associatedTypes: AssociatedTypeDefinition[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
       if (this.checkKeyword("fn")) {
         methods.push(this.parseTraitMethodSignature());
+      } else if (this.checkKeyword("type")) {
+        associatedTypes.push(this.parseAssociatedTypeDefinition());
       } else {
         this.report(
-          "Expected 'fn' inside builtin satisfies block.",
+          "Expected 'fn' or 'type' inside builtin satisfies block.",
           this.currentSpan(),
           "E1042",
         );
@@ -169,6 +175,7 @@ export class Parser {
       span: this.spanFrom(start?.span, end?.span ?? trait.span),
       trait,
       whereClause,
+      associatedTypes,
       methods,
     };
   }
@@ -434,9 +441,20 @@ export class Parser {
     const typeParams = this.parseTypeParams();
     this.expectPunctuator("{");
 
-    const methods: TraitMethodSignature[] = [];
+    const members: TraitMember[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
-      methods.push(this.parseTraitMethodSignature());
+      if (this.checkKeyword("fn")) {
+        members.push(this.parseTraitMethodSignature());
+      } else if (this.checkKeyword("type")) {
+        members.push(this.parseAssociatedTypeDeclaration());
+      } else {
+        this.report(
+          "Expected 'fn' or 'type' inside trait declaration.",
+          this.currentSpan(),
+          "E1041",
+        );
+        this.advance();
+      }
     }
 
     const end = this.expectPunctuator("}");
@@ -445,8 +463,39 @@ export class Parser {
       span: this.spanFrom(start?.span, end?.span ?? name.span),
       name,
       typeParams,
-      methods,
+      members,
       isPublic,
+    };
+  }
+
+  private parseAssociatedTypeDeclaration(): AssociatedTypeDeclaration {
+    const start = this.expectKeyword("type");
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    const bound = this.matchPunctuator(":")
+      ? (this.parseNamedType() ?? this.placeholderNamedType(name.span))
+      : undefined;
+    const end = this.expectPunctuator(";");
+    return {
+      kind: "AssociatedTypeDeclaration",
+      span: this.spanFrom(start?.span, end?.span ?? bound?.span ?? name.span),
+      name,
+      bound,
+    };
+  }
+
+  private parseAssociatedTypeDefinition(): AssociatedTypeDefinition {
+    const start = this.expectKeyword("type");
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
+    this.expectOperator("=");
+    const type = this.parseType() ?? this.placeholderType(this.currentSpan());
+    const end = this.expectPunctuator(";");
+    return {
+      kind: "AssociatedTypeDefinition",
+      span: this.spanFrom(start?.span, end?.span ?? type.span),
+      name,
+      type,
     };
   }
 
@@ -510,10 +559,22 @@ export class Parser {
     this.expectPunctuator("{");
 
     const methods: MethodDeclaration[] = [];
+    const associatedTypes: AssociatedTypeDefinition[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      if (this.checkKeyword("type")) {
+        associatedTypes.push(this.parseAssociatedTypeDefinition());
+        continue;
+      }
       const method = this.parseMethodDeclaration();
       if (method) methods.push(method);
-      else this.advance();
+      else {
+        this.report(
+          "Expected 'fn' or 'type' inside satisfies block.",
+          this.currentSpan(),
+          "E1041",
+        );
+        this.advance();
+      }
     }
 
     const end = this.expectPunctuator("}");
@@ -521,6 +582,7 @@ export class Parser {
       kind: "TraitSatisfiesDeclaration",
       span: this.spanFrom(start?.span, end?.span ?? trait.span),
       trait,
+      associatedTypes,
       methods,
     };
   }
