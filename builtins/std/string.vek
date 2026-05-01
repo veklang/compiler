@@ -22,7 +22,7 @@ builtin string {
     fn default() -> Self;
   }
 
-  satisfies Display {
+  satisfies Format {
     fn format(self) -> string;
   }
 }

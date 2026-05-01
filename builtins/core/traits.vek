@@ -22,7 +22,7 @@ pub trait Default {
   fn default() -> Self;
 }
 
-pub trait Display {
+pub trait Format {
   fn format(self) -> string;
 }
 

@@ -21,7 +21,7 @@ builtin Array<T> {
     fn default() -> Self;
   }
 
-  satisfies Display where T: Display {
+  satisfies Format where T: Format {
     fn format(self) -> string;
   }
 }

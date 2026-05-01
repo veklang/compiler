@@ -4230,11 +4230,11 @@ export class Checker {
     if (
       this.typeSatisfiesTrait(
         type,
-        this.resolveBuiltinTrait("Display", []),
+        this.resolveBuiltinTrait("Format", []),
         scope,
       )
     ) {
-      candidates.push(this.resolveBuiltinTrait("Display", []));
+      candidates.push(this.resolveBuiltinTrait("Format", []));
     }
     if (
       this.typeSatisfiesTrait(type, this.resolveBuiltinTrait("Hash", []), scope)
@@ -4488,8 +4488,8 @@ export class Checker {
       ) {
         return this.resolveBuiltinTrait("Unwrap", [type.typeArgs[0]]);
       }
-      if (traitName === "Display" && this.isDisplayable(type)) {
-        return this.resolveBuiltinTrait("Display", []);
+      if (traitName === "Format" && this.isFormattable(type)) {
+        return this.resolveBuiltinTrait("Format", []);
       }
       const builtinSatisfaction = type.symbol?.builtinSatisfactions?.find(
         (entry) =>
@@ -4522,8 +4522,8 @@ export class Checker {
       );
     }
     if (type.kind === "Primitive") {
-      if (traitName === "Display" && this.isDisplayable(type)) {
-        return this.resolveBuiltinTrait("Display", []);
+      if (traitName === "Format" && this.isFormattable(type)) {
+        return this.resolveBuiltinTrait("Format", []);
       }
       if (traitName === "Equal") {
         const equal = this.resolveBuiltinTrait("Equal", [type]);
@@ -4821,14 +4821,14 @@ export class Checker {
   }
 
   // Built-in trait satisfactions (spec/08):
-  // Primitives (int/float): Equal<T>, Hash, Order<T> (not bool), Clone, Default, Display
-  // bool:                   Equal<bool>, Hash, Clone, Default, Display
-  // string:                 Equal<string>, Hash, Order<string>, Clone, Default, Display
-  // Array<T>:               Iterator<T>, Display (T: Display), Clone (T: Clone), Default
-  // (T1,T2,...):            Equal, Hash, Display, Clone — when every Ti satisfies
-  // T?:                     Equal (T: Equal), Display (T: Display), Unwrap<T>
-  // Ordering:               Equal<Ordering>, Hash, Display
-  // Result<T,E>:            Unwrap<T> (via satisfies block), Display (T,E: Display)
+  // Primitives (int/float): Equal<T>, Hash, Order<T> (not bool), Clone, Default, Format
+  // bool:                   Equal<bool>, Hash, Clone, Default, Format
+  // string:                 Equal<string>, Hash, Order<string>, Clone, Default, Format
+  // Array<T>:               Iterator<T>, Format (T: Format), Clone (T: Clone), Default
+  // (T1,T2,...):            Equal, Hash, Format, Clone — when every Ti satisfies
+  // T?:                     Equal (T: Equal), Format (T: Format), Unwrap<T>
+  // Ordering:               Equal<Ordering>, Hash, Format
+  // Result<T,E>:            Unwrap<T> (via satisfies block), Format (T,E: Format)
   private typeSatisfiesTrait(
     type: Type,
     trait: NamedRefType,
@@ -4847,19 +4847,19 @@ export class Checker {
         return true;
       if (trait.name === "Equal" && this.isBuiltinEquatable(type, trait))
         return true;
-      if (trait.name === "Display") {
-        if (this.isDisplayable(type)) return true;
+      if (trait.name === "Format") {
+        if (this.isFormattable(type)) return true;
         if (type.name === "Ordering") return true;
         if (type.name === "Result" && type.typeArgs?.length === 2)
           return (
             this.typeSatisfiesTrait(
               type.typeArgs[0],
-              this.resolveBuiltinTrait("Display", []),
+              this.resolveBuiltinTrait("Format", []),
               scope,
             ) &&
             this.typeSatisfiesTrait(
               type.typeArgs[1],
-              this.resolveBuiltinTrait("Display", []),
+              this.resolveBuiltinTrait("Format", []),
               scope,
             )
           );
@@ -4889,7 +4889,7 @@ export class Checker {
     }
 
     if (type.kind === "Primitive") {
-      if (trait.name === "Display") return this.isDisplayable(type);
+      if (trait.name === "Format") return this.isFormattable(type);
       if (trait.name === "Equal") return this.isBuiltinEquatable(type, trait);
       if (trait.name === "Hash") return true;
       if (trait.name === "Order") {
@@ -4952,8 +4952,8 @@ export class Checker {
             ),
           )
         );
-      if (trait.name === "Display")
-        return allSatisfy(this.resolveBuiltinTrait("Display", []));
+      if (trait.name === "Format")
+        return allSatisfy(this.resolveBuiltinTrait("Format", []));
       if (trait.name === "Hash")
         return allSatisfy(this.resolveBuiltinTrait("Hash", []));
       if (trait.name === "Clone")
@@ -4967,10 +4967,10 @@ export class Checker {
           this.resolveBuiltinTrait("Equal", [type.base]),
           scope,
         );
-      if (trait.name === "Display")
+      if (trait.name === "Format")
         return this.typeSatisfiesTrait(
           type.base,
-          this.resolveBuiltinTrait("Display", []),
+          this.resolveBuiltinTrait("Format", []),
           scope,
         );
       if (trait.name === "Unwrap") {
@@ -5056,7 +5056,7 @@ export class Checker {
     );
   }
 
-  private isDisplayable(type: Type): boolean {
+  private isFormattable(type: Type): boolean {
     return (
       (type.kind === "Primitive" &&
         [

@@ -981,13 +981,13 @@ fn main() -> void {
 `);
   });
 
-  test("string satisfies Hash, Order, Clone, Default, Display", () => {
+  test("string satisfies Hash, Order, Clone, Default, Format", () => {
     checkOk(`
 fn needs_hashable<T: Hash>(_x: T) -> void { return; }
 fn needs_ordered<T: Order<T>>(_a: T, _b: T) -> void { return; }
 fn needs_cloneable<T: Clone>(_x: T) -> void { return; }
 fn needs_defaultable<T: Default>(_x: T) -> void { return; }
-fn needs_formattable<T: Display>(x: T) -> string { return x.format(); }
+fn needs_formattable<T: Format>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let s: string = "hello";
@@ -1000,10 +1000,10 @@ fn main() -> void {
 `);
   });
 
-  test("tuple satisfies Equal, Display, Hash, Clone", () => {
+  test("tuple satisfies Equal, Format, Hash, Clone", () => {
     checkOk(`
 fn needs_eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
-fn needs_fmt<T: Display>(x: T) -> string { return x.format(); }
+fn needs_fmt<T: Format>(x: T) -> string { return x.format(); }
 fn needs_hashable<T: Hash>(_x: T) -> void { return; }
 fn needs_cloneable<T: Clone>(_x: T) -> void { return; }
 
@@ -1036,10 +1036,10 @@ fn main() -> void {
 `);
   });
 
-  test("nullable satisfies Equal and Display", () => {
+  test("nullable satisfies Equal and Format", () => {
     checkOk(`
 fn eq<T: Equal<T>>(a: T, b: T) -> bool { return a.equals(b); }
-fn fmt<T: Display>(x: T) -> string { return x.format(); }
+fn fmt<T: Format>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let x: i32? = null;
@@ -1067,9 +1067,9 @@ fn main() -> void {
 `);
   });
 
-  test("Array satisfies Display when element is Display", () => {
+  test("Array satisfies Format when element is Format", () => {
     checkOk(`
-fn fmt<T: Display>(x: T) -> string { return x.format(); }
+fn fmt<T: Format>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let xs: i32[] = [1, 2, 3];
@@ -1078,9 +1078,9 @@ fn main() -> void {
 `);
   });
 
-  test("Ordering satisfies Display", () => {
+  test("Ordering satisfies Format", () => {
     checkOk(`
-fn fmt<T: Display>(x: T) -> string { return x.format(); }
+fn fmt<T: Format>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let _f = fmt(Less);
@@ -1864,13 +1864,13 @@ fn main() -> void {
     expectDiagnostics(result.checkDiagnostics, ["E2816"]);
   });
 
-  test("E2816: Array of non-Display element fails Display bound", () => {
+  test("E2816: Array of non-Format element fails Format bound", () => {
     const result = check(`
 struct Widget {
   id: i32;
 }
 
-fn fmt<T: Display>(x: T) -> string { return x.format(); }
+fn fmt<T: Format>(x: T) -> string { return x.format(); }
 
 fn main() -> void {
   let xs: Widget[] = [];
