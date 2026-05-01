@@ -136,6 +136,32 @@ struct Num {
     }
   });
 
+  test("associated type projections and constraints are parsed", () => {
+    const program = parseOk(`
+trait Source {
+  type Item;
+  fn get(self) -> Item;
+}
+
+fn first<S>(source: S) -> S.Item
+where S: Source<Item = i32>, S.Item: Format
+{
+  return source.get();
+}
+`);
+    const fn = program.body[1];
+    assert.equal(fn.kind, "FunctionDeclaration");
+    if (fn.kind === "FunctionDeclaration") {
+      assert.equal(fn.returnType?.kind, "AssociatedTypeProjection");
+      assert.equal(fn.whereClause?.length, 2);
+      assert.equal(fn.whereClause?.[0]?.trait.associatedConstraints?.length, 1);
+      assert.equal(
+        fn.whereClause?.[1]?.target.kind,
+        "AssociatedTypeProjection",
+      );
+    }
+  });
+
   test("enum members may include methods using Self", () => {
     const program = parseOk(`
 enum State {

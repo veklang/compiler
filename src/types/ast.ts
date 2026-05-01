@@ -206,7 +206,8 @@ export interface TypeParameter extends Node {
 
 export interface WhereConstraint extends Node {
   kind: "WhereConstraint";
-  typeName: Identifier;
+  target: TypeNode;
+  typeName?: Identifier;
   trait: NamedType;
 }
 
@@ -459,6 +460,7 @@ export interface TuplePattern extends Node {
 
 export type TypeNode =
   | NamedType
+  | AssociatedTypeProjection
   | SelfType
   | NullableType
   | ArrayType
@@ -469,6 +471,21 @@ export interface NamedType extends Node {
   kind: "NamedType";
   name: Identifier;
   typeArgs?: TypeNode[];
+  associatedConstraints?: AssociatedTypeConstraint[];
+}
+
+export interface AssociatedTypeConstraint extends Node {
+  kind: "AssociatedTypeConstraint";
+  name: Identifier;
+  constraint: "equals" | "bound";
+  type?: TypeNode;
+  bound?: NamedType;
+}
+
+export interface AssociatedTypeProjection extends Node {
+  kind: "AssociatedTypeProjection";
+  base: Identifier;
+  name: Identifier;
 }
 
 export interface SelfType extends Node {

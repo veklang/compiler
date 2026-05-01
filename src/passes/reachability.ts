@@ -241,7 +241,16 @@ function walkSatisfies(
 
 function walkTypeParams(
   typeParams:
-    | { bounds?: { name: { name: string }; typeArgs?: TypeNode[] }[] }[]
+    | {
+        bounds?: {
+          name: { name: string };
+          typeArgs?: TypeNode[];
+          associatedConstraints?: {
+            type?: TypeNode;
+            bound?: TypeNode;
+          }[];
+        }[];
+      }[]
     | undefined,
   refs: Set<string>,
 ): void {
@@ -251,6 +260,10 @@ function walkTypeParams(
       refs.add(bound.name.name);
       for (const arg of (bound as { typeArgs?: TypeNode[] }).typeArgs ?? [])
         walkTypeNode(arg, refs);
+      for (const constraint of bound.associatedConstraints ?? []) {
+        if (constraint.type) walkTypeNode(constraint.type, refs);
+        if (constraint.bound) walkTypeNode(constraint.bound, refs);
+      }
     }
 }
 
@@ -260,8 +273,13 @@ function walkWhereClause(
 ): void {
   if (!clause) return;
   for (const c of clause) {
+    walkTypeNode(c.target, refs);
     refs.add(c.trait.name.name);
     for (const arg of c.trait.typeArgs ?? []) walkTypeNode(arg, refs);
+    for (const constraint of c.trait.associatedConstraints ?? []) {
+      if (constraint.type) walkTypeNode(constraint.type, refs);
+      if (constraint.bound) walkTypeNode(constraint.bound, refs);
+    }
   }
 }
 
@@ -361,6 +379,13 @@ function walkTypeNode(typeNode: TypeNode, refs: Set<string>): void {
     case "NamedType":
       refs.add(typeNode.name.name);
       for (const arg of typeNode.typeArgs ?? []) walkTypeNode(arg, refs);
+      for (const constraint of typeNode.associatedConstraints ?? []) {
+        if (constraint.type) walkTypeNode(constraint.type, refs);
+        if (constraint.bound) walkTypeNode(constraint.bound, refs);
+      }
+      break;
+    case "AssociatedTypeProjection":
+      refs.add(typeNode.base.name);
       break;
     case "NullableType":
       walkTypeNode(typeNode.base, refs);

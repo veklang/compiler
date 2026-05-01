@@ -5,8 +5,10 @@ import { Parser } from "@/core/parser";
 import type {
   ArrayLiteralExpression,
   AssignmentStatement,
+  AssociatedTypeConstraint,
   AssociatedTypeDeclaration,
   AssociatedTypeDefinition,
+  AssociatedTypeProjection,
   BinaryExpression,
   BindingPattern,
   BlockStatement,
@@ -80,6 +82,7 @@ type Type =
   | PrimitiveType
   | PointerRefType
   | NamedRefType
+  | AssociatedTypeProjectionRefType
   | NullableRefType
   | TupleRefType
   | FunctionRefType
@@ -109,6 +112,21 @@ interface NamedRefType extends BaseType {
   name: string;
   symbol?: TypeSymbol;
   typeArgs?: Type[];
+  associatedConstraints?: AssociatedTypeConstraintRef[];
+}
+
+interface AssociatedTypeConstraintRef {
+  name: string;
+  constraint: "equals" | "bound";
+  type?: Type;
+  bound?: NamedRefType;
+}
+
+interface AssociatedTypeProjectionRefType extends BaseType {
+  kind: "AssociatedTypeProjection";
+  base: TypeParamRefType;
+  name: string;
+  trait?: NamedRefType;
 }
 
 interface NullableRefType extends BaseType {
@@ -130,6 +148,7 @@ interface FunctionParamType {
 interface TypeParamSpec {
   name: string;
   bounds: NamedRefType[];
+  associatedBounds: Map<string, NamedRefType[]>;
 }
 
 interface CallableTarget {
@@ -158,6 +177,7 @@ interface TypeParamRefType extends BaseType {
   kind: "TypeParam";
   name: string;
   bounds: NamedRefType[];
+  associatedBounds: Map<string, NamedRefType[]>;
 }
 
 interface UnknownType extends BaseType {
@@ -407,10 +427,15 @@ export class Checker {
         symbol.builtinSatisfactions.push({
           span: member.span,
           trait: traitRef,
-          whereConstraints: member.whereClause?.map((clause) => ({
-            typeParam: clause.typeName.name,
-            trait: this.resolveNamedReference(clause.trait, ownerScope),
-          })),
+          whereConstraints: member.whereClause
+            ?.filter((clause) => clause.target.kind === "NamedType")
+            .map((clause) => ({
+              typeParam:
+                clause.target.kind === "NamedType"
+                  ? clause.target.name.name
+                  : "<error>",
+              trait: this.resolveNamedReference(clause.trait, ownerScope),
+            })),
           associatedTypes,
           methods,
         });
@@ -3888,6 +3913,9 @@ export class Checker {
     }
 
     if (node.kind === "NamedType") return this.resolveNamedType(node, scope);
+    if (node.kind === "AssociatedTypeProjection") {
+      return this.resolveAssociatedTypeProjection(node, scope);
+    }
     if (node.kind === "ArrayType") {
       const element = this.resolveType(node.element, scope);
       return this.namedType("Array", this.lookupType("Array", scope), [
@@ -3932,7 +3960,7 @@ export class Checker {
   private resolveNamedType(node: NamedType, scope: Scope): Type {
     if (scope.typeParams.has(node.name.name)) {
       const spec = scope.typeParams.get(node.name.name)!;
-      return this.typeParamType(spec.name, spec.bounds);
+      return this.typeParamType(spec.name, spec.bounds, spec.associatedBounds);
     }
 
     const associatedType = this.lookupAssociatedType(node.name.name, scope);
@@ -3980,6 +4008,9 @@ export class Checker {
     }
 
     const typeArgs = node.typeArgs?.map((arg) => this.resolveType(arg, scope));
+    const associatedConstraints = node.associatedConstraints?.map(
+      (constraint) => this.resolveAssociatedTypeConstraint(constraint, scope),
+    );
     const expected = symbol.typeParams.length;
     if ((typeArgs?.length ?? 0) !== expected) {
       if (expected !== 0 || (typeArgs?.length ?? 0) !== 0) {
@@ -3991,7 +4022,12 @@ export class Checker {
       }
     }
 
-    const named = this.namedType(node.name.name, symbol, typeArgs);
+    const named = this.namedType(
+      node.name.name,
+      symbol,
+      typeArgs,
+      associatedConstraints,
+    );
     if (
       typeArgs?.length &&
       (symbol.kind === "Struct" || symbol.kind === "Enum")
@@ -4035,6 +4071,98 @@ export class Checker {
     return this.namedType(node.name.name);
   }
 
+  private resolveAssociatedTypeConstraint(
+    node: AssociatedTypeConstraint,
+    scope: Scope,
+  ): AssociatedTypeConstraintRef {
+    if (node.constraint === "equals") {
+      return {
+        name: node.name.name,
+        constraint: "equals",
+        type: node.type ? this.resolveType(node.type, scope) : this.errorType(),
+      };
+    }
+    return {
+      name: node.name.name,
+      constraint: "bound",
+      bound: node.bound
+        ? this.resolveNamedReference(node.bound, scope)
+        : this.namedType("<error>"),
+    };
+  }
+
+  private resolveAssociatedTypeProjection(
+    node: AssociatedTypeProjection,
+    scope: Scope,
+  ): Type {
+    const spec = scope.typeParams.get(node.base.name);
+    if (!spec) {
+      this.report(
+        `Unknown type parameter '${node.base.name}' in associated type projection.`,
+        node.base.span,
+        "E2812",
+      );
+      return this.errorType();
+    }
+
+    const declaringBounds = spec.bounds.filter((bound) =>
+      this.traitDeclaresAssociatedType(bound, node.name.name),
+    );
+    if (declaringBounds.length === 0) {
+      this.report(
+        `Unknown associated type '${node.name.name}' for type parameter '${node.base.name}'.`,
+        node.name.span,
+        "E2821",
+      );
+      return this.errorType();
+    }
+    if (declaringBounds.length > 1) {
+      this.report(
+        `Associated type '${node.name.name}' is ambiguous for type parameter '${node.base.name}'.`,
+        node.name.span,
+        "E2819",
+      );
+      return this.errorType();
+    }
+
+    const equality = this.associatedTypeEquality(
+      declaringBounds[0],
+      node.name.name,
+    );
+    if (equality) return equality;
+
+    return {
+      kind: "AssociatedTypeProjection",
+      base: this.typeParamType(spec.name, spec.bounds, spec.associatedBounds),
+      name: node.name.name,
+      trait: declaringBounds[0],
+    };
+  }
+
+  private traitDeclaresAssociatedType(
+    trait: NamedRefType,
+    associatedTypeName: string,
+  ): boolean {
+    return (
+      trait.symbol?.kind === "Trait" &&
+      !!trait.symbol.traitDecl &&
+      this.traitAssociatedTypeDeclarations(trait.symbol.traitDecl).some(
+        (declaration) => declaration.name.name === associatedTypeName,
+      )
+    );
+  }
+
+  private associatedTypeEquality(
+    trait: NamedRefType,
+    associatedTypeName: string,
+  ): Type | undefined {
+    return trait.associatedConstraints?.find(
+      (constraint) =>
+        constraint.name === associatedTypeName &&
+        constraint.constraint === "equals",
+    )?.type;
+  }
+
   private lookupAssociatedType(name: string, scope: Scope): Type | undefined {
     let current: Scope | undefined = scope;
     while (current) {
@@ -4061,7 +4189,11 @@ export class Checker {
     for (const param of typeParams ?? []) {
       // Pre-register with empty bounds so self-referential bounds like Equal<T>
       // can resolve T when processing this param's own bound list.
-      const spec: TypeParamSpec = { name: param.name.name, bounds: [] };
+      const spec: TypeParamSpec = {
+        name: param.name.name,
+        bounds: [],
+        associatedBounds: new Map(),
+      };
       resolved.set(param.name.name, spec);
       typeScope.typeParams.set(param.name.name, spec);
       spec.bounds = (param.bounds ?? []).map((bound) =>
@@ -4069,20 +4201,49 @@ export class Checker {
       );
     }
     for (const clause of whereClause ?? []) {
-      const target =
-        resolved.get(clause.typeName.name) ??
-        (() => {
+      if (clause.target.kind === "AssociatedTypeProjection") {
+        const target = resolved.get(clause.target.base.name);
+        if (!target) {
           this.report(
-            `Unknown type parameter '${clause.typeName.name}' in where clause.`,
+            `Unknown type parameter '${clause.target.base.name}' in where clause.`,
             clause.span,
             "E2812",
           );
-          const spec = {
-            name: clause.typeName.name,
+          continue;
+        }
+        const bound = this.resolveNamedReference(clause.trait, typeScope);
+        const bounds =
+          target.associatedBounds.get(clause.target.name.name) ?? [];
+        bounds.push(bound);
+        target.associatedBounds.set(clause.target.name.name, bounds);
+        continue;
+      }
+
+      if (clause.target.kind !== "NamedType") {
+        this.report(
+          "Expected type parameter in where clause.",
+          clause.target.span,
+          "E2812",
+        );
+        continue;
+      }
+
+      const target =
+        resolved.get(clause.target.name.name) ??
+        (() => {
+          const name = clause.target.name.name;
+          this.report(
+            `Unknown type parameter '${name}' in where clause.`,
+            clause.span,
+            "E2812",
+          );
+          const spec: TypeParamSpec = {
+            name,
             bounds: [] as NamedRefType[],
+            associatedBounds: new Map<string, NamedRefType[]>(),
           };
-          resolved.set(clause.typeName.name, spec);
-          typeScope.typeParams.set(clause.typeName.name, spec);
+          resolved.set(name, spec);
+          typeScope.typeParams.set(name, spec);
           return spec;
         })();
       target.bounds.push(this.resolveNamedReference(clause.trait, typeScope));
@@ -4293,10 +4454,15 @@ export class Checker {
       traitScope.typeParams.set(traitParams[i].name, {
         name: traitParams[i].name,
         bounds: traitParams[i].bounds,
+        associatedBounds: traitParams[i].associatedBounds,
       });
     }
     if (selfType.kind === "Named") traitScope.selfType = selfType;
-    for (const [name, type] of associatedTypes) {
+    const effectiveAssociatedTypes = new Map([
+      ...this.associatedTypeEqualitiesFromReference(reference),
+      ...associatedTypes,
+    ]);
+    for (const [name, type] of effectiveAssociatedTypes) {
       traitScope.associatedTypes.set(name, type);
     }
 
@@ -4319,6 +4485,18 @@ export class Checker {
     }
 
     return methods;
+  }
+
+  private associatedTypeEqualitiesFromReference(
+    reference: NamedRefType,
+  ): Map<string, Type> {
+    const result = new Map<string, Type>();
+    for (const constraint of reference.associatedConstraints ?? []) {
+      if (constraint.constraint === "equals" && constraint.type) {
+        result.set(constraint.name, constraint.type);
+      }
+    }
+    return result;
   }
 
   private methodEquals(left: MethodInfo, right: MethodInfo): boolean {
@@ -4581,6 +4759,7 @@ export class Checker {
       ownerScope.typeParams.set(params[i].name, {
         name: params[i].name,
         bounds: params[i].bounds,
+        associatedBounds: params[i].associatedBounds,
       });
       ownerScope.overrides.set(params[i].name, ownerArgs![i]);
     }
@@ -4624,6 +4803,20 @@ export class Checker {
         typeArgs: type.typeArgs?.map((arg) =>
           this.substituteType(arg, bindings),
         ),
+        associatedConstraints: type.associatedConstraints?.map((constraint) =>
+          this.substituteAssociatedTypeConstraint(constraint, bindings),
+        ),
+      };
+    }
+    if (type.kind === "AssociatedTypeProjection") {
+      const substitutedBase = this.substituteType(type.base, bindings);
+      if (substitutedBase.kind !== "TypeParam") return type;
+      return {
+        ...type,
+        base: substitutedBase,
+        trait: type.trait
+          ? this.substituteNamedType(type.trait, bindings)
+          : undefined,
       };
     }
     if (type.kind === "Function") {
@@ -4639,6 +4832,26 @@ export class Checker {
     return type;
   }
 
+  private substituteAssociatedTypeConstraint(
+    constraint: AssociatedTypeConstraintRef,
+    bindings: Map<string, Type>,
+  ): AssociatedTypeConstraintRef {
+    if (constraint.constraint === "equals") {
+      return {
+        ...constraint,
+        type: constraint.type
+          ? this.substituteType(constraint.type, bindings)
+          : undefined,
+      };
+    }
+    return {
+      ...constraint,
+      bound: constraint.bound
+        ? this.substituteNamedType(constraint.bound, bindings)
+        : undefined,
+    };
+  }
+
   private substituteNamedType(
     type: NamedRefType,
     bindings: Map<string, Type>,
@@ -4649,7 +4862,9 @@ export class Checker {
   private ownerTypeArgs(owner: TypeSymbol, scope: Scope): Type[] | undefined {
     const params = this.resolveTypeParams(owner.typeParams, undefined, scope);
     if (params.length === 0) return undefined;
-    return params.map((param) => this.typeParamType(param.name, param.bounds));
+    return params.map((param) =>
+      this.typeParamType(param.name, param.bounds, param.associatedBounds),
+    );
   }
 
   private iterableItemType(type: Type, scope: Scope): Type | null {
@@ -5025,7 +5240,13 @@ export class Checker {
     scope: Scope,
   ): boolean {
     if (type.kind === "TypeParam") {
-      return type.bounds.some((bound) => this.namedTypeEquals(bound, trait));
+      return type.bounds.some((bound) =>
+        this.traitBoundSatisfies(bound, trait, scope, type),
+      );
+    }
+
+    if (type.kind === "AssociatedTypeProjection") {
+      return this.projectedAssociatedTypeSatisfies(type, trait, scope);
     }
 
     if (type.kind === "Named") {
@@ -5069,12 +5290,10 @@ export class Checker {
         if (type.name === "string") return true;
       }
       return (
-        type.symbol?.satisfactions?.some((entry) =>
-          this.namedTypeEquals(
-            this.substituteOwnerTypeArgs(entry.trait, type),
-            trait,
-          ),
-        ) ?? false
+        type.symbol?.satisfactions?.some((entry) => {
+          const candidate = this.substituteOwnerTypeArgs(entry.trait, type);
+          return this.traitBoundSatisfies(candidate, trait, scope, type, entry);
+        }) ?? false
       );
     }
 
@@ -5173,6 +5392,145 @@ export class Checker {
     return false;
   }
 
+  private traitBoundSatisfies(
+    candidate: NamedRefType,
+    requested: NamedRefType,
+    scope: Scope,
+    owner?: Type,
+    satisfaction?: TraitSatisfactionInfo | BuiltinTraitSatisfactionInfo,
+  ): boolean {
+    if (candidate.name !== requested.name) return false;
+    if ((candidate.typeArgs?.length ?? 0) !== (requested.typeArgs?.length ?? 0))
+      return false;
+    if (
+      !(candidate.typeArgs ?? []).every((arg, index) =>
+        this.typeEquals(arg, requested.typeArgs?.[index] ?? this.errorType()),
+      )
+    )
+      return false;
+
+    for (const constraint of requested.associatedConstraints ?? []) {
+      if (
+        !this.associatedConstraintSatisfied(
+          candidate,
+          constraint,
+          scope,
+          owner,
+          satisfaction,
+        )
+      )
+        return false;
+    }
+    return true;
+  }
+
+  private associatedConstraintSatisfied(
+    candidate: NamedRefType,
+    requested: AssociatedTypeConstraintRef,
+    scope: Scope,
+    owner?: Type,
+    satisfaction?: TraitSatisfactionInfo | BuiltinTraitSatisfactionInfo,
+  ): boolean {
+    const concrete = this.resolveAssociatedConstraintType(
+      candidate,
+      requested.name,
+      scope,
+      owner,
+      satisfaction,
+    );
+
+    if (requested.constraint === "equals") {
+      return (
+        !!concrete &&
+        this.typeEquals(concrete, requested.type ?? this.errorType())
+      );
+    }
+
+    if (!requested.bound) return false;
+    if (concrete)
+      return this.typeSatisfiesTrait(concrete, requested.bound, scope);
+
+    return (candidate.associatedConstraints ?? []).some(
+      (constraint) =>
+        constraint.name === requested.name &&
+        constraint.constraint === "bound" &&
+        !!constraint.bound &&
+        this.traitBoundSatisfies(constraint.bound, requested.bound!, scope),
+    );
+  }
+
+  private resolveAssociatedConstraintType(
+    candidate: NamedRefType,
+    associatedTypeName: string,
+    scope: Scope,
+    owner?: Type,
+    satisfaction?: TraitSatisfactionInfo | BuiltinTraitSatisfactionInfo,
+  ): Type | undefined {
+    const equality = this.associatedTypeEquality(candidate, associatedTypeName);
+    if (equality) return equality;
+    const definition = satisfaction?.associatedTypes.get(associatedTypeName);
+    if (!definition) return undefined;
+    const definitionScope =
+      owner?.kind === "Named" && owner.symbol
+        ? this.createTypeScope(owner.symbol, scope)
+        : scope;
+    let substitutions = new Map<string, Type>();
+    if (owner?.kind === "Named" && owner.symbol) {
+      definitionScope.selfType = owner;
+      const params = this.resolveTypeParams(
+        owner.symbol.typeParams,
+        undefined,
+        scope,
+      );
+      for (
+        let i = 0;
+        i < Math.min(params.length, owner.typeArgs?.length ?? 0);
+        i++
+      ) {
+        definitionScope.overrides.set(params[i].name, owner.typeArgs![i]);
+      }
+      substitutions = new Map(
+        params.map((param, index) => [
+          param.name,
+          owner.typeArgs?.[index] ?? this.unknownType(),
+        ]),
+      );
+    }
+    return this.substituteType(
+      this.resolveType(definition.type, definitionScope),
+      substitutions,
+    );
+  }
+
+  private projectedAssociatedTypeSatisfies(
+    projection: AssociatedTypeProjectionRefType,
+    trait: NamedRefType,
+    scope: Scope,
+  ): boolean {
+    const equality = projection.trait
+      ? this.associatedTypeEquality(projection.trait, projection.name)
+      : undefined;
+    if (equality) return this.typeSatisfiesTrait(equality, trait, scope);
+
+    const explicitBounds =
+      projection.base.associatedBounds.get(projection.name) ?? [];
+    if (
+      explicitBounds.some((bound) =>
+        this.traitBoundSatisfies(bound, trait, scope, projection.base),
+      )
+    )
+      return true;
+
+    const traitDecl = projection.trait?.symbol?.traitDecl;
+    if (!traitDecl) return false;
+    const declaration = this.traitAssociatedTypeDeclarations(traitDecl).find(
+      (candidate) => candidate.name.name === projection.name,
+    );
+    if (!declaration?.bound) return false;
+    const bound = this.resolveNamedReference(declaration.bound, scope);
+    return this.traitBoundSatisfies(bound, trait, scope, projection.base);
+  }
+
   private substituteOwnerTypeArgs(
     trait: NamedRefType,
     owner: NamedRefType,
@@ -5200,8 +5558,13 @@ export class Checker {
         ? this.substituteOwnerTypeArgs(satisfaction.trait, owner)
         : satisfaction.trait;
     return (
-      this.namedTypeEquals(resolvedTrait, trait) &&
-      this.builtinSatisfactionApplies(owner, satisfaction, scope)
+      this.traitBoundSatisfies(
+        resolvedTrait,
+        trait,
+        scope,
+        owner,
+        satisfaction,
+      ) && this.builtinSatisfactionApplies(owner, satisfaction, scope)
     );
   }
 
@@ -5297,15 +5660,17 @@ export class Checker {
     name: string,
     symbol?: TypeSymbol,
     typeArgs?: Type[],
+    associatedConstraints?: AssociatedTypeConstraintRef[],
   ): NamedRefType {
-    return { kind: "Named", name, symbol, typeArgs };
+    return { kind: "Named", name, symbol, typeArgs, associatedConstraints };
   }
 
   private typeParamType(
     name: string,
     bounds: NamedRefType[],
+    associatedBounds = new Map<string, NamedRefType[]>(),
   ): TypeParamRefType {
-    return { kind: "TypeParam", name, bounds };
+    return { kind: "TypeParam", name, bounds, associatedBounds };
   }
 
   private unknownType(): UnknownType {
@@ -5442,6 +5807,19 @@ export class Checker {
       );
     if (left.kind === "Named" && right.kind === "Named")
       return this.namedTypeEquals(left, right);
+    if (
+      left.kind === "AssociatedTypeProjection" &&
+      right.kind === "AssociatedTypeProjection"
+    ) {
+      return (
+        left.name === right.name &&
+        this.typeEquals(left.base, right.base) &&
+        ((!left.trait && !right.trait) ||
+          (!!left.trait &&
+            !!right.trait &&
+            this.namedTypeEquals(left.trait, right.trait)))
+      );
+    }
     if (left.kind === "Nullable" && right.kind === "Nullable")
       return this.typeEquals(left.base, right.base);
     if (left.kind === "Tuple" && right.kind === "Tuple") {
@@ -5465,6 +5843,7 @@ export class Checker {
           this.typeParamType(
             left.typeParams[i].name,
             left.typeParams[i].bounds,
+            left.typeParams[i].associatedBounds,
           ),
         );
       }
@@ -5509,7 +5888,39 @@ export class Checker {
       (left.typeArgs?.length ?? 0) === (right.typeArgs?.length ?? 0) &&
       (left.typeArgs ?? []).every((arg, index) =>
         this.typeEquals(arg, right.typeArgs?.[index] ?? this.errorType()),
+      ) &&
+      this.associatedConstraintsEqual(
+        left.associatedConstraints ?? [],
+        right.associatedConstraints ?? [],
       )
+    );
+  }
+
+  private associatedConstraintsEqual(
+    left: AssociatedTypeConstraintRef[],
+    right: AssociatedTypeConstraintRef[],
+  ): boolean {
+    if (left.length !== right.length) return false;
+    return left.every((constraint, index) =>
+      this.associatedConstraintEquals(constraint, right[index]),
+    );
+  }
+
+  private associatedConstraintEquals(
+    left: AssociatedTypeConstraintRef,
+    right: AssociatedTypeConstraintRef,
+  ): boolean {
+    if (left.name !== right.name || left.constraint !== right.constraint)
+      return false;
+    if (left.constraint === "equals") {
+      return this.typeEquals(
+        left.type ?? this.errorType(),
+        right.type ?? this.errorType(),
+      );
+    }
+    return this.namedTypeEquals(
+      left.bound ?? this.namedType("<error>"),
+      right.bound ?? this.namedType("<error>"),
     );
   }
 
@@ -5554,6 +5965,8 @@ export class Checker {
       return `fn(${params}) -> ${this.displayType(type.returnType)}`;
     }
     if (type.kind === "TypeParam") return type.name;
+    if (type.kind === "AssociatedTypeProjection")
+      return `${type.base.name}.${type.name}`;
     if (type.kind === "Never") return "never";
     if (type.kind === "Module") return "module";
     return type.kind.toLowerCase();

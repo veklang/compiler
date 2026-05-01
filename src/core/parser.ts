@@ -1,6 +1,7 @@
 import type {
   ArrayLiteralExpression,
   AssignableExpression,
+  AssociatedTypeConstraint,
   AssociatedTypeDeclaration,
   AssociatedTypeDefinition,
   BindingPattern,
@@ -1380,16 +1381,16 @@ export class Parser {
     if (!this.matchKeyword("where")) return undefined;
     const clauses: WhereConstraint[] = [];
     do {
-      const typeName =
-        this.parseIdentifier() ??
-        this.placeholderIdentifier(this.currentSpan());
+      const target =
+        this.parseType() ?? this.placeholderType(this.currentSpan());
       this.expectPunctuator(":");
       const trait =
-        this.parseNamedType() ?? this.placeholderNamedType(typeName.span);
+        this.parseNamedType() ?? this.placeholderNamedType(target.span);
       clauses.push({
         kind: "WhereConstraint",
-        span: this.spanFrom(typeName.span, trait.span),
-        typeName,
+        span: this.spanFrom(target.span, trait.span),
+        target,
+        typeName: target.kind === "NamedType" ? target.name : undefined,
         trait,
       });
     } while (this.matchPunctuator(","));
@@ -1405,6 +1406,23 @@ export class Parser {
   private parseTypePostfix(type: TypeNode): TypeNode {
     let current = type;
     while (true) {
+      if (
+        current.kind === "NamedType" &&
+        !current.typeArgs?.length &&
+        !current.associatedConstraints?.length &&
+        this.matchPunctuator(".")
+      ) {
+        const name =
+          this.parseIdentifier() ??
+          this.placeholderIdentifier(this.currentSpan());
+        current = {
+          kind: "AssociatedTypeProjection",
+          span: this.spanFrom(current.span, name.span),
+          base: current.name,
+          name,
+        };
+        continue;
+      }
       if (this.matchPunctuator("[")) {
         const end = this.expectPunctuator("]");
         current = {
@@ -1504,24 +1522,74 @@ export class Parser {
 
     const name = this.identifierFromToken(token);
     let typeArgs: TypeNode[] | undefined;
+    let associatedConstraints: AssociatedTypeConstraint[] | undefined;
     if (this.matchOperator("<")) {
       typeArgs = [];
+      associatedConstraints = [];
       if (!this.checkAngleClose()) {
         do {
-          const type = this.parseType();
-          if (type) typeArgs.push(type);
+          const constraint = this.tryParseAssociatedTypeConstraint();
+          if (constraint) {
+            associatedConstraints.push(constraint);
+          } else {
+            const type = this.parseType();
+            if (type) typeArgs.push(type);
+          }
         } while (this.matchPunctuator(","));
       }
       this.expectAngleClose();
     }
+    const lastTypeArg = typeArgs?.[typeArgs.length - 1];
+    const lastConstraint =
+      associatedConstraints?.[associatedConstraints.length - 1];
     return {
       kind: "NamedType",
       span: this.spanFrom(
         name.span,
-        typeArgs?.[typeArgs.length - 1]?.span ?? name.span,
+        lastConstraint?.span ?? lastTypeArg?.span ?? name.span,
       ),
       name,
-      typeArgs,
+      typeArgs: typeArgs?.length ? typeArgs : undefined,
+      associatedConstraints: associatedConstraints?.length
+        ? associatedConstraints
+        : undefined,
+    };
+  }
+
+  private tryParseAssociatedTypeConstraint(): AssociatedTypeConstraint | null {
+    const token = this.peek();
+    const next = this.peek(1);
+    if (token?.kind !== "Identifier") return null;
+    if (
+      !(
+        (next?.kind === "Operator" && next.operator === "=") ||
+        (next?.kind === "Punctuator" && next.punctuator === ":")
+      )
+    ) {
+      return null;
+    }
+
+    const name =
+      this.parseIdentifier() ?? this.placeholderIdentifier(token.span);
+    if (this.matchOperator("=")) {
+      const type = this.parseType() ?? this.placeholderType(this.currentSpan());
+      return {
+        kind: "AssociatedTypeConstraint",
+        span: this.spanFrom(name.span, type.span),
+        name,
+        constraint: "equals",
+        type,
+      };
+    }
+
+    this.expectPunctuator(":");
+    const bound = this.parseNamedType() ?? this.placeholderNamedType(name.span);
+    return {
+      kind: "AssociatedTypeConstraint",
+      span: this.spanFrom(name.span, bound.span),
+      name,
+      constraint: "bound",
+      bound,
     };
   }
 

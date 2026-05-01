@@ -421,6 +421,53 @@ struct Num {
     expectDiagnostics(unknown.checkDiagnostics, ["E2821"]);
   });
 
+  test("associated type projections resolve equality constraints", () => {
+    checkOk(`
+trait Source {
+  type Item;
+
+  fn get(self) -> Item;
+}
+
+struct Num {
+  value: i32;
+
+  satisfies Source {
+    type Item = i32;
+
+    fn get(self) -> Item {
+      return self.value;
+    }
+  }
+}
+
+fn first<S>(source: S) -> S.Item
+where S: Source<Item = i32>
+{
+  return source.get();
+}
+
+fn main() -> void {
+  let n = Num { value: 4 };
+  let _x: i32 = first(n);
+}
+`);
+  });
+
+  test("projection bounds satisfy associated type requirements", () => {
+    checkOk(`
+trait Source {
+  type Item;
+}
+
+fn print_item<S>(_source: S, item: S.Item) -> string
+where S: Source, S.Item: Format
+{
+  return item.format();
+}
+`);
+  });
+
   test("custom Equal<T> satisfactions drive ==", () => {
     checkOk(`
 struct UserId {
