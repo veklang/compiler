@@ -674,8 +674,10 @@ struct Counter {
     return Self { current: 0, end };
   }
 
-  satisfies Iterator<i32> {
-    fn next(mut self) -> i32? {
+  satisfies Iterator {
+    type Item = i32;
+
+    fn next(mut self) -> Item? {
       if self.current == self.end {
         return null;
       }

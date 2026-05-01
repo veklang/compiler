@@ -26,6 +26,7 @@ import { mangleName } from "@/passes/mono";
 import type {
   ArrayLiteralExpression,
   AssignmentStatement,
+  AssociatedTypeDefinition,
   BinaryExpression,
   BindingPattern,
   BlockStatement,
@@ -107,6 +108,7 @@ interface MethodDeclarationInfo {
   ownerName: string;
   ownerDecl: "struct" | "enum";
   isSatisfaction: boolean;
+  associatedTypes?: AssociatedTypeDefinition[];
 }
 
 interface LowerContext {
@@ -393,6 +395,7 @@ export function lowerProgramToIr(
         ownerName: member.ownerName,
         ownerDecl: member.ownerDecl,
         isSatisfaction: member.isSatisfaction,
+        associatedTypes: member.associatedTypes,
       });
       if (
         (statement.kind === "StructDeclaration" ||
@@ -401,6 +404,11 @@ export function lowerProgramToIr(
       )
         continue;
       if ((member.node.typeParams?.length ?? 0) > 0) continue;
+      const typeSubstitutions = associatedTypeSubstitutionsFromDefinitions(
+        member.associatedTypes,
+        enumNames,
+        statement.name.name,
+      );
       declarations.push(
         lowerMethod(
           member.node,
@@ -416,6 +424,15 @@ export function lowerProgramToIr(
           lazyGlobals,
           functionLinks,
           session,
+          typeSubstitutions.size > 0
+            ? {
+                linkName: methodLinkName(
+                  statement.name.name,
+                  member.node.name.name,
+                ),
+                typeSubstitutions,
+              }
+            : undefined,
         ),
       );
     }
@@ -427,13 +444,24 @@ export function lowerProgramToIr(
       specialization.declaration.members,
       satisfactionMethodLinks,
     );
-    for (const member of methodDeclarationsFromMembers(
+    for (const member of methodDeclarationInfosFromMembers(
+      specialization.linkName,
+      "struct",
       specialization.declaration.members,
     )) {
-      if ((member.typeParams?.length ?? 0) > 0) continue;
+      if ((member.node.typeParams?.length ?? 0) > 0) continue;
+      const typeSubstitutions = mergeTypeSubstitutions(
+        specialization.typeSubstitutions,
+        associatedTypeSubstitutionsFromDefinitions(
+          member.associatedTypes,
+          enumNames,
+          specialization.linkName,
+          specialization.typeSubstitutions,
+        ),
+      );
       declarations.push(
         lowerMethod(
-          member,
+          member.node,
           specialization.linkName,
           "struct",
           checkResult,
@@ -447,8 +475,11 @@ export function lowerProgramToIr(
           functionLinks,
           session,
           {
-            linkName: methodLinkName(specialization.linkName, member.name.name),
-            typeSubstitutions: specialization.typeSubstitutions,
+            linkName: methodLinkName(
+              specialization.linkName,
+              member.node.name.name,
+            ),
+            typeSubstitutions,
           },
         ),
       );
@@ -461,13 +492,24 @@ export function lowerProgramToIr(
       specialization.declaration.members,
       satisfactionMethodLinks,
     );
-    for (const member of methodDeclarationsFromMembers(
+    for (const member of methodDeclarationInfosFromMembers(
+      specialization.linkName,
+      "enum",
       specialization.declaration.members,
     )) {
-      if ((member.typeParams?.length ?? 0) > 0) continue;
+      if ((member.node.typeParams?.length ?? 0) > 0) continue;
+      const typeSubstitutions = mergeTypeSubstitutions(
+        specialization.typeSubstitutions,
+        associatedTypeSubstitutionsFromDefinitions(
+          member.associatedTypes,
+          enumNames,
+          specialization.linkName,
+          specialization.typeSubstitutions,
+        ),
+      );
       declarations.push(
         lowerMethod(
-          member,
+          member.node,
           specialization.linkName,
           "enum",
           checkResult,
@@ -481,8 +523,11 @@ export function lowerProgramToIr(
           functionLinks,
           session,
           {
-            linkName: methodLinkName(specialization.linkName, member.name.name),
-            typeSubstitutions: specialization.typeSubstitutions,
+            linkName: methodLinkName(
+              specialization.linkName,
+              member.node.name.name,
+            ),
+            typeSubstitutions,
           },
         ),
       );
@@ -593,6 +638,17 @@ export function lowerProgramToIr(
       instantiation.typeArgs,
       enumNames,
     );
+    const baseTypeSubstitutions = mergeTypeSubstitutions(
+      ownerTypeSubstitutions,
+      methodTypeSubstitutions,
+    );
+    const associatedTypeSubstitutions =
+      associatedTypeSubstitutionsFromDefinitions(
+        methodInfo.associatedTypes,
+        enumNames,
+        ownerLinkName,
+        baseTypeSubstitutions,
+      );
     declarations.push(
       lowerMethod(
         methodInfo.node,
@@ -611,8 +667,8 @@ export function lowerProgramToIr(
         {
           linkName,
           typeSubstitutions: mergeTypeSubstitutions(
-            ownerTypeSubstitutions,
-            methodTypeSubstitutions,
+            baseTypeSubstitutions,
+            associatedTypeSubstitutions,
           ),
         },
       ),
@@ -891,6 +947,7 @@ function methodDeclarationInfosFromMembers(
           ownerName,
           ownerDecl,
           isSatisfaction: true,
+          associatedTypes: member.associatedTypes,
         });
       }
     }
@@ -5675,6 +5732,31 @@ function ownerTypeSubstitutionsForMethod(
   enumNames: Set<string>,
 ): Map<string, IrType> {
   return typeSubstitutionsFromParams(owner?.typeParams, typeArgs, enumNames);
+}
+
+function associatedTypeSubstitutionsFromDefinitions(
+  definitions: AssociatedTypeDefinition[] | undefined,
+  enumNames: Set<string>,
+  selfTypeName?: string,
+  baseSubstitutions?: Map<string, IrType>,
+): Map<string, IrType> {
+  const substitutions = new Map<string, IrType>();
+  for (const definition of definitions ?? []) {
+    const type = selfTypeName
+      ? typeFromTypeNodeWithSelfAndSubstitutions(
+          definition.type,
+          selfTypeName,
+          enumNames,
+          baseSubstitutions,
+        )
+      : typeFromTypeNodeWithSubstitutions(
+          definition.type,
+          enumNames,
+          baseSubstitutions,
+        );
+    substitutions.set(definition.name.name, type);
+  }
+  return substitutions;
 }
 
 function mergeTypeSubstitutions(

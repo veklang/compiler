@@ -651,7 +651,7 @@ fn main() -> void {
 `);
   });
 
-  test("for loops use custom Iterator<T> item types", () => {
+  test("for loops use custom Iterator item types", () => {
     checkOk(`
 struct Counter {
   current: i32;
@@ -661,8 +661,10 @@ struct Counter {
     return Self { current: 0, end };
   }
 
-  satisfies Iterator<i32> {
-    fn next(mut self) -> i32? {
+  satisfies Iterator {
+    type Item = i32;
+
+    fn next(mut self) -> Item? {
       if self.current == self.end {
         return null;
       }
@@ -1276,9 +1278,13 @@ fn main() -> void {
 `);
   });
 
-  test("Array satisfies Iterator<T> when element types match", () => {
+  test("Array satisfies Iterator when associated Item matches", () => {
     checkOk(`
-fn consume<T: Iterator<i32>>(_t: T) -> void { return; }
+fn consume<T>(_t: T) -> void
+where T: Iterator<Item = i32>
+{
+  return;
+}
 
 fn main() -> void {
   let xs: i32[] = [1, 2, 3];
@@ -2006,7 +2012,11 @@ fn main() -> void {
 
   test("E2816: Array fails Iterator bound when element type mismatches", () => {
     const result = check(`
-fn consume<T: Iterator<i32>>(_t: T) -> void { return; }
+fn consume<T>(_t: T) -> void
+where T: Iterator<Item = i32>
+{
+  return;
+}
 
 fn main() -> void {
   let xs: string[] = [];

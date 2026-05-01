@@ -4868,12 +4868,65 @@ export class Checker {
   }
 
   private iterableItemType(type: Type, scope: Scope): Type | null {
-    const satisfied = this.findSatisfiedTrait(type, "Iterator", scope);
-    const iterable =
-      satisfied ?? this.resolveBuiltinTrait("Iterator", [this.unknownType()]);
-    if (this.typeSatisfiesTrait(type, iterable, scope)) {
-      return iterable.typeArgs?.[0] ?? this.unknownType();
+    if (type.kind === "Named" && type.name === "Array") {
+      return type.typeArgs?.[0] ?? this.unknownType();
     }
+
+    if (type.kind === "TypeParam") {
+      const satisfied = this.findSatisfiedTrait(type, "Iterator", scope);
+      if (!satisfied) return null;
+      const equality = this.associatedTypeEquality(satisfied, "Item");
+      if (equality) return equality;
+      return {
+        kind: "AssociatedTypeProjection",
+        base: type,
+        name: "Item",
+        trait: satisfied,
+      };
+    }
+
+    if (type.kind === "Named") {
+      const builtinSatisfaction = type.symbol?.builtinSatisfactions?.find(
+        (entry) =>
+          this.substituteOwnerTypeArgs(entry.trait, type).name === "Iterator" &&
+          this.builtinSatisfactionApplies(type, entry, scope),
+      );
+      if (builtinSatisfaction) {
+        const trait = this.substituteOwnerTypeArgs(
+          builtinSatisfaction.trait,
+          type,
+        );
+        return (
+          this.resolveAssociatedConstraintType(
+            trait,
+            "Item",
+            scope,
+            type,
+            builtinSatisfaction,
+          ) ?? this.unknownType()
+        );
+      }
+
+      const satisfaction = type.symbol?.satisfactions?.find(
+        (entry) => entry.trait.name === "Iterator",
+      );
+      if (satisfaction) {
+        const trait = this.substituteOwnerTypeArgs(satisfaction.trait, type);
+        return (
+          this.resolveAssociatedConstraintType(
+            trait,
+            "Item",
+            scope,
+            type,
+            satisfaction,
+          ) ?? this.unknownType()
+        );
+      }
+    }
+
+    const iterable = this.resolveBuiltinTrait("Iterator", []);
+    if (this.typeSatisfiesTrait(type, iterable, scope))
+      return this.unknownType();
     return null;
   }
 
@@ -5229,7 +5282,7 @@ export class Checker {
   // Primitives (int/float): Equal<T>, Hash, Order<T> (not bool), Clone, Default, Format
   // bool:                   Equal<bool>, Hash, Clone, Default, Format
   // string:                 Equal<string>, Hash, Order<string>, Clone, Default, Format
-  // Array<T>:               Iterator<T>, Format (T: Format), Clone (T: Clone), Default
+  // Array<T>:               Iterator<Item = T>, Format (T: Format), Clone (T: Clone), Default
   // (T1,T2,...):            Equal, Hash, Format, Clone — when every Ti satisfies
   // T?:                     Equal (T: Equal), Format (T: Format), Unwrap<T>
   // Ordering:               Equal<Ordering>, Hash, Format

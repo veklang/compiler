@@ -9,8 +9,10 @@ builtin Array<T> {
     fn index_set(mut self, index: usize, value: T) -> void;
   }
 
-  satisfies Iterator<T> {
-    fn next(mut self) -> T?;
+  satisfies Iterator {
+    type Item = T;
+
+    fn next(mut self) -> Item?;
   }
 
   satisfies Clone where T: Clone {

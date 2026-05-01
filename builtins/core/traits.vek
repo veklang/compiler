@@ -14,8 +14,10 @@ pub trait Clone {
   fn clone(self) -> Self;
 }
 
-pub trait Iterator<T> {
-  fn next(mut self) -> T?;
+pub trait Iterator {
+  type Item;
+
+  fn next(mut self) -> Item?;
 }
 
 pub trait Default {
