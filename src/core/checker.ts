@@ -143,6 +143,7 @@ interface FunctionParamType {
   name?: string;
   type: Type;
   isMutable: boolean;
+  defaultValue?: import("@/types/ast").Expression;
 }
 
 interface TypeParamSpec {
@@ -281,11 +282,21 @@ export interface GenericInstantiation {
   typeArgs: string[];
 }
 
+export interface CallableObjectInfo {
+  argsIsTuple: boolean;
+  argCount: number;
+}
+
 export interface CheckResult {
   diagnostics: Diagnostic[];
   types: WeakMap<Node, Type>;
   instantiations: GenericInstantiation[];
   callInstantiations: WeakMap<CallExpression, GenericInstantiation>;
+  callResolvedArgs: WeakMap<
+    CallExpression,
+    (import("@/types/ast").Expression | null)[]
+  >;
+  callableObjectCalls: WeakMap<CallExpression, CallableObjectInfo>;
   coreStatements: Statement[];
 }
 
@@ -310,7 +321,7 @@ const primitiveNames: PrimitiveName[] = [
 ];
 
 const defaultIntType: PrimitiveName = "i32";
-const defaultFloatType: PrimitiveName = "f32";
+const defaultFloatType: PrimitiveName = "f64";
 
 export class Checker {
   private diagnostics: Diagnostic[] = [];
@@ -319,6 +330,14 @@ export class Checker {
   private callInstantiations = new WeakMap<
     CallExpression,
     GenericInstantiation
+  >();
+  private callResolvedArgs = new WeakMap<
+    CallExpression,
+    (import("@/types/ast").Expression | null)[]
+  >();
+  private callableObjectCalls = new WeakMap<
+    CallExpression,
+    CallableObjectInfo
   >();
   private globalScope: Scope;
   private currentFunctionReturnType: Type | null = null;
@@ -367,6 +386,8 @@ export class Checker {
       types: this.types,
       instantiations: this.instantiations,
       callInstantiations: this.callInstantiations,
+      callResolvedArgs: this.callResolvedArgs,
+      callableObjectCalls: this.callableObjectCalls,
       coreStatements,
     };
   }
@@ -2015,12 +2036,51 @@ export class Checker {
       case "MatchExpression":
         type = this.checkMatchExpression(node, scope, expected);
         break;
+      case "MutExpression":
+        this.report(
+          "Unexpected 'mut' expression outside call argument.",
+          node.span,
+          "E2204",
+        );
+        type = this.checkExpression(node.expression, scope, expected);
+        break;
+      case "NamedArgExpression":
+        this.report(
+          "Unexpected named argument expression outside call.",
+          node.span,
+          "E2207",
+        );
+        type = this.checkExpression(node.value, scope, expected);
+        break;
+      case "TemplateLiteralExpression":
+        type = this.checkTemplateLiteral(node, scope);
+        break;
       default:
         type = this.errorType();
         break;
     }
     this.types.set(node, type);
     return type;
+  }
+
+  private checkTemplateLiteral(
+    node: import("@/types/ast").TemplateLiteralExpression,
+    scope: Scope,
+  ): Type {
+    const formatTrait = this.resolveBuiltinTrait("Format", []);
+    for (const part of node.parts) {
+      if (part.kind === "interpolation") {
+        const exprType = this.checkExpression(part.expression, scope);
+        if (!this.typeSatisfiesTrait(exprType, formatTrait, scope)) {
+          this.report(
+            `Interpolation expression does not satisfy 'Format' trait.`,
+            part.span,
+            "E2108",
+          );
+        }
+      }
+    }
+    return this.primitive("string");
   }
 
   private checkLiteral(node: LiteralExpression, expected?: Type): Type {
@@ -2465,12 +2525,18 @@ export class Checker {
   private checkCall(node: CallExpression, scope: Scope, expected?: Type): Type {
     const calleeType = this.checkExpression(node.callee, scope);
     if (calleeType.kind === "Error") {
-      for (const arg of node.args) this.checkExpression(arg, scope);
+      for (const arg of node.args) this.checkArgExpression(arg, scope);
       return this.errorType();
     }
     if (calleeType.kind !== "Function") {
+      const callableResult = this.checkCallableObjectCall(
+        calleeType,
+        node,
+        scope,
+      );
+      if (callableResult !== null) return callableResult;
       this.report("Callee is not callable.", node.callee.span, "E2207");
-      for (const arg of node.args) this.checkExpression(arg, scope);
+      for (const arg of node.args) this.checkArgExpression(arg, scope);
       return this.errorType();
     }
 
@@ -2494,24 +2560,202 @@ export class Checker {
     ) {
       this.ensureMutableRoot(node.callee.object, node.callee.span, scope);
     }
-    for (let i = 0; i < node.args.length; i++) {
+
+    const resolvedArgs = this.resolveCallArguments(
+      node.args,
+      instantiated.params,
+      node.span,
+      scope,
+    );
+    const hasNamed = node.args.some((a) => a.kind === "NamedArgExpression");
+    const hasDefaults = resolvedArgs.some(
+      (a, i) => a !== node.args[i] && a !== null,
+    );
+    if (hasNamed || hasDefaults) {
+      this.callResolvedArgs.set(node, resolvedArgs);
+    }
+
+    for (let i = 0; i < instantiated.params.length; i++) {
       const param = instantiated.params[i];
-      const arg = node.args[i];
-      if (!param) {
-        this.report("Too many arguments.", arg.span, "E2207");
-        this.checkExpression(arg, scope);
-        continue;
-      }
-      const argType = this.checkExpression(arg, scope, param.type);
+      const arg = resolvedArgs[i];
+      if (!arg) continue;
+      // Unwrap NamedArgExpression to get the actual value argument
+      const valueArg = arg.kind === "NamedArgExpression" ? arg.value : arg;
+      const innerArg =
+        valueArg.kind === "MutExpression" ? valueArg.expression : valueArg;
+      const argType = this.checkExpression(innerArg, scope, param.type);
       if (!this.isAssignable(argType, param.type)) {
         this.report("Argument type mismatch.", arg.span, "E2207");
       }
-      if (param.isMutable) this.requireMutableArgument(arg, scope);
-    }
-    if (node.args.length < instantiated.params.length) {
-      this.report("Missing arguments.", node.span, "E2207");
+      if (param.isMutable) {
+        this.requireMutableArgument(valueArg, scope);
+      } else if (valueArg.kind === "MutExpression") {
+        this.report(
+          "Unexpected 'mut' on argument for a non-mut parameter.",
+          arg.span,
+          "E2204",
+        );
+      }
     }
     return instantiated.returnType;
+  }
+
+  private checkCallableObjectCall(
+    calleeType: Type,
+    node: CallExpression,
+    scope: Scope,
+  ): Type | null {
+    // Find a Callable<Args, Output> satisfaction on the type.
+    let effectiveArgs: Type | null = null;
+    let effectiveOutput: Type | null = null;
+
+    if (calleeType.kind === "Named") {
+      const callableSat = calleeType.symbol?.satisfactions?.find(
+        (sat) => sat.trait.name === "Callable",
+      );
+      if (!callableSat) return null;
+      const substituted = this.substituteOwnerTypeArgs(
+        callableSat.trait,
+        calleeType,
+      );
+      effectiveArgs = substituted.typeArgs?.[0] ?? null;
+      effectiveOutput = substituted.typeArgs?.[1] ?? null;
+    } else if (calleeType.kind === "TypeParam") {
+      const callableBound = calleeType.bounds.find(
+        (b) => b.name === "Callable",
+      );
+      if (!callableBound) return null;
+      effectiveArgs = callableBound.typeArgs?.[0] ?? null;
+      effectiveOutput = callableBound.typeArgs?.[1] ?? null;
+    } else {
+      return null;
+    }
+
+    if (!effectiveArgs || !effectiveOutput) return null;
+
+    const argsIsTuple = effectiveArgs.kind === "Tuple";
+    const expectedArgTypes: Type[] = argsIsTuple
+      ? (effectiveArgs as TupleRefType).elements
+      : [effectiveArgs];
+
+    if (node.args.length !== expectedArgTypes.length) {
+      this.report(
+        `Expected ${expectedArgTypes.length} argument(s), got ${node.args.length}.`,
+        node.span,
+        "E2207",
+      );
+      for (const arg of node.args) this.checkArgExpression(arg, scope);
+    } else {
+      for (let i = 0; i < node.args.length; i++) {
+        const argType = this.checkExpression(
+          node.args[i],
+          scope,
+          expectedArgTypes[i],
+        );
+        if (!this.isAssignable(argType, expectedArgTypes[i])) {
+          this.report("Argument type mismatch.", node.args[i].span, "E2207");
+        }
+      }
+    }
+
+    this.callableObjectCalls.set(node, {
+      argsIsTuple,
+      argCount: node.args.length,
+    });
+
+    return effectiveOutput;
+  }
+
+  private checkArgExpression(arg: Expression, scope: Scope): void {
+    if (arg.kind === "MutExpression") {
+      this.checkExpression(arg.expression, scope);
+    } else if (arg.kind === "NamedArgExpression") {
+      this.checkArgExpression(arg.value, scope);
+    } else {
+      this.checkExpression(arg, scope);
+    }
+  }
+
+  private resolveCallArguments(
+    rawArgs: Expression[],
+    params: FunctionParamType[],
+    callSpan: import("@/types/position").Span,
+    scope: Scope,
+  ): (Expression | null)[] {
+    const hasNamed = rawArgs.some((a) => a.kind === "NamedArgExpression");
+    const hasPositional = rawArgs.some((a) => a.kind !== "NamedArgExpression");
+
+    if (hasNamed && hasPositional) {
+      this.report(
+        "Named and positional arguments may not be mixed in a single call.",
+        callSpan,
+        "E2208",
+      );
+      return params.map((_, i) => rawArgs[i] ?? null);
+    }
+
+    if (!hasNamed) {
+      const result: (Expression | null)[] = [];
+      for (let i = 0; i < params.length; i++) {
+        const param = params[i];
+        if (i < rawArgs.length) {
+          result.push(rawArgs[i]);
+        } else if (param.defaultValue) {
+          result.push(param.defaultValue);
+        } else {
+          result.push(null);
+        }
+      }
+      if (rawArgs.length > params.length) {
+        for (let i = params.length; i < rawArgs.length; i++) {
+          this.report("Too many arguments.", rawArgs[i].span, "E2207");
+          this.checkArgExpression(rawArgs[i], scope);
+        }
+      } else if (result.some((a) => a === null)) {
+        this.report("Missing arguments.", callSpan, "E2207");
+      }
+      return result;
+    }
+
+    // Named call
+    const namedArgs = rawArgs as import("@/types/ast").NamedArgExpression[];
+    const seen = new Map<string, Expression>();
+    for (const arg of namedArgs) {
+      if (arg.kind !== "NamedArgExpression") continue;
+      const name = arg.name.name;
+      if (seen.has(name)) {
+        this.report(`Duplicate named argument '${name}'.`, arg.span, "E2210");
+        continue;
+      }
+      const matchedParam = params.find((p) => p.name === name);
+      if (!matchedParam) {
+        this.report(`Unknown named argument '${name}'.`, arg.span, "E2209");
+        continue;
+      }
+      seen.set(name, arg.value);
+    }
+
+    const result: (Expression | null)[] = [];
+    for (const param of params) {
+      if (!param.name) {
+        result.push(null);
+        continue;
+      }
+      const provided = seen.get(param.name);
+      if (provided !== undefined) {
+        result.push(provided);
+      } else if (param.defaultValue) {
+        result.push(param.defaultValue);
+      } else {
+        this.report(
+          `Missing required argument '${param.name}'.`,
+          callSpan,
+          "E2207",
+        );
+        result.push(null);
+      }
+    }
+    return result;
   }
 
   private instantiateCallable(
@@ -2536,17 +2780,49 @@ export class Checker {
         bindings.set(callable.typeParams[i].name, explicit[i]);
       }
     } else {
-      for (
-        let i = 0;
-        i < Math.min(node.args.length, callable.params.length);
-        i++
-      ) {
-        const argType = this.checkExpression(
-          node.args[i],
-          scope,
-          callable.params[i].type,
-        );
-        this.inferBindingsFromTypes(callable.params[i].type, argType, bindings);
+      const hasNamed = node.args.some((a) => a.kind === "NamedArgExpression");
+      if (hasNamed) {
+        for (const rawArg of node.args) {
+          if (rawArg.kind !== "NamedArgExpression") continue;
+          const paramIdx = callable.params.findIndex(
+            (p) => p.name === rawArg.name.name,
+          );
+          if (paramIdx < 0) continue;
+          const innerArg =
+            rawArg.value.kind === "MutExpression"
+              ? rawArg.value.expression
+              : rawArg.value;
+          const argType = this.checkExpression(
+            innerArg,
+            scope,
+            callable.params[paramIdx].type,
+          );
+          this.inferBindingsFromTypes(
+            callable.params[paramIdx].type,
+            argType,
+            bindings,
+          );
+        }
+      } else {
+        for (
+          let i = 0;
+          i < Math.min(node.args.length, callable.params.length);
+          i++
+        ) {
+          const rawArg = node.args[i];
+          const innerArg =
+            rawArg.kind === "MutExpression" ? rawArg.expression : rawArg;
+          const argType = this.checkExpression(
+            innerArg,
+            scope,
+            callable.params[i].type,
+          );
+          this.inferBindingsFromTypes(
+            callable.params[i].type,
+            argType,
+            bindings,
+          );
+        }
       }
       if (expected) {
         this.inferBindingsFromTypes(callable.returnType, expected, bindings);
@@ -2687,18 +2963,27 @@ export class Checker {
   }
 
   private requireMutableArgument(node: Expression, scope: Scope) {
-    if (node.kind !== "IdentifierExpression") {
+    if (node.kind !== "MutExpression") {
       this.report(
-        "Mut parameter requires a mutable identifier.",
+        "Argument for a 'mut' parameter must be written as 'mut place'.",
         node.span,
         "E2204",
       );
       return;
     }
-    const symbol = this.lookupValue(node.name, scope);
+    const inner = node.expression;
+    if (inner.kind !== "IdentifierExpression") {
+      this.report(
+        "'mut' argument must be a mutable identifier, not a temporary expression.",
+        node.span,
+        "E2204",
+      );
+      return;
+    }
+    const symbol = this.lookupValue(inner.name, scope);
     if (!symbol || symbol.isConst || symbol.isMutableParam === false) {
       this.report(
-        "Mut parameter requires a mutable identifier.",
+        "'mut' argument must refer to a mutable binding.",
         node.span,
         "E2204",
       );
@@ -4373,6 +4658,7 @@ export class Checker {
       name: param.name.name,
       type: this.resolveType(param.type, scope),
       isMutable: param.isMutable,
+      defaultValue: param.defaultValue,
     };
   }
 
@@ -5333,8 +5619,9 @@ export class Checker {
   }
 
   // Built-in trait satisfactions (spec/08):
-  // Primitives (int/float): Equal<T>, Hash, Order<T> (not bool), Clone, Default, Format
-  // bool:                   Equal<bool>, Hash, Clone, Default, Format
+  // Integer primitives: Equal<T>, Hash, Order<T>, Clone, Default, Format
+  // Float primitives:   Equal<T>, Clone, Default, Format  (NOT Hash or Order — IEEE-754 NaN)
+  // bool:               Equal<bool>, Hash, Clone, Default, Format  (NOT Order)
   // string:                 Equal<string>, Hash, Order<string>, Clone, Default, Format
   // Array<T>:               Iterator<Item = T>, Format (T: Format), Clone (T: Clone), Default
   // (T1,T2,...):            Equal, Hash, Format, Clone — when every Ti satisfies
@@ -5354,6 +5641,22 @@ export class Checker {
 
     if (type.kind === "AssociatedTypeProjection") {
       return this.projectedAssociatedTypeSatisfies(type, trait, scope);
+    }
+
+    if (type.kind === "Function") {
+      if (trait.name !== "Callable") return false;
+      const expectedArgs = trait.typeArgs?.[0];
+      const expectedOutput = trait.typeArgs?.[1];
+      if (!expectedArgs || !expectedOutput) return false;
+      const params = type.params;
+      const actualArgs: Type =
+        params.length === 1
+          ? params[0].type
+          : { kind: "Tuple", elements: params.map((p) => p.type) };
+      return (
+        this.typeEquals(actualArgs, expectedArgs) &&
+        this.typeEquals(type.returnType, expectedOutput)
+      );
     }
 
     if (type.kind === "Named") {
@@ -5407,11 +5710,11 @@ export class Checker {
     if (type.kind === "Primitive") {
       if (trait.name === "Format") return this.isFormattable(type);
       if (trait.name === "Equal") return this.isBuiltinEquatable(type, trait);
-      if (trait.name === "Hash") return true;
+      if (trait.name === "Hash") return !this.isFloatType(type);
       if (trait.name === "Order") {
         const typeArg = trait.typeArgs?.[0];
         if (!typeArg || !this.typeEquals(type, typeArg)) return false;
-        return type.name !== "bool";
+        return type.name !== "bool" && !this.isFloatType(type);
       }
       if (trait.name === "Clone") return true;
       if (trait.name === "Default") return true;

@@ -1132,7 +1132,7 @@ struct Counter {
     );
   });
 
-  test("primitives satisfy Hash, Order, Clone, Default", () => {
+  test("integer primitives satisfy Hash, Order, Clone, Default", () => {
     checkOk(`
 fn needs_hashable<T: Hash>(_x: T) -> void { return; }
 fn needs_ordered<T: Order<T>>(_a: T, _b: T) -> void { return; }
@@ -1146,6 +1146,60 @@ fn main() -> void {
   needs_defaultable(4);
 }
 `);
+  });
+
+  test("float primitives satisfy Equal, Clone, Default, Format but not Hash or Order", () => {
+    checkOk(`
+fn needs_eq<T: Equal<T>>(_a: T, _b: T) -> void { return; }
+fn needs_cloneable<T: Clone>(_x: T) -> void { return; }
+fn needs_defaultable<T: Default>(_x: T) -> void { return; }
+fn needs_formattable<T: Format>(_x: T) -> void { return; }
+
+fn main() -> void {
+  let x: f64 = 1.0;
+  let y: f32 = 2.0;
+  needs_eq(x, x);
+  needs_eq(y, y);
+  needs_cloneable(x);
+  needs_cloneable(y);
+  needs_defaultable(x);
+  needs_defaultable(y);
+  needs_formattable(x);
+  needs_formattable(y);
+}
+`);
+  });
+
+  test("E2816: f64 does not satisfy Hash", () => {
+    const result = check(`
+fn needs_hashable<T: Hash>(_x: T) -> void { return; }
+fn main() -> void { let x: f64 = 1.0; needs_hashable(x); }
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("E2816: f32 does not satisfy Hash", () => {
+    const result = check(`
+fn needs_hashable<T: Hash>(_x: T) -> void { return; }
+fn main() -> void { let x: f32 = 1.0; needs_hashable(x); }
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("E2816: f64 does not satisfy Order<f64>", () => {
+    const result = check(`
+fn needs_ordered<T: Order<T>>(_a: T, _b: T) -> void { return; }
+fn main() -> void { let x: f64 = 1.0; needs_ordered(x, x); }
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("E2816: f32 does not satisfy Order<f32>", () => {
+    const result = check(`
+fn needs_ordered<T: Order<T>>(_a: T, _b: T) -> void { return; }
+fn main() -> void { let x: f32 = 1.0; needs_ordered(x, x); }
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
   });
 
   test("string satisfies Hash, Order, Clone, Default, Format", () => {
@@ -2187,7 +2241,19 @@ fn main() -> void {
     );
   });
 
-  test("E2204: mut parameter requires a mutable identifier", () => {
+  test("E2204: mut parameter requires explicit 'mut place' at call site", () => {
+    const result = check(`
+fn takes_mut(mut _x: i32) -> void { return; }
+
+fn main() -> void {
+  let x = 1;
+  takes_mut(x);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2204"]);
+  });
+
+  test("E2204: mut parameter with literal argument requires 'mut'", () => {
     const result = check(`
 fn takes_mut(mut _x: i32) -> void { return; }
 
@@ -2195,10 +2261,30 @@ fn main() -> void {
   takes_mut(42);
 }
 `);
-    assert.ok(
-      result.checkDiagnostics.some((d) => d.code === "E2204"),
-      "expected E2204 for literal passed to mut parameter",
-    );
+    expectDiagnostics(result.checkDiagnostics, ["E2204"]);
+  });
+
+  test("E2204: extra mut on non-mut parameter is an error", () => {
+    const result = check(`
+fn takes_val(_x: i32) -> void { return; }
+
+fn main() -> void {
+  let x = 1;
+  takes_val(mut x);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2204"]);
+  });
+
+  test("mut parameter accepts explicit 'mut place'", () => {
+    checkOk(`
+fn takes_mut(mut _x: i32) -> void { return; }
+
+fn main() -> void {
+  let x = 1;
+  takes_mut(mut x);
+}
+`);
   });
 
   test("E2812: unknown trait in satisfies block", () => {
@@ -2609,7 +2695,7 @@ fn store<T: IndexMut<i32, i32>>(mut value: T) -> void {
 
 fn main() -> void {
   let m = SlotMap { v: 0 };
-  store(m);
+  store(mut m);
 }
 `);
   });
@@ -2643,7 +2729,7 @@ fn store<T: IndexMut<usize, i32>>(mut value: T) -> void {
 
 fn main() -> void {
   let xs: i32[] = [1, 2];
-  store(xs);
+  store(mut xs);
 }
 `);
   });
@@ -2668,5 +2754,324 @@ fn main() -> void {
 }
 `);
     expectDiagnostics(result.checkDiagnostics, ["E2104"]);
+  });
+});
+
+describe("named arguments and default parameters", () => {
+  test("positional call works as before", () => {
+    checkOk(`
+fn add(a: i32, b: i32) -> i32 { return a + b; }
+fn main() -> void { let _x = add(1, 2); }
+`);
+  });
+
+  test("named call with all arguments named", () => {
+    checkOk(`
+fn connect(host: string, port: i32, timeout: i32) -> bool {
+  return host == "localhost" && port > 0 && timeout > 0;
+}
+fn main() -> void {
+  let _v = connect(host: "localhost", port: 5432, timeout: 30);
+}
+`);
+  });
+
+  test("named call out of order", () => {
+    checkOk(`
+fn connect(host: string, port: i32) -> bool {
+  return host == "localhost" && port > 0;
+}
+fn main() -> void {
+  let _v = connect(port: 8080, host: "localhost");
+}
+`);
+  });
+
+  test("default parameter applied when omitted", () => {
+    checkOk(`
+fn greet(name: string, suffix: string = "!") -> bool {
+  return name == suffix;
+}
+fn main() -> void {
+  let _a = greet("Ada");
+  let _b = greet("Ada", "?");
+}
+`);
+  });
+
+  test("all parameters with defaults may be omitted", () => {
+    checkOk(`
+fn connect(host: string = "localhost", port: i32 = 5432) -> bool {
+  return host == "db" && port > 0;
+}
+fn main() -> void {
+  let _a = connect();
+  let _b = connect("db");
+  let _c = connect("db", 3306);
+}
+`);
+  });
+
+  test("E2208: mixed named and positional arguments", () => {
+    const result = check(`
+fn f(a: i32, b: i32) -> i32 { return a + b; }
+fn main() -> void { let _x = f(1, b: 2); }
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "E2208"),
+      "expected E2208 for mixed named and positional args",
+    );
+  });
+
+  test("E2209: unknown named argument", () => {
+    const result = check(`
+fn f(a: i32) -> void { return; }
+fn main() -> void { f(z: 1); }
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "E2209"),
+      "expected E2209 for unknown named argument",
+    );
+  });
+
+  test("E2210: duplicate named argument", () => {
+    const result = check(`
+fn f(a: i32, b: i32) -> void { return; }
+fn main() -> void { f(a: 1, a: 2); }
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "E2210"),
+      "expected E2210 for duplicate named argument",
+    );
+  });
+
+  test("named mut argument accepted", () => {
+    checkOk(`
+fn push(mut xs: i32[]) -> void { xs[0] = 1; }
+fn main() -> void {
+  let arr = [1, 2];
+  push(xs: mut arr);
+}
+`);
+  });
+});
+
+describe("Callable<Args, Output>", () => {
+  test("function value implicitly satisfies single-arg Callable bound", () => {
+    checkOk(`
+fn apply<F>(f: F, x: i32) -> i32
+where F: Callable<i32, i32>
+{
+  return f(x);
+}
+fn double(n: i32) -> i32 { return n * 2; }
+fn main() -> void {
+  let _r = apply(double, 5);
+}
+`);
+  });
+
+  test("function value implicitly satisfies multi-arg Callable bound", () => {
+    checkOk(`
+fn apply<F>(f: F) -> i32
+where F: Callable<(i32, i32), i32>
+{
+  return f(20, 22);
+}
+fn add(x: i32, y: i32) -> i32 { return x + y; }
+fn main() -> void {
+  let _r = apply(add);
+}
+`);
+  });
+
+  test("function value does not satisfy mismatched Callable bound", () => {
+    const result = check(`
+fn apply<F>(f: F) -> i32
+where F: Callable<i32, i32>
+{
+  return f(1);
+}
+fn add(x: i32, y: i32) -> i32 { return x + y; }
+fn main() -> void {
+  let _r = apply(add);
+}
+`);
+    assert.ok(
+      result.checkDiagnostics.length > 0,
+      "expected error: fn(i32,i32)->i32 does not satisfy Callable<i32,i32>",
+    );
+  });
+
+  test("concrete named type satisfying Callable single-arg", () => {
+    checkOk(`
+struct Adder {
+  amount: i32;
+  satisfies Callable<i32, i32> {
+    fn call(self, x: i32) -> i32 {
+      return x + self.amount;
+    }
+  }
+}
+fn main() -> void {
+  let add5 = Adder { amount: 5 };
+  let _r = add5(3);
+}
+`);
+  });
+
+  test("concrete named type satisfying Callable multi-arg (tuple packing)", () => {
+    checkOk(`
+struct Combiner {
+  sep: string;
+  satisfies Callable<(string, string), string> {
+    fn call(self, args: (string, string)) -> string {
+      return args.0 + self.sep + args.1;
+    }
+  }
+}
+fn main() -> void {
+  let join = Combiner { sep: ", " };
+  let _r = join("hello", "world");
+}
+`);
+  });
+
+  test("E2207: type with no Callable satisfaction is not callable", () => {
+    const result = check(`
+struct NotCallable { x: i32; }
+fn main() -> void {
+  let nc = NotCallable { x: 1 };
+  let _r = nc(5);
+}
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "E2207"),
+      "expected E2207 for non-callable type",
+    );
+  });
+
+  test("E2207: Callable arg count mismatch", () => {
+    const result = check(`
+struct Adder {
+  amount: i32;
+  satisfies Callable<i32, i32> {
+    fn call(self, x: i32) -> i32 { return x + self.amount; }
+  }
+}
+fn main() -> void {
+  let add5 = Adder { amount: 5 };
+  let _r = add5(3, 4);
+}
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "E2207"),
+      "expected E2207 for wrong arg count",
+    );
+  });
+});
+
+describe("template strings", () => {
+  test("basic template string with string interpolation returns string", () => {
+    checkOk(`
+fn main() -> void {
+  let name = "world";
+  let _s = f"hello {name}!";
+}
+`);
+  });
+
+  test("template string with integer interpolation", () => {
+    checkOk(`
+fn main() -> void {
+  let n = 42;
+  let _s = f"the answer is {n}";
+}
+`);
+  });
+
+  test("template string with bool interpolation", () => {
+    checkOk(`
+fn main() -> void {
+  let b = true;
+  let _s = f"flag: {b}";
+}
+`);
+  });
+
+  test("template string with arithmetic expression", () => {
+    checkOk(`
+fn main() -> void {
+  let _s = f"result: {1 + 2}";
+}
+`);
+  });
+
+  test("template string with no interpolations", () => {
+    checkOk(`
+fn main() -> void {
+  let _s = f"just a plain string";
+}
+`);
+  });
+
+  test("E2108: interpolation expression does not satisfy Format", () => {
+    const result = check(`
+struct NoFormat { x: i32; }
+fn main() -> void {
+  let nf = NoFormat { x: 1 };
+  let _s = f"bad: {nf}";
+}
+`);
+    assert.ok(
+      result.checkDiagnostics.some((d) => d.code === "E2108"),
+      "expected E2108 for non-Format interpolation",
+    );
+  });
+
+  test("E0006: empty interpolation {} is a lexer error", () => {
+    const result = check(`fn main() -> void { let _s = f"{}"; }`);
+    assert.ok(
+      result.lexDiagnostics.some((d) => d.code === "E0006"),
+      "expected E0006 for empty interpolation",
+    );
+  });
+
+  test("template string with Ordering interpolation", () => {
+    checkOk(`
+fn main() -> void {
+  let o: Ordering = Less;
+  let _s = f"ordering: {o}";
+}
+`);
+  });
+
+  test("template string with nullable T? interpolation", () => {
+    checkOk(`
+fn main() -> void {
+  let n: i32? = 42;
+  let _s = f"value: {n}";
+  let null_n: i32? = null;
+  let _s2 = f"null: {null_n}";
+}
+`);
+  });
+
+  test("template string with tuple interpolation", () => {
+    checkOk(`
+fn main() -> void {
+  let t = (1, "hello");
+  let _s = f"tuple: {t}";
+}
+`);
+  });
+
+  test("template string with Result<T,E> interpolation", () => {
+    checkOk(`
+fn main() -> void {
+  let r: Result<i32, string> = Ok(42);
+  let _s = f"result: {r}";
+}
+`);
   });
 });

@@ -88,3 +88,7 @@ pub trait Index<Idx, Output> {
 pub trait IndexMut<Idx, Value> {
   fn index_set(mut self, index: Idx, value: Value) -> void;
 }
+
+pub trait Callable<Args, Output> {
+  fn call(self, args: Args) -> Output;
+}

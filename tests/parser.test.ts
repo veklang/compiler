@@ -455,6 +455,26 @@ let f: fn<T>(T, T) -> bool where T: Equal<T> = fn(a: i32, b: i32) -> bool {
 `);
   });
 
+  test("mut call-site argument is parsed as MutExpression", () => {
+    const program = parseOk(`
+fn push_one(mut xs: i32[]) -> void { return; }
+
+fn main() -> void {
+  let arr = [1, 2];
+  push_one(mut arr);
+}
+`);
+    const main = program.body[1];
+    assert.ok(main.kind === "FunctionDeclaration");
+    const call = main.body?.body[1];
+    assert.ok(call?.kind === "ExpressionStatement");
+    assert.ok(call.expression.kind === "CallExpression");
+    const arg = call.expression.args[0];
+    assert.equal(arg.kind, "MutExpression");
+    assert.ok(arg.kind === "MutExpression");
+    assert.equal(arg.expression.kind, "IdentifierExpression");
+  });
+
   test("extern fn declaration without body is parsed", () => {
     const program = parseOk(`
 pub extern fn panic(message: string) -> void;
@@ -533,6 +553,28 @@ fn push_one(xs: mut i32[]) -> void {
   test("E1051: trait keyword in type position is rejected", () => {
     const result = parse(`let x: trait = 1;`);
     expectDiagnostics(result.parseDiagnostics, ["E1051"]);
+  });
+
+  test("E2825: pub fn inside trait body is rejected", () => {
+    const result = parse(`
+trait Foo {
+  pub fn bar(self) -> void;
+}
+`);
+    expectDiagnostics(result.parseDiagnostics, ["E2825"]);
+  });
+
+  test("E2825: pub fn inside satisfies block is rejected", () => {
+    const result = parse(`
+trait Bar { fn bar(self) -> void; }
+struct Foo {
+  x: i32;
+  satisfies Bar {
+    pub fn bar(self) -> void {}
+  }
+}
+`);
+    expectDiagnostics(result.parseDiagnostics, ["E2825"]);
   });
 
   test("E1030: malformed nested tuple pattern is rejected", () => {

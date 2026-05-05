@@ -8,9 +8,14 @@ export type TokenKind =
   | "Keyword"
   | "Number"
   | "String"
+  | "TemplateString"
   | "Operator"
   | "Punctuator"
   | "EOF";
+
+export type TemplatePart =
+  | { kind: "literal"; value: string; span: Span }
+  | { kind: "interpolation"; source: string; span: Span };
 
 export interface Token {
   kind: TokenKind;
@@ -19,4 +24,5 @@ export interface Token {
   keyword?: Keyword;
   operator?: Operator;
   punctuator?: Punctuator;
+  templateParts?: TemplatePart[];
 }

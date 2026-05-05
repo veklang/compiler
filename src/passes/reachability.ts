@@ -356,6 +356,16 @@ function walkExpr(expr: Expression, refs: Set<string>): void {
         else walkExpr(arm.expression, refs);
       }
       break;
+    case "MutExpression":
+      walkExpr(expr.expression, refs);
+      break;
+    case "NamedArgExpression":
+      walkExpr(expr.value, refs);
+      break;
+    case "TemplateLiteralExpression":
+      for (const part of expr.parts)
+        if (part.kind === "interpolation") walkExpr(part.expression, refs);
+      break;
     case "LiteralExpression":
       break;
   }

@@ -221,6 +221,7 @@ export interface NamedParameter extends Node {
   name: Identifier;
   type: TypeNode;
   isMutable: boolean;
+  defaultValue?: Expression;
 }
 
 export interface SelfParameter extends Node {
@@ -303,7 +304,10 @@ export type Expression =
   | CastExpression
   | UnsafeBlockExpression
   | IfExpression
-  | MatchExpression;
+  | MatchExpression
+  | MutExpression
+  | NamedArgExpression
+  | TemplateLiteralExpression;
 
 export type AssignableExpression =
   | IdentifierExpression
@@ -427,6 +431,26 @@ export interface MatchExpressionArm extends Node {
   kind: "MatchExpressionArm";
   pattern: Pattern;
   expression: Expression | BlockStatement;
+}
+
+export interface MutExpression extends Node {
+  kind: "MutExpression";
+  expression: Expression;
+}
+
+export interface NamedArgExpression extends Node {
+  kind: "NamedArgExpression";
+  name: Identifier;
+  value: Expression;
+}
+
+export type TemplatePart =
+  | { kind: "literal"; value: string; span: Span }
+  | { kind: "interpolation"; expression: Expression; span: Span };
+
+export interface TemplateLiteralExpression extends Node {
+  kind: "TemplateLiteralExpression";
+  parts: TemplatePart[];
 }
 
 export type Pattern =

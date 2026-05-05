@@ -1,3 +1,4 @@
+import { Lexer } from "@/core/lexer";
 import type {
   ArrayLiteralExpression,
   AssignableExpression,
@@ -41,6 +42,8 @@ import type {
   StructLiteralExpression,
   StructLiteralField,
   StructMember,
+  TemplateLiteralExpression,
+  TemplatePart,
   TraitDeclaration,
   TraitMember,
   TraitMethodSignature,
@@ -69,6 +72,14 @@ export class Parser {
   private structLiteralEnabled = true;
 
   constructor(private tokens: Token[]) {}
+
+  public getDiagnostics(): Diagnostic[] {
+    return this.diagnostics;
+  }
+
+  public parseSingleExpression(): Expression | null {
+    return this.parseExpression();
+  }
 
   public parseProgram(): ParseResult {
     const body: Statement[] = [];
@@ -444,6 +455,14 @@ export class Parser {
 
     const members: TraitMember[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      if (this.checkKeyword("pub")) {
+        this.report(
+          "Visibility modifiers are not allowed on trait methods.",
+          this.currentSpan(),
+          "E2825",
+        );
+        this.advance();
+      }
       if (this.checkKeyword("fn")) {
         members.push(this.parseTraitMethodMember());
       } else if (this.checkKeyword("type")) {
@@ -596,6 +615,14 @@ export class Parser {
     const methods: MethodDeclaration[] = [];
     const associatedTypes: AssociatedTypeDefinition[] = [];
     while (!this.isAtEnd() && !this.checkPunctuator("}")) {
+      if (this.checkKeyword("pub")) {
+        this.report(
+          "Visibility modifiers are not allowed on satisfies methods.",
+          this.currentSpan(),
+          "E2825",
+        );
+        this.advance();
+      }
       if (this.checkKeyword("type")) {
         associatedTypes.push(this.parseAssociatedTypeDefinition());
         continue;
@@ -914,7 +941,7 @@ export class Parser {
       if (this.checkOperator("<") && this.looksLikeCallTypeArgs()) {
         const typeArgs = this.parseCallTypeArgs();
         this.expectPunctuator("(");
-        const args = this.parseExpressionList(")");
+        const args = this.parseCallArgList();
         const end = this.expectPunctuator(")");
         expression = {
           kind: "CallExpression",
@@ -927,7 +954,7 @@ export class Parser {
       }
 
       if (this.matchPunctuator("(")) {
-        const args = this.parseExpressionList(")");
+        const args = this.parseCallArgList();
         const end = this.expectPunctuator(")");
         expression = {
           kind: "CallExpression",
@@ -997,6 +1024,8 @@ export class Parser {
 
     if (token.kind === "Number") return this.literalFromToken(token);
     if (token.kind === "String") return this.literalFromToken(token, "String");
+    if (token.kind === "TemplateString")
+      return this.parseTemplateLiteral(token);
 
     if (token.kind === "Keyword") {
       if (
@@ -1029,6 +1058,55 @@ export class Parser {
 
     this.report(`Unexpected token '${token.lexeme}'.`, token.span, "E1041");
     return this.placeholderExpression(token.span);
+  }
+
+  private parseTemplateLiteral(token: Token): TemplateLiteralExpression {
+    const parts: TemplatePart[] = [];
+    for (const rawPart of token.templateParts ?? []) {
+      if (rawPart.kind === "literal") {
+        parts.push({
+          kind: "literal",
+          value: rawPart.value,
+          span: rawPart.span,
+        });
+      } else {
+        const subLexResult = new Lexer(rawPart.source).lex();
+        for (const d of subLexResult.diagnostics) {
+          this.diagnostics.push({
+            ...d,
+            span: {
+              start: {
+                index: rawPart.span.start.index + d.span.start.index,
+                line: rawPart.span.start.line + d.span.start.line - 1,
+                column:
+                  d.span.start.line === 1
+                    ? rawPart.span.start.column + d.span.start.column - 1
+                    : d.span.start.column,
+              },
+              end: {
+                index: rawPart.span.start.index + d.span.end.index,
+                line: rawPart.span.start.line + d.span.end.line - 1,
+                column:
+                  d.span.end.line === 1
+                    ? rawPart.span.start.column + d.span.end.column - 1
+                    : d.span.end.column,
+              },
+            },
+          });
+        }
+        const subParser = new Parser(subLexResult.tokens);
+        const expr = subParser.parseSingleExpression();
+        for (const d of subParser.getDiagnostics()) this.diagnostics.push(d);
+        if (expr) {
+          parts.push({
+            kind: "interpolation",
+            expression: expr,
+            span: rawPart.span,
+          });
+        }
+      }
+    }
+    return { kind: "TemplateLiteralExpression", span: token.span, parts };
   }
 
   private parseMatchExpression(): MatchExpression {
@@ -1377,12 +1455,22 @@ export class Parser {
       this.parseIdentifier() ?? this.placeholderIdentifier(this.currentSpan());
     this.expectPunctuator(":");
     const type = this.parseType() ?? this.placeholderType(this.currentSpan());
+    let defaultValue: Expression | undefined;
+    if (this.matchOperator("=")) {
+      defaultValue =
+        this.parseExpression() ??
+        this.placeholderExpression(this.currentSpan());
+    }
     return {
       kind: "NamedParameter",
-      span: this.spanFrom(mutToken?.span ?? name.span, type.span),
+      span: this.spanFrom(
+        mutToken?.span ?? name.span,
+        defaultValue?.span ?? type.span,
+      ),
       name,
       type,
       isMutable: !!mutToken,
+      defaultValue,
     };
   }
 
@@ -1669,6 +1757,72 @@ export class Parser {
       } while (this.matchPunctuator(","));
     }
     return expressions;
+  }
+
+  private parseCallArgList(): Expression[] {
+    const args: Expression[] = [];
+    if (!this.checkPunctuator(")")) {
+      do {
+        // Named argument: `name: value` or `name: mut place`
+        const maybeIdent = this.peek();
+        const maybeColon = this.peek(1);
+        if (
+          maybeIdent?.kind === "Identifier" &&
+          maybeColon?.kind === "Punctuator" &&
+          maybeColon.lexeme === ":"
+        ) {
+          // Check the token after `:` is not `mut` with a type (to avoid
+          // confusing `param: mut Type` parameter-like syntax in fn-value
+          // contexts). Actually in call position we always parse as named arg.
+          const nameToken = this.advance()!;
+          this.advance(); // consume ':'
+          const nameIdent: import("@/types/ast").Identifier = {
+            kind: "Identifier",
+            span: {
+              start: nameToken.span.start,
+              end: nameToken.span.end,
+            },
+            name: nameToken.lexeme,
+          };
+          let value: Expression;
+          if (this.checkKeyword("mut")) {
+            const mutToken = this.expectKeyword("mut")!;
+            const inner =
+              this.parseExpression() ??
+              this.placeholderExpression(this.currentSpan());
+            value = {
+              kind: "MutExpression",
+              span: this.spanFrom(mutToken.span, inner.span),
+              expression: inner,
+            };
+          } else {
+            value =
+              this.parseExpression() ??
+              this.placeholderExpression(this.currentSpan());
+          }
+          args.push({
+            kind: "NamedArgExpression",
+            span: this.spanFrom(nameIdent.span, value.span),
+            name: nameIdent,
+            value,
+          });
+        } else if (this.checkKeyword("mut")) {
+          const start = this.expectKeyword("mut")!;
+          const inner =
+            this.parseExpression() ??
+            this.placeholderExpression(this.currentSpan());
+          args.push({
+            kind: "MutExpression",
+            span: this.spanFrom(start.span, inner.span),
+            expression: inner,
+          });
+        } else {
+          const expression = this.parseExpression();
+          if (expression) args.push(expression);
+        }
+      } while (this.matchPunctuator(","));
+    }
+    return args;
   }
 
   private parseCallTypeArgs(): TypeNode[] {

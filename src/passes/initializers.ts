@@ -135,6 +135,16 @@ function collectRefs(expr: Expression, names: Set<string>): Set<string> {
       case "FunctionExpression":
         // Don't walk closure bodies: captures are evaluated at call time, not init time.
         break;
+      case "MutExpression":
+        walk(e.expression);
+        break;
+      case "NamedArgExpression":
+        walk(e.value);
+        break;
+      case "TemplateLiteralExpression":
+        for (const part of e.parts)
+          if (part.kind === "interpolation") walk(part.expression);
+        break;
       case "LiteralExpression":
         break;
     }

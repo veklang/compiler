@@ -2,6 +2,16 @@ pub enum Ordering {
   Less;
   Equal;
   Greater;
+
+  satisfies Format {
+    fn format(self) -> string {
+      return match self {
+        Less => "Less",
+        Equal => "Equal",
+        Greater => "Greater",
+      };
+    }
+  }
 }
 
 pub enum Result<T, E> {

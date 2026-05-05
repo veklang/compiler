@@ -53,8 +53,8 @@ import type {
   MatchStatementArm,
   MemberExpression,
   MethodDeclaration,
-  NamedType,
   NamedParameter,
+  NamedType,
   Node,
   Parameter,
   Pattern,
@@ -64,9 +64,10 @@ import type {
   StructDeclaration,
   StructField,
   StructLiteralExpression,
+  TemplateLiteralExpression,
+  TraitDeclaration,
   TupleLiteralExpression,
   TupleMemberExpression,
-  TraitDeclaration,
   TypeNode,
   TypeParameter,
   UnaryExpression,
@@ -84,6 +85,11 @@ interface IrTypeSource {
   types: WeakMap<Node, unknown>;
   instantiations?: GenericInstantiationInfo[];
   callInstantiations?: WeakMap<CallExpression, GenericInstantiationInfo>;
+  callResolvedArgs?: WeakMap<CallExpression, (Expression | null)[]>;
+  callableObjectCalls?: WeakMap<
+    CallExpression,
+    { argsIsTuple: boolean; argCount: number }
+  >;
   coreStatements?: Statement[];
 }
 
@@ -3535,6 +3541,12 @@ function lowerExpression(
       return lowerIndexExpression(expression, context);
     case "MatchExpression":
       return lowerMatchExpression(expression, context);
+    case "MutExpression":
+      return lowerExpression(expression.expression, context);
+    case "NamedArgExpression":
+      return lowerExpression(expression.value, context);
+    case "TemplateLiteralExpression":
+      return lowerTemplateLiteral(expression, context);
     default:
       emitLowerDiag(
         context,
@@ -4624,7 +4636,10 @@ function lowerPointerOffsetCall(
 
   const target = nextTemp(context);
   const pointer = lowerExpression(expression.callee.object, context);
-  const offset = lowerExpression(expression.args[0], context);
+  const offset = lowerExpression(
+    getEffectiveCallArgs(expression, context)[0],
+    context,
+  );
   const type = typeFromNodeInContext(context, expression);
   context.currentBlock.instructions.push({
     kind: "binary",
@@ -4694,6 +4709,15 @@ function lowerStringToCstrCall(
   return { kind: "temp", id: target, type };
 }
 
+function getEffectiveCallArgs(
+  expression: CallExpression,
+  context: LowerContext,
+): Expression[] {
+  const resolved = context.checkResult.callResolvedArgs?.get(expression);
+  if (resolved) return resolved.filter((a): a is Expression => a !== null);
+  return expression.args;
+}
+
 function lowerCall(
   expression: CallExpression,
   context: LowerContext,
@@ -4706,6 +4730,9 @@ function lowerCall(
 
   const methodCall = lowerInstanceMethodCall(expression, context);
   if (methodCall) return methodCall;
+
+  const callableCall = lowerCallableObjectCall(expression, context);
+  if (callableCall) return callableCall;
 
   const target = nextTemp(context);
   const type = typeFromNodeInContext(context, expression);
@@ -4738,7 +4765,7 @@ function lowerCall(
               args: [],
               decl: "enum",
             };
-      const payload = expression.args.map((arg) =>
+      const payload = getEffectiveCallArgs(expression, context).map((arg) =>
         lowerExpression(arg, context),
       );
       for (const value of payload) retainIfBorrowedHeap(value, context);
@@ -4763,7 +4790,7 @@ function lowerCall(
     if (callee.kind === "function" && callee.name === "__vek_panic_cstr") {
       context.runtime.panic = true;
     }
-    const args = expression.args.map((arg) => {
+    const args = getEffectiveCallArgs(expression, context).map((arg) => {
       const lowered = lowerExpression(arg, context);
       if (
         callee.kind === "function" &&
@@ -4819,7 +4846,9 @@ function lowerCall(
     return voidOperand();
   }
 
-  const args = expression.args.map((arg) => lowerExpression(arg, context));
+  const args = getEffectiveCallArgs(expression, context).map((arg) =>
+    lowerExpression(arg, context),
+  );
   context.currentBlock.instructions.push({
     kind: "call",
     target: returnsVoid ? undefined : target,
@@ -4882,7 +4911,9 @@ function lowerInstanceMethodCall(
   const selfIsMutable = rawCalleeType?.target?.receiver?.isMutable === true;
   const args = [
     lowerExpression(expression.callee.object, context),
-    ...expression.args.map((arg) => lowerExpression(arg, context)),
+    ...getEffectiveCallArgs(expression, context).map((arg) =>
+      lowerExpression(arg, context),
+    ),
   ];
   const concreteCalleeType: IrType = {
     kind: "function",
@@ -4904,6 +4935,98 @@ function lowerInstanceMethodCall(
     span: expression.span,
   });
   for (const arg of args) releaseIfOwnedTemp(arg, context);
+
+  if (returnsVoid) return voidOperand();
+  markOwnedTemp(target, type, context);
+  return { kind: "temp", id: target, type };
+}
+
+function lowerCallableObjectCall(
+  expression: CallExpression,
+  context: LowerContext,
+): IrOperand | undefined {
+  const info = context.checkResult.callableObjectCalls?.get(expression);
+  if (!info) return undefined;
+
+  const calleeIrType = typeFromNodeInContext(context, expression.callee);
+  const type = typeFromNodeInContext(context, expression);
+  const returnsVoid = type.kind === "primitive" && type.name === "void";
+
+  if (calleeIrType.kind === "function") {
+    // Function value being called through a Callable bound — direct function call.
+    const callee = lowerExpression(expression.callee, context);
+    const target = nextTemp(context);
+    const args = expression.args.map((arg) => lowerExpression(arg, context));
+    context.currentBlock.instructions.push({
+      kind: "call",
+      target: returnsVoid ? undefined : target,
+      callee,
+      args,
+      type,
+      span: expression.span,
+    });
+    for (const arg of args) releaseIfOwnedTemp(arg, context);
+    if (returnsVoid) return voidOperand();
+    markOwnedTemp(target, type, context);
+    return { kind: "temp", id: target, type };
+  }
+
+  if (calleeIrType.kind !== "named") return undefined;
+
+  const ownerName = calleeIrType.name;
+  const linkName = context.methodLinks.get(methodKey(ownerName, "call"));
+  if (!linkName) return undefined;
+
+  const selfOperand = lowerExpression(expression.callee, context);
+  const target = nextTemp(context);
+
+  let callArgs: IrOperand[];
+  if (info.argsIsTuple && info.argCount > 1) {
+    // Pack multiple arguments into a tuple for the `call(self, args: Tuple)` signature.
+    const argOperands = expression.args.map((arg) =>
+      lowerExpression(arg, context),
+    );
+    for (const a of argOperands) retainIfBorrowedHeap(a, context);
+    const tupleTarget = nextTemp(context);
+    const tupleType: IrType = {
+      kind: "tuple",
+      elements: argOperands.map((a) => a.type),
+    };
+    context.currentBlock.instructions.push({
+      kind: "construct_tuple",
+      target: tupleTarget,
+      elements: argOperands,
+      type: tupleType,
+      span: expression.span,
+    });
+    for (const a of argOperands)
+      if (a.kind === "temp") context.ownedTemps.delete(a.id);
+    markOwnedTemp(tupleTarget, tupleType, context);
+    callArgs = [
+      selfOperand,
+      { kind: "temp", id: tupleTarget, type: tupleType },
+    ];
+  } else {
+    const argOperands = expression.args.map((arg) =>
+      lowerExpression(arg, context),
+    );
+    callArgs = [selfOperand, ...argOperands];
+  }
+
+  const concreteCalleeType: IrType = {
+    kind: "function",
+    params: callArgs.map((a) => ({ type: a.type, mutable: false })),
+    returnType: type,
+  };
+  context.currentBlock.instructions.push({
+    kind: "call",
+    target: returnsVoid ? undefined : target,
+    callee: { kind: "function", name: linkName, type: concreteCalleeType },
+    args: callArgs,
+    type,
+    span: expression.span,
+  });
+  for (const a of callArgs) releaseIfOwnedTemp(a, context);
 
   if (returnsVoid) return voidOperand();
   markOwnedTemp(target, type, context);
@@ -4988,7 +5111,10 @@ function lowerNullableMethodCall(
       span: expression.span,
     };
   } else if (method === "unwrap_or") {
-    const fallback = lowerExpression(expression.args[0], context);
+    const fallback = lowerExpression(
+      getEffectiveCallArgs(expression, context)[0],
+      context,
+    );
     retainIfBorrowedHeap(fallback, context, expression.span);
     context.currentBlock.instructions.push({
       kind: "assign",
@@ -5242,6 +5368,350 @@ function lowerTupleLiteral(
     if (element.kind === "temp") context.ownedTemps.delete(element.id);
   markOwnedTemp(target, type, context);
   return { kind: "temp", id: target, type };
+}
+
+function lowerTemplateLiteral(
+  expression: TemplateLiteralExpression,
+  context: LowerContext,
+): IrOperand {
+  context.runtime.strings = true;
+  const strType = irPrimitive("string");
+  const literalConst = (value: string): IrOperand => ({
+    kind: "const",
+    value: { kind: "string", value },
+    type: strType,
+  });
+
+  if (expression.parts.length === 0) {
+    return literalConst("");
+  }
+
+  let accumulated: IrOperand | null = null;
+
+  for (const part of expression.parts) {
+    let partOperand: IrOperand;
+
+    if (part.kind === "literal") {
+      partOperand = literalConst(part.value);
+    } else {
+      // Interpolation: lower expr then call .format()
+      const exprOperand = lowerExpression(part.expression, context);
+      partOperand = lowerFormatCall(exprOperand, part.span, context);
+    }
+
+    if (accumulated === null) {
+      accumulated = partOperand;
+    } else {
+      const concatTarget = nextTemp(context);
+      context.currentBlock.instructions.push({
+        kind: "string_concat",
+        target: concatTarget,
+        left: accumulated,
+        right: partOperand,
+        type: strType,
+        span: part.span,
+      });
+      releaseIfOwnedTemp(accumulated, context);
+      releaseIfOwnedTemp(partOperand, context);
+      markOwnedTemp(concatTarget, strType, context);
+      accumulated = { kind: "temp", id: concatTarget, type: strType };
+    }
+  }
+
+  return accumulated!;
+}
+
+function lowerFormatCall(
+  operand: IrOperand,
+  span: import("@/types/position").Span,
+  context: LowerContext,
+): IrOperand {
+  const strType = irPrimitive("string");
+  const type = operand.type;
+
+  if (type.kind === "primitive" && type.name === "string") {
+    // string.format() is identity — retain since this is a new value.
+    retainIfBorrowedHeap(operand, context);
+    return operand;
+  }
+
+  if (type.kind === "primitive") {
+    const helperName = `__vek_fmt_${type.name}`;
+    const target = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "call",
+      target,
+      callee: {
+        kind: "function",
+        name: helperName,
+        abi: "c",
+        type: {
+          kind: "function",
+          params: [{ type, mutable: false }],
+          returnType: strType,
+        },
+      },
+      args: [operand],
+      type: strType,
+      span,
+    });
+    markOwnedTemp(target, strType, context);
+    return { kind: "temp", id: target, type: strType };
+  }
+
+  if (type.kind === "named") {
+    const linkName = context.methodLinks.get(methodKey(type.name, "format"));
+    if (linkName) {
+      const target = nextTemp(context);
+      const concreteCalleeType: IrType = {
+        kind: "function",
+        params: [{ type, mutable: false }],
+        returnType: strType,
+      };
+      context.currentBlock.instructions.push({
+        kind: "call",
+        target,
+        callee: { kind: "function", name: linkName, type: concreteCalleeType },
+        args: [operand],
+        type: strType,
+        span,
+      });
+      releaseIfOwnedTemp(operand, context);
+      markOwnedTemp(target, strType, context);
+      return { kind: "temp", id: target, type: strType };
+    }
+
+    // Result<T,E>: branch on tag, format Ok/Err payload, wrap in "Ok(...)"/"Err(...)".
+    const variants = enumVariantsForType(type, context);
+    const okVariant = variants.find((v) => v.variantName === "Ok");
+    const errVariant = variants.find((v) => v.variantName === "Err");
+    if (okVariant && errVariant) {
+      context.runtime.strings = true;
+      const resultLocal = declareLocal(
+        context,
+        `__fmt_result_${context.nextLocal}`,
+        strType,
+        true,
+        span,
+      );
+      const okBlock = newBlock(context);
+      const errBlock = newBlock(context);
+      const joinBlock = newBlock(context);
+      const tag = getEnumTagOperand(operand, span, context);
+      const isOk = lowerBinaryEquality(
+        tag,
+        {
+          kind: "const",
+          value: { kind: "int", value: String(okVariant.tag) },
+          type: irPrimitive("i32"),
+        },
+        span,
+        context,
+      );
+      context.currentBlock.terminator = {
+        kind: "cond_branch",
+        condition: isOk,
+        thenTarget: okBlock.id,
+        elseTarget: errBlock.id,
+        span,
+      };
+
+      const emitVariantBranch = (
+        block: IrBlock,
+        variant: VariantInfo,
+        prefix: string,
+      ) => {
+        switchBlock(context, block);
+        const saved = saveLocals(context);
+        const payload = extractEnumPayloadOperand(
+          operand,
+          variant,
+          0,
+          span,
+          context,
+        );
+        const formattedPayload = lowerFormatCall(payload, span, context);
+        const prefixConst: IrOperand = {
+          kind: "const",
+          value: { kind: "string", value: prefix },
+          type: strType,
+        };
+        const suffixConst: IrOperand = {
+          kind: "const",
+          value: { kind: "string", value: ")" },
+          type: strType,
+        };
+        const midTarget = nextTemp(context);
+        context.currentBlock.instructions.push({
+          kind: "string_concat",
+          target: midTarget,
+          left: prefixConst,
+          right: formattedPayload,
+          type: strType,
+          span,
+        });
+        releaseIfOwnedTemp(formattedPayload, context);
+        markOwnedTemp(midTarget, strType, context);
+        const finalTarget = nextTemp(context);
+        context.currentBlock.instructions.push({
+          kind: "string_concat",
+          target: finalTarget,
+          left: { kind: "temp", id: midTarget, type: strType },
+          right: suffixConst,
+          type: strType,
+          span,
+        });
+        releaseIfOwnedTemp(
+          { kind: "temp", id: midTarget, type: strType },
+          context,
+        );
+        markOwnedTemp(finalTarget, strType, context);
+        const finalStr: IrOperand = {
+          kind: "temp",
+          id: finalTarget,
+          type: strType,
+        };
+        context.currentBlock.instructions.push({
+          kind: "assign",
+          target: resultLocal.id,
+          value: finalStr,
+          span,
+        });
+        markLocalOwns(resultLocal.id, finalStr, context);
+        context.ownedTemps.delete(finalTarget);
+        context.currentBlock.terminator = {
+          kind: "branch",
+          target: joinBlock.id,
+          span,
+        };
+        restoreLocals(context, saved);
+      };
+
+      emitVariantBranch(okBlock, okVariant, "Ok(");
+      emitVariantBranch(errBlock, errVariant, "Err(");
+
+      switchBlock(context, joinBlock);
+      return { kind: "local", id: resultLocal.id, type: strType };
+    }
+  }
+
+  // nullable T?: emit "null" or format the inner value.
+  if (type.kind === "nullable") {
+    context.runtime.strings = true;
+    const resultLocal = declareLocal(
+      context,
+      `__fmt_null_${context.nextLocal}`,
+      strType,
+      true,
+      span,
+    );
+    const nullBlock = newBlock(context);
+    const valueBlock = newBlock(context);
+    const joinBlock = newBlock(context);
+    const isNull = lowerIsNull(operand, span, context);
+    context.currentBlock.terminator = {
+      kind: "cond_branch",
+      condition: isNull,
+      thenTarget: nullBlock.id,
+      elseTarget: valueBlock.id,
+      span,
+    };
+
+    switchBlock(context, nullBlock);
+    const nullStr: IrOperand = {
+      kind: "const",
+      value: { kind: "string", value: "null" },
+      type: strType,
+    };
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal.id,
+      value: nullStr,
+      span,
+    });
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: joinBlock.id,
+      span,
+    };
+
+    switchBlock(context, valueBlock);
+    const savedValue = saveLocals(context);
+    const inner = unwrapNullableOperand(operand, context, span);
+    const formatted = lowerFormatCall(inner, span, context);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: resultLocal.id,
+      value: formatted,
+      span,
+    });
+    markLocalOwns(resultLocal.id, formatted, context);
+    if (formatted.kind === "temp") context.ownedTemps.delete(formatted.id);
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: joinBlock.id,
+      span,
+    };
+    restoreLocals(context, savedValue);
+
+    switchBlock(context, joinBlock);
+    return { kind: "local", id: resultLocal.id, type: strType };
+  }
+
+  // tuple (T1,...,Tn): "(t0, t1, ...)" — inline string concatenation.
+  if (type.kind === "tuple") {
+    context.runtime.strings = true;
+    const literalConst = (value: string): IrOperand => ({
+      kind: "const",
+      value: { kind: "string", value },
+      type: strType,
+    });
+    const elements = type.elements;
+    const parts: IrOperand[] = [literalConst("(")];
+    for (let i = 0; i < elements.length; i++) {
+      if (i > 0) parts.push(literalConst(", "));
+      const elemTarget = nextTemp(context);
+      context.currentBlock.instructions.push({
+        kind: "get_tuple_field",
+        target: elemTarget,
+        object: operand,
+        index: i,
+        type: elements[i],
+        span,
+      });
+      parts.push(
+        lowerFormatCall(
+          { kind: "temp", id: elemTarget, type: elements[i] },
+          span,
+          context,
+        ),
+      );
+    }
+    if (elements.length === 1) parts.push(literalConst(","));
+    parts.push(literalConst(")"));
+
+    let acc = parts[0];
+    for (let i = 1; i < parts.length; i++) {
+      const concatTarget = nextTemp(context);
+      context.currentBlock.instructions.push({
+        kind: "string_concat",
+        target: concatTarget,
+        left: acc,
+        right: parts[i],
+        type: strType,
+        span,
+      });
+      releaseIfOwnedTemp(acc, context);
+      releaseIfOwnedTemp(parts[i], context);
+      markOwnedTemp(concatTarget, strType, context);
+      acc = { kind: "temp", id: concatTarget, type: strType };
+    }
+    return acc;
+  }
+
+  // Fallback (should not happen after E2108 check).
+  retainIfBorrowedHeap(operand, context);
+  return operand;
 }
 
 function lowerTupleMemberExpression(
@@ -6280,10 +6750,40 @@ class DisplayTypeParser {
 
   private parseType(): IrType {
     this.skipWhitespace();
-    const type = this.check("(") ? this.parseTuple() : this.parseNamed();
+    let type: IrType;
+    if (this.check("(")) {
+      type = this.parseTuple();
+    } else if (this.check("fn(")) {
+      type = this.parseFunctionType();
+    } else {
+      type = this.parseNamed();
+    }
     this.skipWhitespace();
     if (this.consume("?")) return { kind: "nullable", base: type };
     return type;
+  }
+
+  private parseFunctionType(): IrType {
+    this.expect("fn");
+    this.expect("(");
+    const params: { type: IrType; mutable: boolean }[] = [];
+    this.skipWhitespace();
+    if (!this.check(")")) {
+      do {
+        this.skipWhitespace();
+        const mutable = this.consume("mut");
+        this.skipWhitespace();
+        params.push({ type: this.parseType(), mutable });
+        this.skipWhitespace();
+      } while (this.consume(",") && !this.check(")"));
+    }
+    this.expect(")");
+    this.skipWhitespace();
+    this.consume("-");
+    this.consume(">");
+    this.skipWhitespace();
+    const returnType = this.parseType();
+    return { kind: "function", params, returnType };
   }
 
   private parseTuple(): IrType {

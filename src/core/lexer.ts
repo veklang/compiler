@@ -1,7 +1,7 @@
 import type { Diagnostic } from "@/types/diagnostic";
 import type { Position, Span } from "@/types/position";
 import type { Operator, Punctuator } from "@/types/shared";
-import type { Token } from "@/types/token";
+import type { TemplatePart, Token } from "@/types/token";
 import { keywords } from "@/types/token";
 
 const operatorCandidates: Operator[] = [
@@ -332,6 +332,11 @@ export class Lexer {
     const end = this.position();
     const lexeme = this.source.slice(start.index, end.index);
 
+    if (lexeme === "f" && !this.isAtEnd() && this.peek() === '"') {
+      this.scanTemplateString(start);
+      return;
+    }
+
     if (keywords.includes(lexeme as never)) {
       this.tokens.push(
         this.makeToken(
@@ -345,6 +350,165 @@ export class Lexer {
     }
 
     this.tokens.push(this.makeToken("Identifier", lexeme, { start, end }));
+  }
+
+  private scanTemplateString(start: import("@/types/position").Position) {
+    this.advance(); // consume the opening `"`
+    const parts: TemplatePart[] = [];
+    let literal = "";
+    let literalStart = this.position();
+
+    while (!this.isAtEnd()) {
+      const ch = this.peek();
+
+      if (ch === '"') {
+        // End of template string.
+        if (literal.length > 0) {
+          parts.push({
+            kind: "literal",
+            value: literal,
+            span: { start: literalStart, end: this.position() },
+          });
+          literal = "";
+        }
+        this.advance();
+        const end = this.position();
+        const lexeme = this.source.slice(start.index, end.index);
+        this.tokens.push(
+          this.makeToken(
+            "TemplateString",
+            lexeme,
+            { start, end },
+            { templateParts: parts },
+          ),
+        );
+        return;
+      }
+
+      if (ch === "{") {
+        // Start of interpolation.
+        const braceStart = this.position();
+        this.advance(); // consume `{`
+
+        if (this.isAtEnd() || this.peek() === "}") {
+          // Empty interpolation `{}` — E0006.
+          this.diagnostics.push({
+            severity: "error",
+            message: "Empty interpolation '{}' in template string.",
+            span: { start: braceStart, end: this.position() },
+            code: "E0006",
+          });
+          if (!this.isAtEnd()) this.advance(); // consume `}`
+          continue;
+        }
+
+        // Flush accumulated literal.
+        if (literal.length > 0) {
+          parts.push({
+            kind: "literal",
+            value: literal,
+            span: { start: literalStart, end: braceStart },
+          });
+          literal = "";
+        }
+
+        // Scan the interpolation expression source, tracking brace depth.
+        const exprStart = this.position();
+        let depth = 1;
+        while (!this.isAtEnd() && depth > 0) {
+          const ic = this.peek();
+          if (ic === "{") {
+            depth++;
+            this.advance();
+          } else if (ic === "}") {
+            depth--;
+            if (depth > 0) this.advance();
+          } else if (ic === '"') {
+            // Skip string literal inside interpolation.
+            this.advance();
+            while (!this.isAtEnd() && this.peek() !== '"') {
+              if (this.peek() === "\\") this.advance(); // skip escape
+              if (!this.isAtEnd()) this.advance();
+            }
+            if (!this.isAtEnd()) this.advance(); // closing `"`
+          } else {
+            this.advance();
+          }
+        }
+
+        if (depth > 0) {
+          // Unterminated interpolation — E0005.
+          this.diagnostics.push({
+            severity: "error",
+            message: "Unterminated interpolation block in template string.",
+            span: { start: braceStart, end: this.position() },
+            code: "E0005",
+          });
+          // Advance past the closing `"` if present.
+          if (!this.isAtEnd() && this.peek() === '"') this.advance();
+          const end = this.position();
+          const lexeme = this.source.slice(start.index, end.index);
+          this.tokens.push(
+            this.makeToken(
+              "TemplateString",
+              lexeme,
+              { start, end },
+              { templateParts: parts },
+            ),
+          );
+          return;
+        }
+
+        const exprEnd = this.position();
+        const exprSource = this.source.slice(exprStart.index, exprEnd.index);
+        parts.push({
+          kind: "interpolation",
+          source: exprSource,
+          span: { start: exprStart, end: exprEnd },
+        });
+        this.advance(); // consume the closing `}`
+        literalStart = this.position();
+        continue;
+      }
+
+      if (ch === "\\") {
+        this.advance(); // consume `\`
+        const esc = this.peek();
+        literal += this.rawEscapePair(ch, esc);
+        if (!this.isAtEnd()) this.advance(); // consume escape char
+        continue;
+      }
+
+      literal += ch;
+      this.advance();
+    }
+
+    // Reached end without closing `"` — unterminated.
+    this.diagnostics.push({
+      severity: "error",
+      message: "Unterminated string literal.",
+      span: { start, end: this.position() },
+      code: "E0002",
+    });
+  }
+
+  private rawEscapePair(backslash: string, next: string): string {
+    switch (next) {
+      case "n":
+        return "\n";
+      case "r":
+        return "\r";
+      case "t":
+        return "\t";
+      case '"':
+        return '"';
+      case "\\":
+        return "\\";
+      case "0":
+        return "\0";
+      default:
+        return backslash + (next ?? "");
+    }
   }
 
   private scanBlockComment() {

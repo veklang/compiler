@@ -2238,6 +2238,151 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs Callable satisfaction and implicit function-value Callable", () => {
+    if (!hasCc()) return;
+
+    withTempFile(
+      `
+struct Adder {
+  amount: i32;
+
+  satisfies Callable<i32, i32> {
+    fn call(self, x: i32) -> i32 {
+      return x + self.amount;
+    }
+  }
+}
+
+struct Combiner {
+  n: i32;
+
+  satisfies Callable<(i32, i32), i32> {
+    fn call(self, args: (i32, i32)) -> i32 {
+      return args.0 + args.1 + self.n;
+    }
+  }
+}
+
+fn apply<F>(f: F, x: i32) -> i32
+where F: Callable<i32, i32>
+{
+  return f(x);
+}
+
+fn double(n: i32) -> i32 { return n * 2; }
+
+fn main() -> i32 {
+  let add5 = Adder { amount: 5 };
+  if add5(3) != 8 { return 1; }
+
+  let c = Combiner { n: 0 };
+  if c(10, 20) != 30 { return 2; }
+
+  if apply(add5, 7) != 12 { return 3; }
+
+  if apply(double, 6) != 12 { return 4; }
+
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs template string interpolation", () => {
+    if (!hasCc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let name = "world";
+  let n: i32 = 42;
+  let b = true;
+  let s1 = f"hello {name}!";
+  let s2 = f"n={n}";
+  let s3 = f"flag={b}";
+  let s4 = f"{n} and {n}";
+  if s1 != "hello world!" { return 1; }
+  if s2 != "n=42" { return 2; }
+  if s3 != "flag=true" { return 3; }
+  if s4 != "42 and 42" { return 4; }
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
+  test("compiles and runs format interpolation for Ordering, nullable, tuple, and Result", () => {
+    if (!hasCc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let o: Ordering = Less;
+  if f"{o}" != "Less" { return 1; }
+
+  let n: i32? = 42;
+  if f"{n}" != "42" { return 2; }
+
+  let null_n: i32? = null;
+  if f"{null_n}" != "null" { return 3; }
+
+  let t = (10, "hi");
+  if f"{t}" != "(10, hi)" { return 4; }
+
+  let ok: Result<i32, string> = Ok(7);
+  if f"{ok}" != "Ok(7)" { return 5; }
+
+  let err: Result<i32, string> = Err("oops");
+  if f"{err}" != "Err(oops)" { return 6; }
+
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs custom Index and IndexMut trait satisfactions", () => {
     if (!hasCc()) return;
 
