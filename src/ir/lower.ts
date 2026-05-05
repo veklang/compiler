@@ -5709,6 +5709,275 @@ function lowerFormatCall(
     return acc;
   }
 
+  // Array<T>: "[elem0, elem1, ...]" — loop with mutable string accumulator.
+  if (type.kind === "named" && type.name === "Array" && type.args.length > 0) {
+    context.runtime.strings = true;
+    const elementType = type.args[0];
+    const usizeType = irPrimitive("usize");
+    const boolType = irPrimitive("bool");
+    const literalConst = (value: string): IrOperand => ({
+      kind: "const",
+      value: { kind: "string", value },
+      type: strType,
+    });
+
+    const lenTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "array_len",
+      target: lenTarget,
+      array: operand,
+      type: usizeType,
+      span,
+    });
+
+    const accLocal = declareLocal(
+      context,
+      `__fmt_arr_acc_${context.nextLocal}`,
+      strType,
+      true,
+      span,
+    );
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: accLocal.id,
+      value: literalConst("["),
+      span,
+    });
+
+    const idxLocal = declareLocal(
+      context,
+      `__fmt_arr_idx_${context.nextLocal}`,
+      usizeType,
+      true,
+      span,
+    );
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: idxLocal.id,
+      value: {
+        kind: "const",
+        value: { kind: "int", value: "0" },
+        type: usizeType,
+      },
+      span,
+    });
+
+    const isFirstLocal = declareLocal(
+      context,
+      `__fmt_arr_first_${context.nextLocal}`,
+      boolType,
+      true,
+      span,
+    );
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: isFirstLocal.id,
+      value: {
+        kind: "const",
+        value: { kind: "bool", value: true },
+        type: boolType,
+      },
+      span,
+    });
+
+    const condBlock = newBlock(context);
+    const bodyBlock = newBlock(context);
+    const sepBlock = newBlock(context);
+    const afterSepBlock = newBlock(context);
+    const incBlock = newBlock(context);
+    const exitBlock = newBlock(context);
+
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: condBlock.id,
+      span,
+    };
+
+    // condBlock: check idx < len
+    switchBlock(context, condBlock);
+    const condTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "binary",
+      target: condTarget,
+      operator: "<",
+      left: { kind: "local", id: idxLocal.id, type: usizeType },
+      right: { kind: "temp", id: lenTarget, type: usizeType },
+      type: boolType,
+      span,
+    });
+    context.currentBlock.terminator = {
+      kind: "cond_branch",
+      condition: { kind: "temp", id: condTarget, type: boolType },
+      thenTarget: bodyBlock.id,
+      elseTarget: exitBlock.id,
+      span,
+    };
+
+    // bodyBlock: get element, format it, branch on isFirst for separator
+    switchBlock(context, bodyBlock);
+    const elemTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "array_get",
+      target: elemTarget,
+      array: operand,
+      index: { kind: "local", id: idxLocal.id, type: usizeType },
+      elementType,
+      type: elementType,
+      span,
+    });
+    const fmtElem = lowerFormatCall(
+      { kind: "temp", id: elemTarget, type: elementType },
+      span,
+      context,
+    );
+    const notFirstTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "unary",
+      target: notFirstTarget,
+      operator: "!",
+      argument: { kind: "local", id: isFirstLocal.id, type: boolType },
+      type: boolType,
+      span,
+    });
+    context.currentBlock.terminator = {
+      kind: "cond_branch",
+      condition: { kind: "temp", id: notFirstTarget, type: boolType },
+      thenTarget: sepBlock.id,
+      elseTarget: afterSepBlock.id,
+      span,
+    };
+
+    // sepBlock: prepend ", " to acc, then fall through to afterSepBlock
+    switchBlock(context, sepBlock);
+    const sepMidTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "string_concat",
+      target: sepMidTarget,
+      left: { kind: "local", id: accLocal.id, type: strType },
+      right: literalConst(", "),
+      type: strType,
+      span,
+    });
+    markOwnedTemp(sepMidTarget, strType, context);
+    releaseLocalIfOwned(accLocal.id, context, span);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: accLocal.id,
+      value: { kind: "temp", id: sepMidTarget, type: strType },
+      span,
+    });
+    markLocalOwns(
+      accLocal.id,
+      { kind: "temp", id: sepMidTarget, type: strType },
+      context,
+    );
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: afterSepBlock.id,
+      span,
+    };
+
+    // afterSepBlock: concat fmtElem onto acc, update isFirst
+    switchBlock(context, afterSepBlock);
+    const newAccTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "string_concat",
+      target: newAccTarget,
+      left: { kind: "local", id: accLocal.id, type: strType },
+      right: fmtElem,
+      type: strType,
+      span,
+    });
+    if (fmtElem.kind === "temp") {
+      releaseIfOwnedTemp(fmtElem, context);
+    } else if (fmtElem.kind === "local") {
+      releaseLocalIfOwned(fmtElem.id, context, span);
+    }
+    markOwnedTemp(newAccTarget, strType, context);
+    releaseLocalIfOwned(accLocal.id, context, span);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: accLocal.id,
+      value: { kind: "temp", id: newAccTarget, type: strType },
+      span,
+    });
+    markLocalOwns(
+      accLocal.id,
+      { kind: "temp", id: newAccTarget, type: strType },
+      context,
+    );
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: isFirstLocal.id,
+      value: {
+        kind: "const",
+        value: { kind: "bool", value: false },
+        type: boolType,
+      },
+      span,
+    });
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: incBlock.id,
+      span,
+    };
+
+    // incBlock: idx++
+    switchBlock(context, incBlock);
+    const incTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "binary",
+      target: incTarget,
+      operator: "+",
+      left: { kind: "local", id: idxLocal.id, type: usizeType },
+      right: {
+        kind: "const",
+        value: { kind: "int", value: "1" },
+        type: usizeType,
+      },
+      type: usizeType,
+      span,
+    });
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: idxLocal.id,
+      value: { kind: "temp", id: incTarget, type: usizeType },
+      span,
+    });
+    context.currentBlock.terminator = {
+      kind: "branch",
+      target: condBlock.id,
+      span,
+    };
+
+    // exitBlock: append "]"
+    switchBlock(context, exitBlock);
+    const closeTarget = nextTemp(context);
+    context.currentBlock.instructions.push({
+      kind: "string_concat",
+      target: closeTarget,
+      left: { kind: "local", id: accLocal.id, type: strType },
+      right: literalConst("]"),
+      type: strType,
+      span,
+    });
+    markOwnedTemp(closeTarget, strType, context);
+    releaseLocalIfOwned(accLocal.id, context, span);
+    context.currentBlock.instructions.push({
+      kind: "assign",
+      target: accLocal.id,
+      value: { kind: "temp", id: closeTarget, type: strType },
+      span,
+    });
+    markLocalOwns(
+      accLocal.id,
+      { kind: "temp", id: closeTarget, type: strType },
+      context,
+    );
+
+    return { kind: "local", id: accLocal.id, type: strType };
+  }
+
   // Fallback (should not happen after E2108 check).
   retainIfBorrowedHeap(operand, context);
   return operand;

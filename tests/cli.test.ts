@@ -2383,6 +2383,41 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs format interpolation for Array<T>", () => {
+    if (!hasCc()) return;
+
+    withTempFile(
+      `
+fn main() -> i32 {
+  let empty: Array<i32> = [];
+  if f"{empty}" != "[]" { return 1; }
+
+  let nums: Array<i32> = [1, 2, 3];
+  if f"{nums}" != "[1, 2, 3]" { return 2; }
+
+  let single: Array<string> = ["hello"];
+  if f"{single}" != "[hello]" { return 3; }
+
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs custom Index and IndexMut trait satisfactions", () => {
     if (!hasCc()) return;
 
