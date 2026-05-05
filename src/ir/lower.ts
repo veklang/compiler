@@ -4731,6 +4731,26 @@ function lowerCall(
   const methodCall = lowerInstanceMethodCall(expression, context);
   if (methodCall) return methodCall;
 
+  // Explicit .format() call with no args — redirect through lowerFormatCall so
+  // primitives, tuples, nullable, etc. produce the same output as template literals.
+  if (
+    expression.callee.kind === "MemberExpression" &&
+    expression.callee.property.name === "format" &&
+    expression.args.length === 0
+  ) {
+    const receiverType = typeFromNodeInContext(
+      context,
+      expression.callee.object,
+    );
+    if (
+      receiverType.kind !== "named" ||
+      !context.methodLinks.has(methodKey(receiverType.name, "format"))
+    ) {
+      const receiver = lowerExpression(expression.callee.object, context);
+      return lowerFormatCall(receiver, expression.span, context);
+    }
+  }
+
   const callableCall = lowerCallableObjectCall(expression, context);
   if (callableCall) return callableCall;
 

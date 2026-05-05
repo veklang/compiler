@@ -3075,3 +3075,107 @@ fn main() -> void {
 `);
   });
 });
+
+describe("conditional satisfies where", () => {
+  test("type satisfies trait when where bounds are met", () => {
+    checkOk(`
+struct Wrapper<T> {
+  value: T;
+
+  satisfies Format where T: Format {
+    fn format(self) -> string {
+      return "Wrapper(" + self.value.format() + ")";
+    }
+  }
+}
+
+fn main() -> void {
+  let w = Wrapper { value: 42 };
+  let _s = f"{w}";
+}
+`);
+  });
+
+  test("E2108: type does not satisfy trait when where bounds are not met", () => {
+    const result = check(`
+struct NoFormat { x: i32; }
+
+struct Wrapper<T> {
+  value: T;
+
+  satisfies Format where T: Format {
+    fn format(self) -> string {
+      return "Wrapper(" + self.value.format() + ")";
+    }
+  }
+}
+
+fn main() -> void {
+  let w = Wrapper { value: NoFormat { x: 1 } };
+  let _s = f"{w}";
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2108"]);
+  });
+
+  test("conditional satisfaction with multiple where bounds", () => {
+    checkOk(`
+struct Pair<A, B> {
+  first: A;
+  second: B;
+
+  satisfies Format where A: Format, B: Format {
+    fn format(self) -> string {
+      return "(" + self.first.format() + ", " + self.second.format() + ")";
+    }
+  }
+}
+
+fn main() -> void {
+  let p = Pair { first: 1, second: true };
+  let _s = f"{p}";
+}
+`);
+  });
+
+  test("E2816: generic fn rejects type that fails where bound", () => {
+    const result = check(`
+struct NoFormat { x: i32; }
+
+struct Wrapper<T> {
+  value: T;
+
+  satisfies Format where T: Format {
+    fn format(self) -> string {
+      return self.value.format();
+    }
+  }
+}
+
+fn needs_format<T>(x: T) -> string where T: Format {
+  return x.format();
+}
+
+fn main() -> void {
+  let w = Wrapper { value: NoFormat { x: 1 } };
+  needs_format(w);
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2816"]);
+  });
+
+  test("E2812: where clause references unknown type parameter", () => {
+    const result = check(`
+struct Foo {
+  x: i32;
+
+  satisfies Format where Z: Format {
+    fn format(self) -> string {
+      return "foo";
+    }
+  }
+}
+`);
+    expectDiagnostics(result.checkDiagnostics, ["E2812"]);
+  });
+});

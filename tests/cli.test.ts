@@ -2383,6 +2383,62 @@ fn main() -> i32 {
     );
   });
 
+  test("compiles and runs conditional satisfies where", () => {
+    if (!hasCc()) return;
+
+    withTempFile(
+      `
+struct Wrapper<T> {
+  value: T;
+
+  satisfies Format where T: Format {
+    fn format(self) -> string {
+      return "Wrapper(" + self.value.format() + ")";
+    }
+  }
+}
+
+struct Pair<A, B> {
+  first: A;
+  second: B;
+
+  satisfies Format where A: Format, B: Format {
+    fn format(self) -> string {
+      return "(" + self.first.format() + ", " + self.second.format() + ")";
+    }
+  }
+}
+
+fn main() -> i32 {
+  let w = Wrapper { value: 42 };
+  if f"{w}" != "Wrapper(42)" { return 1; }
+
+  let nested = Wrapper { value: Wrapper { value: true } };
+  if f"{nested}" != "Wrapper(Wrapper(true))" { return 2; }
+
+  let p = Pair { first: 1, second: "hi" };
+  if f"{p}" != "(1, hi)" { return 3; }
+
+  return 42;
+}
+`,
+      (filePath) => {
+        const options = parseCliArgs([filePath]);
+        compileFile(options);
+
+        try {
+          const result = spawnSync(options.outputPath, {
+            encoding: "utf8",
+            stdio: "pipe",
+          });
+          assert.equal(result.status, 42);
+        } finally {
+          fs.rmSync(options.outputPath, { force: true });
+        }
+      },
+    );
+  });
+
   test("compiles and runs format interpolation for Array<T>", () => {
     if (!hasCc()) return;
 

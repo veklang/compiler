@@ -241,6 +241,7 @@ interface MethodInfo {
 interface TraitSatisfactionInfo {
   span: Span;
   trait: NamedRefType;
+  whereConstraints?: BuiltinTraitWhereConstraint[];
   associatedTypes: Map<string, AssociatedTypeDefinition>;
   methods: Map<string, MethodDeclaration>;
   defaultMethods: Map<string, MethodDeclaration>;
@@ -727,7 +728,7 @@ export class Checker {
 
   private materializeSatisfaction(
     declaration: TraitSatisfiesDeclaration,
-    _owner: TypeSymbol,
+    owner: TypeSymbol,
     ownerScope: Scope,
   ): TraitSatisfactionInfo {
     const trait = this.resolveNamedReference(declaration.trait, ownerScope);
@@ -755,9 +756,43 @@ export class Checker {
       }
       associatedTypes.set(associatedType.name.name, associatedType);
     }
+    const whereConstraints: BuiltinTraitWhereConstraint[] = [];
+    for (const constraint of declaration.whereClause ?? []) {
+      const targetName =
+        constraint.typeName?.name ??
+        (constraint.target.kind === "NamedType"
+          ? constraint.target.name.name
+          : null);
+      if (!targetName) {
+        this.report(
+          "satisfies where clause target must be a type parameter.",
+          constraint.target.span,
+          "E2812",
+        );
+        continue;
+      }
+      const isTypeParam = owner.typeParams.some(
+        (p) => p.name.name === targetName,
+      );
+      if (!isTypeParam) {
+        this.report(
+          `Unknown type parameter '${targetName}' in satisfies where clause.`,
+          constraint.target.span,
+          "E2812",
+        );
+        continue;
+      }
+      const resolvedTrait = this.resolveNamedReference(
+        constraint.trait,
+        ownerScope,
+      );
+      whereConstraints.push({ typeParam: targetName, trait: resolvedTrait });
+    }
     return {
       span: declaration.trait.span,
       trait,
+      whereConstraints:
+        whereConstraints.length > 0 ? whereConstraints : undefined,
       associatedTypes,
       methods,
       defaultMethods: new Map(),
@@ -1286,6 +1321,15 @@ export class Checker {
     for (const [name, type] of associatedTypes) {
       satisfactionScope.associatedTypes.set(name, type);
     }
+    for (const constraint of satisfaction.whereConstraints ?? []) {
+      const existing = this.lookupTypeParam(constraint.typeParam, scope);
+      if (!existing) continue;
+      satisfactionScope.typeParams.set(constraint.typeParam, {
+        name: existing.name,
+        bounds: [...existing.bounds, constraint.trait],
+        associatedBounds: existing.associatedBounds,
+      });
+    }
 
     for (const [name, requiredMethod] of required) {
       const impl = satisfaction.methods.get(name);
@@ -1404,7 +1448,8 @@ export class Checker {
       undefined,
       this.globalScope,
     )) {
-      bodyScope.typeParams.set(param.name, param);
+      const scopeParam = this.lookupTypeParam(param.name, scope);
+      bodyScope.typeParams.set(param.name, scopeParam ?? param);
     }
     for (const param of resolved.typeParams)
       bodyScope.typeParams.set(param.name, param);
@@ -4488,6 +4533,9 @@ export class Checker {
     const typeScope = this.createScope(scope, scope.selfType);
     typeScope.typeParams = new Map(scope.typeParams);
     for (const param of typeParams ?? []) {
+      // Capture any extra bounds added to this param in the caller's scope
+      // (e.g., from a satisfies where clause) before we overwrite the entry.
+      const callerSpec = scope.typeParams.get(param.name.name);
       // Pre-register with empty bounds so self-referential bounds like Equal<T>
       // can resolve T when processing this param's own bound list.
       const spec: TypeParamSpec = {
@@ -4500,6 +4548,13 @@ export class Checker {
       spec.bounds = (param.bounds ?? []).map((bound) =>
         this.resolveNamedReference(bound, typeScope),
       );
+      // Merge extra bounds from the caller scope that aren't from the declaration.
+      if (callerSpec) {
+        for (const extra of callerSpec.bounds) {
+          if (!spec.bounds.some((b) => this.namedTypeEquals(b, extra)))
+            spec.bounds.push(extra);
+        }
+      }
     }
     for (const clause of whereClause ?? []) {
       if (clause.target.kind === "AssociatedTypeProjection") {
@@ -5701,6 +5756,7 @@ export class Checker {
       }
       return (
         type.symbol?.satisfactions?.some((entry) => {
+          if (!this.satisfactionApplies(type, entry, scope)) return false;
           const candidate = this.substituteOwnerTypeArgs(entry.trait, type);
           return this.traitBoundSatisfies(candidate, trait, scope, type, entry);
         }) ?? false
@@ -5996,6 +6052,39 @@ export class Checker {
       if (!this.typeSatisfiesTrait(constrainedType, constrainedTrait, scope)) {
         return false;
       }
+    }
+    return true;
+  }
+
+  private lookupTypeParam(
+    name: string,
+    scope: Scope,
+  ): TypeParamSpec | undefined {
+    let current: Scope | undefined = scope;
+    while (current) {
+      if (current.typeParams.has(name)) return current.typeParams.get(name);
+      current = current.parent;
+    }
+    return undefined;
+  }
+
+  private satisfactionApplies(
+    owner: Type,
+    satisfaction: TraitSatisfactionInfo,
+    scope: Scope,
+  ): boolean {
+    for (const constraint of satisfaction.whereConstraints ?? []) {
+      const constrainedType = this.builtinOwnerTypeArg(
+        owner,
+        constraint.typeParam,
+      );
+      if (!constrainedType) return false;
+      const constrainedTrait =
+        owner.kind === "Named"
+          ? this.substituteOwnerTypeArgs(constraint.trait, owner)
+          : constraint.trait;
+      if (!this.typeSatisfiesTrait(constrainedType, constrainedTrait, scope))
+        return false;
     }
     return true;
   }

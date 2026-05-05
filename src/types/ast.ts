@@ -180,6 +180,7 @@ export type TraitMember =
 export interface TraitSatisfiesDeclaration extends Node {
   kind: "TraitSatisfiesDeclaration";
   trait: NamedType;
+  whereClause?: WhereConstraint[];
   associatedTypes: AssociatedTypeDefinition[];
   methods: MethodDeclaration[];
 }
